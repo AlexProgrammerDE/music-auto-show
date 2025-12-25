@@ -127,7 +127,7 @@ class MusicAutoShowGUI:
                               callback=lambda s, a: setattr(self.config, 'name', a),
                               tag="show_name_input")
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # DMX Configuration
         with dpg.collapsing_header(label="DMX Settings", default_open=True):
@@ -146,7 +146,7 @@ class MusicAutoShowGUI:
             dpg.add_checkbox(label="Simulate DMX (no hardware)", tag="simulate_dmx",
                             callback=self._on_simulate_changed)
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # Spotify Configuration
         with dpg.collapsing_header(label="Spotify Settings", default_open=True):
@@ -162,7 +162,7 @@ class MusicAutoShowGUI:
             dpg.add_checkbox(label="Simulate Spotify (no API)", tag="simulate_spotify",
                             callback=self._on_simulate_changed)
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # Fixtures
         with dpg.collapsing_header(label="Fixtures", default_open=True):
@@ -177,7 +177,7 @@ class MusicAutoShowGUI:
                 self._fixture_list_id = dpg.add_group(tag="fixture_list")
                 self._refresh_fixture_list()
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # Effects Configuration
         with dpg.collapsing_header(label="Effects", default_open=True):
@@ -225,14 +225,14 @@ class MusicAutoShowGUI:
             dpg.add_spacer(width=20)
             self._status_text_id = dpg.add_text("Status: Stopped", color=(255, 200, 100))
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         dpg.add_separator()
         
         # Track info
         dpg.add_text("Now Playing:", color=(200, 200, 255))
         self._track_info_id = dpg.add_text("No track playing", tag="track_info")
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # Audio features display
         with dpg.collapsing_header(label="Audio Features", default_open=True):
@@ -253,7 +253,7 @@ class MusicAutoShowGUI:
                     dpg.add_text("Bar Position:")
                     dpg.add_progress_bar(tag="bar_bar", default_value=0.0, width=-1)
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # Live visualizer
         with dpg.collapsing_header(label="Fixture Visualizer", default_open=True):
@@ -265,7 +265,7 @@ class MusicAutoShowGUI:
                 dpg.draw_text((400, 140), "Start show to see visualization", size=16,
                              color=(100, 100, 100))
         
-        dpg.add_spacing(count=2)
+        dpg.add_spacer(height=10)
         
         # DMX Universe view
         with dpg.collapsing_header(label="DMX Universe", default_open=False):
