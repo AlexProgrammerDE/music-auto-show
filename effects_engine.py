@@ -6,25 +6,43 @@ import math
 import time
 import colorsys
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from config import FixtureConfig, EffectsConfig, VisualizationMode, ChannelType
-from spotify_analyzer import AnalysisData
+from config import (
+    FixtureConfig, FixtureProfile, EffectsConfig, VisualizationMode,
+    ChannelFunction, ChannelMapping, ShowConfig, FIXTURE_PRESETS
+)
+from audio_analyzer import AnalysisData
 from dmx_controller import DMXController
 
 
 @dataclass
 class FixtureState:
-    """Current state of a fixture."""
+    """Current state of a fixture - all possible channel values."""
+    # Color
     red: int = 0
     green: int = 0
     blue: int = 0
     white: int = 0
+    
+    # Intensity
     dimmer: int = 255
+    strobe: int = 0  # 0 = no strobe
+    
+    # Movement
     pan: int = 128
+    pan_fine: int = 0
     tilt: int = 128
-    speed: int = 0
-    strobe: int = 0
+    tilt_fine: int = 0
+    pt_speed: int = 0  # 0 = fast
+    
+    # Macros
+    color_macro: int = 0
+    macro_speed: int = 0
+    effect_macro: int = 0
+    
+    # Control
+    control: int = 0
     
     def get_rgb(self) -> tuple[int, int, int]:
         """Get RGB values."""
@@ -32,9 +50,9 @@ class FixtureState:
     
     def set_rgb(self, r: int, g: int, b: int) -> None:
         """Set RGB values."""
-        self.red = max(0, min(255, r))
-        self.green = max(0, min(255, g))
-        self.blue = max(0, min(255, b))
+        self.red = max(0, min(255, int(r)))
+        self.green = max(0, min(255, int(g)))
+        self.blue = max(0, min(255, int(b)))
     
     def set_from_hsv(self, h: float, s: float, v: float) -> None:
         """Set color from HSV (all values 0-1)."""
@@ -49,20 +67,18 @@ class EffectsEngine:
     Engine that processes audio analysis and generates DMX output.
     """
     
-    def __init__(self, dmx_controller: DMXController, fixtures: list[FixtureConfig], effects: EffectsConfig):
+    def __init__(self, dmx_controller: DMXController, config: ShowConfig):
         self.dmx = dmx_controller
-        self.fixtures = fixtures
-        self.effects = effects
+        self.config = config
+        
+        # Cache profiles for quick lookup
+        self._profiles: dict[str, FixtureProfile] = {}
+        self._load_profiles()
         
         # State for each fixture
         self._states: dict[str, FixtureState] = {}
-        for fixture in fixtures:
-            self._states[fixture.name] = FixtureState()
-        
-        # Smoothing state
         self._smoothed_values: dict[str, FixtureState] = {}
-        for fixture in fixtures:
-            self._smoothed_values[fixture.name] = FixtureState()
+        self._init_fixture_states()
         
         # Animation state
         self._time = 0.0
@@ -71,16 +87,34 @@ class EffectsEngine:
         self._color_phase = 0.0
         self._wave_phase = 0.0
         self._strobe_active = False
-        self._strobe_state = False
         self._last_energy = 0.5
     
-    def update_config(self, fixtures: list[FixtureConfig], effects: EffectsConfig) -> None:
+    def _load_profiles(self) -> None:
+        """Load fixture profiles from config and presets."""
+        # Load built-in presets
+        self._profiles.update(FIXTURE_PRESETS)
+        
+        # Load custom profiles from config
+        for profile in self.config.profiles:
+            self._profiles[profile.name] = profile
+    
+    def _init_fixture_states(self) -> None:
+        """Initialize state objects for all fixtures."""
+        for fixture in self.config.fixtures:
+            self._states[fixture.name] = FixtureState()
+            self._smoothed_values[fixture.name] = FixtureState()
+    
+    def _get_profile(self, fixture: FixtureConfig) -> Optional[FixtureProfile]:
+        """Get the profile for a fixture."""
+        return self._profiles.get(fixture.profile_name)
+    
+    def update_config(self, config: ShowConfig) -> None:
         """Update configuration."""
-        self.fixtures = fixtures
-        self.effects = effects
+        self.config = config
+        self._load_profiles()
         
         # Add states for new fixtures
-        for fixture in fixtures:
+        for fixture in config.fixtures:
             if fixture.name not in self._states:
                 self._states[fixture.name] = FixtureState()
                 self._smoothed_values[fixture.name] = FixtureState()
@@ -101,7 +135,7 @@ class EffectsEngine:
         self._last_bar = data.estimated_bar
         
         # Apply visualization mode
-        mode = self.effects.mode
+        mode = self.config.effects.mode
         
         if mode == VisualizationMode.ENERGY:
             self._apply_energy_mode(data)
@@ -119,15 +153,12 @@ class EffectsEngine:
             self._apply_random_flash_mode(data, beat_triggered)
         
         # Apply movement if enabled
-        if self.effects.movement_enabled:
+        if self.config.effects.movement_enabled:
             self._apply_movement(data)
         
         # Apply strobe on drop if enabled
-        if self.effects.strobe_on_drop:
+        if self.config.effects.strobe_on_drop:
             self._check_energy_drop(data)
-        
-        # Apply strobe settings from fixtures
-        self._apply_fixture_strobe()
         
         # Apply smoothing
         self._apply_smoothing()
@@ -140,130 +171,127 @@ class EffectsEngine:
     def _apply_energy_mode(self, data: AnalysisData) -> None:
         """Energy-based visualization - intensity maps to brightness."""
         energy = data.features.energy
-        intensity = energy * self.effects.intensity
+        intensity = energy * self.config.effects.intensity
         
         # Use valence for color (happy = warm, sad = cool)
-        hue = 0.0 + data.features.valence * 0.3  # Red to yellow range
+        hue = 0.0 + data.features.valence * 0.3
         
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             # Beat pulse effect
             pulse = 1.0 - (data.beat_position * 0.3)
-            brightness = intensity * pulse
+            brightness = intensity * pulse * fixture.intensity_scale
             
             state.set_from_hsv(hue, 1.0, brightness)
             state.dimmer = int(255 * brightness)
     
     def _apply_frequency_split_mode(self, data: AnalysisData) -> None:
         """Split fixtures into bass/mid/high frequency bands."""
-        num_fixtures = len(self.fixtures)
+        num_fixtures = len(self.config.fixtures)
         if num_fixtures == 0:
             return
         
         # Sort fixtures by position
-        sorted_fixtures = sorted(self.fixtures, key=lambda f: f.position)
+        sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
         
-        # Divide into thirds (bass/mid/high)
+        # Divide into thirds
         third = max(1, num_fixtures // 3)
         
-        # Estimate frequency band intensities from audio features
-        bass_intensity = data.features.energy * (1.0 - data.features.acousticness)
-        mid_intensity = data.features.danceability
-        high_intensity = data.features.speechiness + data.features.liveness * 0.5
+        # Use actual frequency band data
+        bass_intensity = data.features.bass
+        mid_intensity = data.features.mid
+        high_intensity = data.features.high
         
         for i, fixture in enumerate(sorted_fixtures):
             state = self._states[fixture.name]
+            scale = fixture.intensity_scale * self.config.effects.intensity
             
             if i < third:
                 # Bass - red/orange
-                intensity = bass_intensity * self.effects.intensity
+                intensity = bass_intensity * scale
                 state.set_from_hsv(0.0, 1.0, intensity)
             elif i < third * 2:
                 # Mid - green/cyan
-                intensity = mid_intensity * self.effects.intensity
+                intensity = mid_intensity * scale
                 state.set_from_hsv(0.33, 1.0, intensity)
             else:
                 # High - blue/purple
-                intensity = high_intensity * self.effects.intensity
+                intensity = high_intensity * scale
                 state.set_from_hsv(0.66, 1.0, intensity)
             
             state.dimmer = int(255 * intensity)
     
     def _apply_beat_pulse_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
         """Pulse on beats."""
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
             state = self._states[fixture.name]
+            scale = fixture.intensity_scale * self.config.effects.intensity
             
             if beat_triggered:
-                # Full brightness on beat
-                brightness = self.effects.intensity
+                brightness = scale
             else:
-                # Decay between beats
-                brightness = (1.0 - data.beat_position) * self.effects.intensity
+                brightness = (1.0 - data.beat_position) * scale
             
-            # Color based on energy
             hue = data.features.energy * 0.3
             state.set_from_hsv(hue, 1.0, brightness)
             state.dimmer = int(255 * brightness)
     
     def _apply_color_cycle_mode(self, data: AnalysisData) -> None:
         """Cycle colors based on tempo."""
-        # Advance color phase based on tempo
         beat_interval = data.beat_interval_ms / 1000.0
         if beat_interval > 0:
-            self._color_phase += (1.0 / beat_interval) * 0.05 * self.effects.color_speed
+            self._color_phase += (1.0 / beat_interval) * 0.05 * self.config.effects.color_speed
         self._color_phase %= 1.0
         
-        for fixture in self.fixtures:
+        num_fixtures = max(1, len(self.config.fixtures))
+        
+        for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             
-            # Offset hue by fixture position
-            position_offset = fixture.position / max(1, len(self.fixtures))
+            position_offset = fixture.position / num_fixtures
             hue = (self._color_phase + position_offset) % 1.0
             
-            brightness = data.features.energy * self.effects.intensity
+            brightness = data.features.energy * fixture.intensity_scale * self.config.effects.intensity
             state.set_from_hsv(hue, 1.0, brightness)
             state.dimmer = int(255 * brightness)
     
     def _apply_rainbow_wave_mode(self, data: AnalysisData) -> None:
         """Rainbow wave effect across fixtures."""
-        # Advance wave phase
-        self._wave_phase += 0.02 * self.effects.color_speed
+        self._wave_phase += 0.02 * self.config.effects.color_speed
         self._wave_phase %= 1.0
         
-        num_fixtures = max(1, len(self.fixtures))
-        sorted_fixtures = sorted(self.fixtures, key=lambda f: f.position)
+        num_fixtures = max(1, len(self.config.fixtures))
+        sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
         
         for i, fixture in enumerate(sorted_fixtures):
             state = self._states[fixture.name]
             
-            # Create wave across fixtures
             position = i / num_fixtures
             hue = (self._wave_phase + position) % 1.0
             
-            # Brightness from energy with beat pulse
             pulse = 1.0 - (data.beat_position * 0.2)
-            brightness = data.features.energy * self.effects.intensity * pulse
+            brightness = data.features.energy * fixture.intensity_scale * self.config.effects.intensity * pulse
             
             state.set_from_hsv(hue, 1.0, brightness)
             state.dimmer = int(255 * brightness)
     
     def _apply_strobe_beat_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
         """Strobe on beats."""
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
             state = self._states[fixture.name]
+            profile = self._get_profile(fixture)
+            scale = fixture.intensity_scale * self.config.effects.intensity
             
             if beat_triggered:
-                # Flash white on beat
                 state.red = 255
                 state.green = 255
                 state.blue = 255
-                state.dimmer = int(255 * self.effects.intensity)
-                state.strobe = 200  # Fast strobe
+                state.dimmer = int(255 * scale)
+                # Use strobe range if fixture supports it
+                state.strobe = 200
             else:
-                # Quick decay
                 decay = max(0, 1.0 - data.beat_position * 4)
-                brightness = int(255 * decay * self.effects.intensity)
+                brightness = int(255 * decay * scale)
                 state.red = brightness
                 state.green = brightness
                 state.blue = brightness
@@ -274,24 +302,23 @@ class EffectsEngine:
         """Random fixture flashes on beats."""
         import random
         
-        if beat_triggered and self.fixtures:
-            # Pick random fixture(s) to flash
-            num_to_flash = max(1, len(self.fixtures) // 3)
-            flashing = random.sample(self.fixtures, min(num_to_flash, len(self.fixtures)))
+        fixtures = self.config.fixtures
+        if beat_triggered and fixtures:
+            num_to_flash = max(1, len(fixtures) // 3)
+            flashing = random.sample(list(fixtures), min(num_to_flash, len(fixtures)))
             flash_names = {f.name for f in flashing}
         else:
             flash_names = set()
         
-        for fixture in self.fixtures:
+        for fixture in fixtures:
             state = self._states[fixture.name]
+            scale = fixture.intensity_scale * self.config.effects.intensity
             
             if fixture.name in flash_names:
-                # Random bright color
                 hue = random.random()
-                state.set_from_hsv(hue, 1.0, self.effects.intensity)
-                state.dimmer = int(255 * self.effects.intensity)
+                state.set_from_hsv(hue, 1.0, scale)
+                state.dimmer = int(255 * scale)
             else:
-                # Decay
                 decay = max(0, 1.0 - data.beat_position * 3)
                 current_brightness = state.dimmer / 255.0
                 new_brightness = current_brightness * decay
@@ -302,35 +329,39 @@ class EffectsEngine:
     
     def _apply_movement(self, data: AnalysisData) -> None:
         """Apply pan/tilt movement to fixtures."""
-        speed = self.effects.movement_speed
+        speed = self.config.effects.movement_speed
         
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
+            profile = self._get_profile(fixture)
+            if not profile or not (profile.has_pan or profile.has_tilt):
+                continue
+            
             state = self._states[fixture.name]
             
-            # Calculate movement based on beat position and bar
             bar_phase = data.bar_position * math.pi * 2
             beat_phase = data.beat_position * math.pi * 2
             
             # Pan: slow sweep based on bar
-            pan_range = fixture.pan_max - fixture.pan_min
-            pan_center = (fixture.pan_max + fixture.pan_min) / 2
-            pan_offset = math.sin(bar_phase) * (pan_range / 2) * speed
-            state.pan = int(pan_center + pan_offset)
+            if profile.has_pan:
+                pan_range = fixture.pan_max - fixture.pan_min
+                pan_center = (fixture.pan_max + fixture.pan_min) / 2
+                pan_offset = math.sin(bar_phase) * (pan_range / 2) * speed
+                state.pan = int(pan_center + pan_offset)
             
             # Tilt: bob based on beat
-            tilt_range = fixture.tilt_max - fixture.tilt_min
-            tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
-            tilt_offset = math.sin(beat_phase) * (tilt_range / 4) * speed
-            state.tilt = int(tilt_center + tilt_offset)
+            if profile.has_tilt:
+                tilt_range = fixture.tilt_max - fixture.tilt_min
+                tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
+                tilt_offset = math.sin(beat_phase) * (tilt_range / 4) * speed
+                state.tilt = int(tilt_center + tilt_offset)
             
-            # Movement speed channel
-            state.speed = int(128 + 127 * (1.0 - speed))
+            # Movement speed (0=fast, higher=slower for Muvy WashQ style)
+            state.pt_speed = int(255 * (1.0 - speed))
     
     def _check_energy_drop(self, data: AnalysisData) -> None:
         """Check for energy drops to trigger strobe."""
         current_energy = data.features.energy
         
-        # Detect significant energy increase (drop/build)
         if current_energy - self._last_energy > 0.3:
             self._strobe_active = True
         elif current_energy < self._last_energy - 0.1:
@@ -339,73 +370,140 @@ class EffectsEngine:
         self._last_energy = current_energy
         
         if self._strobe_active:
-            for fixture in self.fixtures:
+            for fixture in self.config.fixtures:
                 self._states[fixture.name].strobe = 200
-    
-    def _apply_fixture_strobe(self) -> None:
-        """Apply per-fixture strobe settings."""
-        for fixture in self.fixtures:
-            if fixture.strobe_enabled:
-                self._states[fixture.name].strobe = fixture.strobe_speed
     
     def _apply_smoothing(self) -> None:
         """Apply smoothing to prevent jarring transitions."""
-        factor = self.effects.smooth_factor
+        factor = self.config.effects.smooth_factor
         inverse = 1.0 - factor
         
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
             current = self._states[fixture.name]
             smoothed = self._smoothed_values[fixture.name]
             
-            # Smooth each value
             smoothed.red = int(smoothed.red * factor + current.red * inverse)
             smoothed.green = int(smoothed.green * factor + current.green * inverse)
             smoothed.blue = int(smoothed.blue * factor + current.blue * inverse)
             smoothed.white = int(smoothed.white * factor + current.white * inverse)
             smoothed.dimmer = int(smoothed.dimmer * factor + current.dimmer * inverse)
             smoothed.pan = int(smoothed.pan * factor + current.pan * inverse)
+            smoothed.pan_fine = current.pan_fine
             smoothed.tilt = int(smoothed.tilt * factor + current.tilt * inverse)
-            smoothed.speed = current.speed  # Don't smooth speed
-            smoothed.strobe = current.strobe  # Don't smooth strobe
+            smoothed.tilt_fine = current.tilt_fine
+            smoothed.pt_speed = current.pt_speed
+            smoothed.strobe = current.strobe
+            smoothed.color_macro = current.color_macro
+            smoothed.macro_speed = current.macro_speed
+            smoothed.effect_macro = current.effect_macro
+            smoothed.control = current.control
     
     def _output_to_dmx(self) -> None:
         """Output fixture states to DMX controller."""
-        for fixture in self.fixtures:
-            state = self._smoothed_values[fixture.name]
+        for fixture in self.config.fixtures:
+            profile = self._get_profile(fixture)
+            if not profile:
+                continue
             
-            for channel_config in fixture.channels:
-                channel = channel_config.channel
-                channel_type = channel_config.channel_type
-                
-                value = 0
-                if channel_type == ChannelType.RED:
-                    value = state.red
-                elif channel_type == ChannelType.GREEN:
-                    value = state.green
-                elif channel_type == ChannelType.BLUE:
-                    value = state.blue
-                elif channel_type == ChannelType.WHITE:
-                    value = state.white
-                elif channel_type == ChannelType.DIMMER:
-                    value = state.dimmer
-                elif channel_type == ChannelType.PAN:
-                    value = state.pan
-                elif channel_type == ChannelType.PAN_FINE:
-                    value = 0  # Could add fine control
-                elif channel_type == ChannelType.TILT:
-                    value = state.tilt
-                elif channel_type == ChannelType.TILT_FINE:
-                    value = 0
-                elif channel_type == ChannelType.SPEED:
-                    value = state.speed
-                elif channel_type == ChannelType.STROBE:
-                    value = state.strobe
-                
-                self.dmx.set_channel(channel, value)
+            state = self._smoothed_values[fixture.name]
+            start_ch = fixture.start_channel
+            
+            for ch_mapping in profile.channels:
+                dmx_channel = ch_mapping.get_dmx_channel(start_ch)
+                value = self._get_channel_value(state, ch_mapping, profile)
+                self.dmx.set_channel(dmx_channel, value)
+    
+    def _get_channel_value(self, state: FixtureState, ch_mapping: ChannelMapping, profile: FixtureProfile) -> int:
+        """Get the DMX value for a channel based on fixture state."""
+        func = ch_mapping.function
+        
+        # Color channels
+        if func == ChannelFunction.RED:
+            return state.red
+        elif func == ChannelFunction.GREEN:
+            return state.green
+        elif func == ChannelFunction.BLUE:
+            return state.blue
+        elif func == ChannelFunction.WHITE:
+            return state.white
+        
+        # Movement channels
+        elif func == ChannelFunction.PAN:
+            return state.pan
+        elif func == ChannelFunction.PAN_FINE:
+            return state.pan_fine
+        elif func == ChannelFunction.TILT:
+            return state.tilt
+        elif func == ChannelFunction.TILT_FINE:
+            return state.tilt_fine
+        elif func == ChannelFunction.PT_SPEED:
+            return state.pt_speed
+        
+        # Dimmer - handle range-based channels (like Muvy WashQ)
+        elif func == ChannelFunction.DIMMER:
+            return self._calculate_dimmer_value(state, ch_mapping)
+        
+        # Strobe (standalone channel)
+        elif func == ChannelFunction.STROBE:
+            return state.strobe
+        
+        # Macros
+        elif func == ChannelFunction.COLOR_MACRO:
+            return state.color_macro
+        elif func == ChannelFunction.MACRO_SPEED:
+            return state.macro_speed
+        elif func == ChannelFunction.EFFECT_MACRO:
+            return state.effect_macro
+        
+        # Control
+        elif func == ChannelFunction.CONTROL:
+            return state.control
+        
+        return ch_mapping.default_value
+    
+    def _calculate_dimmer_value(self, state: FixtureState, ch_mapping: ChannelMapping) -> int:
+        """
+        Calculate dimmer channel value, handling fixtures with combined dimmer/strobe channels.
+        For Muvy WashQ: 0-7=closed, 8-134=dimmer, 135-239=strobe, 240-255=open
+        """
+        if not ch_mapping.ranges:
+            # Simple dimmer, just return the value
+            return state.dimmer
+        
+        # Find the dimmer range
+        dimmer_range = None
+        strobe_range = None
+        open_range = None
+        
+        for r in ch_mapping.ranges:
+            if r.name.lower() == "dimmer":
+                dimmer_range = r
+            elif r.name.lower() == "strobe":
+                strobe_range = r
+            elif r.name.lower() == "open":
+                open_range = r
+        
+        # If strobe is active and we have a strobe range, use it
+        if state.strobe > 0 and strobe_range:
+            # Map strobe 0-255 to the strobe range
+            strobe_span = strobe_range.max_value - strobe_range.min_value
+            return strobe_range.min_value + int((state.strobe / 255.0) * strobe_span)
+        
+        # Otherwise use dimmer range or open
+        if state.dimmer >= 250 and open_range:
+            # Full brightness, use "open" range for no flicker
+            return open_range.min_value
+        
+        if dimmer_range:
+            # Map dimmer 0-255 to the dimmer range
+            dimmer_span = dimmer_range.max_value - dimmer_range.min_value
+            return dimmer_range.min_value + int((state.dimmer / 255.0) * dimmer_span)
+        
+        return state.dimmer
     
     def blackout(self) -> None:
         """Blackout all fixtures."""
-        for fixture in self.fixtures:
+        for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             state.red = 0
             state.green = 0
@@ -414,6 +512,7 @@ class EffectsEngine:
             state.dimmer = 0
             state.strobe = 0
         
+        self._apply_smoothing()
         self._output_to_dmx()
         self.dmx.blackout()
     

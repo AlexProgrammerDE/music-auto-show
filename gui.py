@@ -15,8 +15,9 @@ except ImportError:
     DEARPYGUI_AVAILABLE = False
 
 from config import (
-    ShowConfig, FixtureConfig, ChannelConfig, ChannelType,
-    VisualizationMode, DMXConfig, SpotifyConfig, EffectsConfig
+    ShowConfig, FixtureConfig, FixtureProfile,
+    VisualizationMode, DMXConfig, EffectsConfig,
+    get_available_presets, get_preset, FIXTURE_PRESETS
 )
 from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
 from audio_analyzer import AnalysisData, AudioAnalyzer, create_audio_analyzer
@@ -280,8 +281,8 @@ class MusicAutoShowGUI:
             
             for i, fixture in enumerate(self.config.fixtures):
                 with dpg.group(horizontal=True, parent=self._fixture_list_id):
-                    dpg.add_selectable(label=f"{fixture.name} (Ch {fixture.start_channel})",
-                                       width=300, tag=f"fixture_sel_{i}",
+                    dpg.add_selectable(label=f"{fixture.name} [{fixture.profile_name}] (Ch {fixture.start_channel})",
+                                       width=350, tag=f"fixture_sel_{i}",
                                        callback=lambda s, a, f=fixture: self._edit_fixture(f))
     
     def _add_fixture_dialog(self) -> None:
@@ -290,29 +291,21 @@ class MusicAutoShowGUI:
             dpg.delete_item("add_fixture_window")
         
         with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
-                       width=500, height=600, pos=(400, 100)):
+                       width=500, height=400, pos=(400, 100)):
             dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture")
+            
+            # Profile selection (presets)
+            preset_names = get_available_presets()
+            dpg.add_combo(label="Fixture Profile", items=preset_names, 
+                         default_value=preset_names[0] if preset_names else "",
+                         tag="new_fixture_profile", width=300)
+            
             dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
                              min_value=1, max_value=512)
             dpg.add_input_int(label="Position", tag="new_fixture_position", default_value=0)
-            dpg.add_input_float(label="Orientation", tag="new_fixture_orientation", default_value=0.0)
             
             dpg.add_separator()
-            dpg.add_text("Channel Mappings:")
-            
-            # Channel type options
-            channel_types = [ct.value for ct in ChannelType]
-            
-            # Add up to 16 channels
-            for i in range(16):
-                with dpg.group(horizontal=True):
-                    dpg.add_input_int(label=f"", tag=f"new_ch_{i}_num", default_value=0,
-                                     min_value=0, max_value=512, width=80)
-                    dpg.add_combo(items=channel_types, default_value="none",
-                                 tag=f"new_ch_{i}_type", width=120)
-            
-            dpg.add_separator()
-            dpg.add_text("Movement Limits:")
+            dpg.add_text("Movement Limits (optional):")
             
             with dpg.group(horizontal=True):
                 dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
@@ -322,10 +315,8 @@ class MusicAutoShowGUI:
                 dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
                 dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
             
-            dpg.add_separator()
-            dpg.add_checkbox(label="Enable Strobe", tag="new_strobe_enabled")
-            dpg.add_slider_int(label="Strobe Speed", tag="new_strobe_speed", default_value=128,
-                              min_value=0, max_value=255)
+            dpg.add_slider_float(label="Intensity Scale", tag="new_intensity_scale", 
+                                default_value=1.0, min_value=0.0, max_value=1.0, width=200)
             
             dpg.add_separator()
             with dpg.group(horizontal=True):
@@ -336,33 +327,20 @@ class MusicAutoShowGUI:
     def _add_fixture_confirm(self) -> None:
         """Confirm adding a new fixture."""
         name = dpg.get_value("new_fixture_name")
+        profile_name = dpg.get_value("new_fixture_profile")
         start_channel = dpg.get_value("new_fixture_start")
         position = dpg.get_value("new_fixture_position")
-        orientation = dpg.get_value("new_fixture_orientation")
-        
-        # Collect channels
-        channels = []
-        for i in range(16):
-            ch_num = dpg.get_value(f"new_ch_{i}_num")
-            ch_type = dpg.get_value(f"new_ch_{i}_type")
-            if ch_num > 0 and ch_type != "none":
-                channels.append(ChannelConfig(
-                    channel=ch_num,
-                    channel_type=ChannelType(ch_type)
-                ))
         
         fixture = FixtureConfig(
             name=name,
+            profile_name=profile_name,
             start_channel=start_channel,
-            channels=channels,
             position=position,
-            orientation=orientation,
             pan_min=dpg.get_value("new_pan_min"),
             pan_max=dpg.get_value("new_pan_max"),
             tilt_min=dpg.get_value("new_tilt_min"),
             tilt_max=dpg.get_value("new_tilt_max"),
-            strobe_enabled=dpg.get_value("new_strobe_enabled"),
-            strobe_speed=dpg.get_value("new_strobe_speed")
+            intensity_scale=dpg.get_value("new_intensity_scale")
         )
         
         self.config.fixtures.append(fixture)
@@ -370,18 +348,16 @@ class MusicAutoShowGUI:
         
         # Update effects engine if running
         if self.effects_engine:
-            self.effects_engine.update_config(self.config.fixtures, self.config.effects)
+            self.effects_engine.update_config(self.config)
         
         dpg.delete_item("add_fixture_window")
     
     def _edit_fixture(self, fixture: FixtureConfig) -> None:
         """Edit an existing fixture."""
-        # For simplicity, just show a message. Full implementation would open edit dialog.
         print(f"Edit fixture: {fixture.name}")
     
     def _remove_fixture(self) -> None:
         """Remove selected fixture."""
-        # Find selected fixture
         for i, fixture in enumerate(self.config.fixtures):
             if dpg.does_item_exist(f"fixture_sel_{i}"):
                 if dpg.get_value(f"fixture_sel_{i}"):
@@ -393,11 +369,11 @@ class MusicAutoShowGUI:
         """Handle visualization mode change."""
         self.config.effects.mode = VisualizationMode(app_data)
         if self.effects_engine:
-            self.effects_engine.update_config(self.config.fixtures, self.config.effects)
+            self.effects_engine.update_config(self.config)
     
     def _on_simulate_changed(self, sender, app_data) -> None:
         """Handle simulation checkbox change."""
-        pass  # Will be used when starting show
+        pass
     
     def _start_show(self) -> None:
         """Start the light show."""
@@ -431,8 +407,7 @@ class MusicAutoShowGUI:
         # Create effects engine
         self.effects_engine = EffectsEngine(
             self.dmx_controller,
-            self.config.fixtures,
-            self.config.effects
+            self.config
         )
         
         dpg.set_value(self._status_text_id, "Status: Running")
@@ -474,7 +449,7 @@ class MusicAutoShowGUI:
                 # Process through effects engine
                 self._fixture_states = self.effects_engine.process(data)
                 
-                # Update GUI (schedule on main thread)
+                # Update GUI
                 try:
                     self._update_gui(data)
                 except Exception:
@@ -487,7 +462,7 @@ class MusicAutoShowGUI:
         if not dpg.is_dearpygui_running():
             return
         
-        # Update track info (show currently playing media)
+        # Update track info
         if data.track_name and data.track_name != "System Audio":
             if data.artist_name:
                 track_text = f"{data.artist_name} - {data.track_name} ({data.features.tempo:.0f} BPM)"
@@ -581,7 +556,7 @@ class MusicAutoShowGUI:
             beam_center_x = x + fixture_width // 2
             
             # Calculate beam direction from pan/tilt
-            pan_offset = (state.pan - 128) / 128 * 50  # -50 to +50 pixels
+            pan_offset = (state.pan - 128) / 128 * 50
             tilt_factor = state.tilt / 255
             
             beam_end_x = beam_center_x + pan_offset
@@ -656,7 +631,7 @@ class MusicAutoShowGUI:
     
     def _reset_layout(self) -> None:
         """Reset window layout."""
-        pass  # Could implement window layout reset
+        pass
 
 
 def run_gui():
