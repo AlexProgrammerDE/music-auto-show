@@ -73,7 +73,7 @@ class SpotifyConfig(BaseModel):
     """Spotify API configuration."""
     client_id: str = Field(default="", description="Spotify API client ID")
     client_secret: str = Field(default="", description="Spotify API client secret")
-    redirect_uri: str = Field(default="http://localhost:8888/callback", description="OAuth redirect URI")
+    redirect_uri: str = Field(default="http://127.0.0.1:8888/callback", description="OAuth redirect URI")
 
 
 class EffectsConfig(BaseModel):

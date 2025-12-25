@@ -96,7 +96,7 @@ class SpotifyAnalyzer:
         "user-read-currently-playing",
     ]
     
-    def __init__(self, client_id: str, client_secret: str, redirect_uri: str = "http://localhost:8888/callback"):
+    def __init__(self, client_id: str, client_secret: str, redirect_uri: str = "http://127.0.0.1:8888/callback"):
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
@@ -410,7 +410,7 @@ class SimulatedSpotifyAnalyzer:
 def create_spotify_analyzer(
     client_id: str = "",
     client_secret: str = "",
-    redirect_uri: str = "http://localhost:8888/callback",
+    redirect_uri: str = "http://127.0.0.1:8888/callback",
     simulate: bool = False
 ):
     """

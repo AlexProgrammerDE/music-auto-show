@@ -8,7 +8,7 @@
   "spotify": {
     "client_id": "",
     "client_secret": "",
-    "redirect_uri": "http://localhost:8888/callback"
+    "redirect_uri": "http://127.0.0.1:8888/callback"
   },
   "effects": {
     "mode": "rainbow_wave",

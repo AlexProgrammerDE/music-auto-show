@@ -91,7 +91,7 @@ Configuration is stored as JSON. Example structure:
   "spotify": {
     "client_id": "your_client_id",
     "client_secret": "your_client_secret",
-    "redirect_uri": "http://localhost:8888/callback"
+    "redirect_uri": "http://127.0.0.1:8888/callback"
   },
   "effects": {
     "mode": "rainbow_wave",
@@ -154,7 +154,7 @@ Configuration is stored as JSON. Example structure:
 
 1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Create a new application
-3. Add `http://localhost:8888/callback` to Redirect URIs
+3. Add `http://127.0.0.1:8888/callback` to Redirect URIs
 4. Copy Client ID and Client Secret to your config
 5. When first running, a browser will open for authentication
 
