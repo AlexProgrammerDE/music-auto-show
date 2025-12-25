@@ -423,12 +423,18 @@ class MusicAutoShowGUI:
             return
         
         # Create Spotify analyzer
-        self.spotify_analyzer = create_spotify_analyzer(
-            client_id=self.config.spotify.client_id,
-            client_secret=self.config.spotify.client_secret,
-            redirect_uri=self.config.spotify.redirect_uri,
-            simulate=simulate_spotify
-        )
+        try:
+            self.spotify_analyzer = create_spotify_analyzer(
+                client_id=self.config.spotify.client_id,
+                client_secret=self.config.spotify.client_secret,
+                redirect_uri=self.config.spotify.redirect_uri,
+                simulate=simulate_spotify
+            )
+        except ValueError as e:
+            dpg.set_value(self._status_text_id, f"Status: {e}")
+            self.dmx_controller.stop()
+            self.dmx_interface.close()
+            return
         
         if not self.spotify_analyzer.start():
             dpg.set_value(self._status_text_id, "Status: Spotify connection failed!")

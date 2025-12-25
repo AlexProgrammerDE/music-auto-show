@@ -424,8 +424,17 @@ def create_spotify_analyzer(
     
     Returns:
         SpotifyAnalyzer or SimulatedSpotifyAnalyzer
+    
+    Raises:
+        ValueError: If simulate is False but credentials are missing
     """
-    if simulate or not client_id or not client_secret:
+    if simulate:
         return SimulatedSpotifyAnalyzer()
+    
+    if not client_id or not client_secret:
+        raise ValueError(
+            "Spotify credentials required. Set Client ID and Client Secret, "
+            "or enable 'Simulate Spotify' option."
+        )
     
     return SpotifyAnalyzer(client_id, client_secret, redirect_uri)
