@@ -147,6 +147,12 @@ class AudioAnalyzer:
         self._max_rms_observed = 0.01  # Start with small value, will grow
         self._rms_decay = 0.9995  # Slowly decay max to adapt to quieter sections
         
+        # Per-band adaptive scaling (each band normalized independently)
+        self._max_bass = 0.01
+        self._max_mid = 0.01
+        self._max_high = 0.01
+        self._band_decay = 0.999  # Decay rate for band maxes
+        
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
         self._bass_history = deque(maxlen=5)
@@ -403,17 +409,17 @@ class AudioAnalyzer:
         
         # FFT for frequency analysis
         if len(audio_data) >= self._fft_size:
-            fft_data = np.abs(np.fft.rfft(audio_data[:self._fft_size]))
+            # Apply window function to reduce spectral leakage
+            windowed = audio_data[:self._fft_size] * np.hanning(self._fft_size)
+            fft_data = np.abs(np.fft.rfft(windowed))
             
-            # Normalize FFT
-            fft_max = np.max(fft_data)
-            if fft_max > 0:
-                fft_data = fft_data / fft_max
+            # Calculate raw frequency band power
+            bass_raw = self._get_band_energy_normalized(fft_data, 20, 250)
+            mid_raw = self._get_band_energy_normalized(fft_data, 250, 4000)
+            high_raw = self._get_band_energy_normalized(fft_data, 4000, 16000)
             
-            # Calculate frequency bands
-            bass = self._get_band_energy(fft_data, 20, 250)
-            mid = self._get_band_energy(fft_data, 250, 4000)
-            high = self._get_band_energy(fft_data, 4000, 20000)
+            # Normalize each band independently for balanced display
+            bass, mid, high = self._normalize_bands(bass_raw, mid_raw, high_raw)
             
             self._bass_history.append(bass)
             self._mid_history.append(mid)
@@ -517,8 +523,8 @@ class AudioAnalyzer:
                         if 60 <= estimated_tempo <= 200:
                             self._current_tempo = estimated_tempo
     
-    def _get_band_energy(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
-        """Get energy in a frequency band from FFT data."""
+    def _get_band_energy_normalized(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
+        """Get energy in a frequency band from FFT data (raw, not normalized)."""
         if self._freq_bins is None or len(fft_data) == 0:
             return 0.0
         
@@ -529,9 +535,34 @@ class AudioAnalyzer:
         if high_idx <= low_idx:
             return 0.0
         
-        # Calculate mean energy in band
-        band_energy = np.mean(fft_data[low_idx:high_idx])
-        return float(min(1.0, band_energy * 2))  # Scale for visibility
+        # Use sum of squared magnitudes (power) for better energy representation
+        band_power = np.sum(fft_data[low_idx:high_idx] ** 2)
+        return float(band_power)
+    
+    def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
+        """Normalize frequency bands with adaptive per-band scaling."""
+        # Update max values with decay
+        if bass_raw > self._max_bass:
+            self._max_bass = bass_raw
+        else:
+            self._max_bass = max(0.01, self._max_bass * self._band_decay)
+        
+        if mid_raw > self._max_mid:
+            self._max_mid = mid_raw
+        else:
+            self._max_mid = max(0.01, self._max_mid * self._band_decay)
+            
+        if high_raw > self._max_high:
+            self._max_high = high_raw
+        else:
+            self._max_high = max(0.01, self._max_high * self._band_decay)
+        
+        # Normalize each band independently
+        bass = min(1.0, (bass_raw / self._max_bass) * 1.1)
+        mid = min(1.0, (mid_raw / self._max_mid) * 1.1)
+        high = min(1.0, (high_raw / self._max_high) * 1.1)
+        
+        return bass, mid, high
     
     def _analysis_loop(self) -> None:
         """Main analysis loop - notifies callbacks."""
