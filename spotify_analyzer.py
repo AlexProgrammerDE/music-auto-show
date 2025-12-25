@@ -7,6 +7,7 @@ their Audio Features API for new apps in Nov 2024).
 import time
 import threading
 import urllib.request
+import urllib.error
 import json
 from typing import Optional, Callable
 from dataclasses import dataclass, field
@@ -251,48 +252,22 @@ class SpotifyAnalyzer:
     def _get_features(self, track_id: str) -> AudioFeatures:
         """Get audio features for a track (with caching).
         
-        Tries Spotify API first, falls back to ReccoBeats API if Spotify
-        returns 403 (deprecated for new apps since Nov 2024).
+        Tries ReccoBeats API (free, no auth). Falls back to defaults if track
+        not found. Spotify's Audio Features API is deprecated for new apps.
         """
         if track_id in self._features_cache:
             return self._features_cache[track_id]
         
-        # Try Spotify API first
-        try:
-            features = self._spotify.audio_features([track_id])
-            if features and features[0]:
-                f = features[0]
-                result = AudioFeatures(
-                    energy=f.get('energy', 0.5),
-                    danceability=f.get('danceability', 0.5),
-                    valence=f.get('valence', 0.5),
-                    acousticness=f.get('acousticness', 0.5),
-                    instrumentalness=f.get('instrumentalness', 0.5),
-                    liveness=f.get('liveness', 0.5),
-                    speechiness=f.get('speechiness', 0.5),
-                    loudness=f.get('loudness', -10.0),
-                    tempo=f.get('tempo', 120.0),
-                    key=f.get('key', 0),
-                    mode=f.get('mode', 1),
-                    time_signature=f.get('time_signature', 4)
-                )
-                self._features_cache[track_id] = result
-                return result
-        except Exception as e:
-            # Spotify deprecated Audio Features API for new apps (Nov 2024)
-            if "403" in str(e):
-                if not self._audio_features_warned:
-                    print("Note: Spotify Audio Features API unavailable, using ReccoBeats API fallback.")
-                    self._audio_features_warned = True
-                # Try ReccoBeats fallback
-                result = self._get_features_from_reccobeats(track_id)
-                if result:
-                    self._features_cache[track_id] = result
-                    return result
-            else:
-                print(f"Failed to get audio features from Spotify: {e}")
+        # Try ReccoBeats API
+        result = self._get_features_from_reccobeats(track_id)
+        if result:
+            self._features_cache[track_id] = result
+            return result
         
-        # Return default features as last resort
+        # Return default features as fallback
+        if not self._audio_features_warned:
+            print("Note: Audio features unavailable for this track, using defaults.")
+            self._audio_features_warned = True
         result = AudioFeatures()
         self._features_cache[track_id] = result
         return result
@@ -320,6 +295,11 @@ class SpotifyAnalyzer:
                     mode=data.get('mode', 1),
                     time_signature=data.get('time_signature', 4)
                 )
+        except urllib.error.HTTPError as e:
+            # 404 = track not in ReccoBeats database, silently use defaults
+            if e.code != 404:
+                print(f"ReccoBeats API error: {e}")
+            return None
         except Exception as e:
             print(f"ReccoBeats API error: {e}")
             return None
