@@ -144,6 +144,10 @@ class AudioAnalyzer:
         self._onset_cooldown = 0.0
         self._min_onset_interval = 0.1  # Minimum 100ms between onsets
         
+        # Adaptive energy scaling (auto-gain)
+        self._max_rms_observed = 0.01  # Start with small value, will grow
+        self._rms_decay = 0.9995  # Slowly decay max to adapt to quieter sections
+        
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
         self._bass_history = deque(maxlen=5)
@@ -360,6 +364,13 @@ class AudioAnalyzer:
         # Calculate RMS energy first (needed for onset detection)
         rms = np.sqrt(np.mean(audio_data ** 2))
         
+        # Update adaptive scaling - track max RMS with slow decay
+        if rms > self._max_rms_observed:
+            self._max_rms_observed = rms
+        else:
+            self._max_rms_observed *= self._rms_decay  # Slowly decay to adapt to quieter sections
+        self._max_rms_observed = max(0.01, self._max_rms_observed)  # Prevent division by zero
+        
         # Real-time onset detection using energy derivative
         onset_detected = False
         onset_strength = rms
@@ -415,10 +426,12 @@ class AudioAnalyzer:
         with self._lock:
             features = self._data.features
             
-            # Smooth energy (prevents flickering)
+            # Smooth energy with adaptive normalization
             avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            features.energy = min(1.0, avg_energy * 3)  # Scale up for visibility
+            # Normalize energy relative to observed max (adaptive auto-gain)
+            normalized_energy = avg_energy / self._max_rms_observed
+            features.energy = min(1.0, normalized_energy * 1.2)  # Slight boost, cap at 1.0
             
             # Smooth frequency bands
             features.bass = np.mean(list(self._bass_history)) if self._bass_history else 0
