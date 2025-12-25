@@ -1,59 +1,109 @@
 """
 Configuration data models for fixtures, effects, and the show.
-Supports dynamic channel mapping with range-based functions and fixture presets.
+Supports dynamic channel mapping with QLC+ compatible channel types.
 """
 from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class ChannelFunction(str, Enum):
-    """DMX channel functions - what a channel controls."""
-    # Movement
-    PAN = "pan"
-    PAN_FINE = "pan_fine"
-    TILT = "tilt"
-    TILT_FINE = "tilt_fine"
-    PT_SPEED = "pt_speed"  # Pan/Tilt movement speed
+class ChannelType(str, Enum):
+    """
+    DMX channel types - compatible with QLC+ presets.
+    See: https://www.qlcplus.org/docs/html_en_EN/fixturedefinitioneditor.html
+    """
+    # Intensity
+    INTENSITY = "intensity"              # Generic intensity/dimmer
+    INTENSITY_MASTER_DIMMER = "intensity_master_dimmer"
+    INTENSITY_DIMMER = "intensity_dimmer"
+    INTENSITY_RED = "intensity_red"
+    INTENSITY_GREEN = "intensity_green"
+    INTENSITY_BLUE = "intensity_blue"
+    INTENSITY_WHITE = "intensity_white"
+    INTENSITY_AMBER = "intensity_amber"
+    INTENSITY_UV = "intensity_uv"
+    INTENSITY_CYAN = "intensity_cyan"
+    INTENSITY_MAGENTA = "intensity_magenta"
+    INTENSITY_YELLOW = "intensity_yellow"
+    INTENSITY_HUE = "intensity_hue"
+    INTENSITY_SATURATION = "intensity_saturation"
+    INTENSITY_VALUE = "intensity_value"
+    
+    # Position
+    POSITION_PAN = "position_pan"
+    POSITION_PAN_FINE = "position_pan_fine"
+    POSITION_TILT = "position_tilt"
+    POSITION_TILT_FINE = "position_tilt_fine"
+    
+    # Speed
+    SPEED_PAN_TILT_FAST_SLOW = "speed_pan_tilt_fast_slow"
+    SPEED_PAN_TILT_SLOW_FAST = "speed_pan_tilt_slow_fast"
     
     # Color
-    RED = "red"
-    GREEN = "green"
-    BLUE = "blue"
-    WHITE = "white"
-    AMBER = "amber"
-    UV = "uv"
+    COLOR_WHEEL = "color_wheel"
+    COLOR_MACRO = "color_macro"
+    COLOR_CTO_MIXER = "color_cto_mixer"  # Color temperature orange
+    COLOR_CTB_MIXER = "color_ctb_mixer"  # Color temperature blue
     
-    # Intensity
-    DIMMER = "dimmer"  # Master dimmer with optional shutter ranges
+    # Gobo
+    GOBO_WHEEL = "gobo_wheel"
+    GOBO_INDEX = "gobo_index"
     
-    # Effects
-    STROBE = "strobe"
-    COLOR_MACRO = "color_macro"  # Color presets/macros
-    MACRO_SPEED = "macro_speed"  # Speed for color macros
-    EFFECT_MACRO = "effect_macro"  # Combined effect macros (color + movement)
+    # Shutter
+    SHUTTER_STROBE = "shutter_strobe"
+    SHUTTER_STROBE_SLOW_FAST = "shutter_strobe_slow_fast"
+    SHUTTER_STROBE_FAST_SLOW = "shutter_strobe_fast_slow"
+    SHUTTER_IRIS_MIN_TO_MAX = "shutter_iris_min_to_max"
+    SHUTTER_IRIS_MAX_TO_MIN = "shutter_iris_max_to_min"
     
-    # Control
-    CONTROL = "control"  # Reset, lamp on/off, etc.
+    # Beam
+    BEAM_ZOOM_SMALL_BIG = "beam_zoom_small_big"
+    BEAM_ZOOM_BIG_SMALL = "beam_zoom_big_small"
+    BEAM_FOCUS_NEAR_FAR = "beam_focus_near_far"
+    BEAM_FOCUS_FAR_NEAR = "beam_focus_far_near"
+    
+    # Prism
+    PRISM = "prism"
+    PRISM_ROTATION = "prism_rotation"
+    
+    # Effect
+    EFFECT = "effect"
+    EFFECT_SPEED = "effect_speed"
+    
+    # Maintenance
+    MAINTENANCE = "maintenance"
+    NOTHING = "nothing"  # No function / reserved
+    
+    # Special - for forced/fixed values
+    FIXED = "fixed"  # Channel forced to a specific value
 
 
-class ChannelRange(BaseModel):
-    """Defines a value range within a channel that triggers a specific behavior."""
+class ChannelCapability(BaseModel):
+    """A capability range within a channel (like QLC+ Capability)."""
     min_value: int = Field(..., ge=0, le=255)
     max_value: int = Field(..., ge=0, le=255)
-    name: str = Field(..., description="Name of this range (e.g., 'Dimmer', 'Strobe', 'Open')")
-    description: str = Field(default="", description="What this range does")
+    name: str = Field(..., description="Name of this capability")
+    description: str = Field(default="")
 
 
-class ChannelMapping(BaseModel):
+class ChannelConfig(BaseModel):
     """
-    Maps a channel offset to its function.
-    Offset is relative to fixture's start_channel (1-based).
+    Configuration for a single DMX channel.
+    Can be from a profile or custom-defined per fixture.
     """
     offset: int = Field(..., ge=1, description="Channel offset from start (1 = first channel)")
-    function: ChannelFunction = Field(..., description="What this channel controls")
+    name: str = Field(default="", description="Channel name (e.g., 'Red Dimmer')")
+    channel_type: ChannelType = Field(..., description="What this channel controls")
     default_value: int = Field(default=0, ge=0, le=255, description="Default/home value")
-    ranges: list[ChannelRange] = Field(default_factory=list, description="Value ranges with special meanings")
+    
+    # For FIXED type - the value to always output
+    fixed_value: Optional[int] = Field(default=None, ge=0, le=255, description="Fixed DMX value (only for FIXED type)")
+    
+    # Capabilities (value ranges with meanings)
+    capabilities: list[ChannelCapability] = Field(default_factory=list)
+    
+    # Whether effects engine controls this channel
+    enabled: bool = Field(default=True, description="Whether this channel is controlled by effects")
     
     def get_dmx_channel(self, start_channel: int) -> int:
         """Get actual DMX channel number."""
@@ -74,135 +124,83 @@ class VisualizationMode(str, Enum):
 class FixtureProfile(BaseModel):
     """
     Profile defining a fixture type's channel layout.
-    Can be saved as a preset and reused.
+    Based on QLC+ fixture definition format.
     """
-    name: str = Field(..., description="Profile name (e.g., 'Muvy WashQ 14ch')")
+    name: str = Field(..., description="Profile name")
     manufacturer: str = Field(default="", description="Manufacturer name")
     model: str = Field(default="", description="Model name")
-    channel_count: int = Field(..., ge=1, le=512, description="Total number of channels")
-    channels: list[ChannelMapping] = Field(..., description="Channel mappings")
+    fixture_type: str = Field(default="Generic", description="Fixture type (e.g., 'Moving Head', 'PAR')")
+    channel_count: int = Field(..., ge=1, le=512)
+    channels: list[ChannelConfig] = Field(..., description="Channel definitions")
     
-    # Movement capabilities
-    has_pan: bool = Field(default=False)
-    has_tilt: bool = Field(default=False)
-    pan_range: int = Field(default=540, description="Pan range in degrees")
-    tilt_range: int = Field(default=230, description="Tilt range in degrees")
+    # Physical properties (from QLC+)
+    pan_max: int = Field(default=540, description="Max pan degrees")
+    tilt_max: int = Field(default=270, description="Max tilt degrees")
     
-    # Color capabilities
-    has_rgb: bool = Field(default=False)
-    has_white: bool = Field(default=False)
-    has_color_macros: bool = Field(default=False)
-    
-    def get_channel(self, function: ChannelFunction) -> Optional[ChannelMapping]:
-        """Get channel mapping for a specific function."""
+    def get_channel_by_offset(self, offset: int) -> Optional[ChannelConfig]:
+        """Get channel config by offset."""
         for ch in self.channels:
-            if ch.function == function:
+            if ch.offset == offset:
                 return ch
         return None
-
-
-class ChannelOverride(BaseModel):
-    """Override a channel's function or force it to a specific value."""
-    offset: int = Field(..., ge=1, description="Channel offset from start (1 = first channel)")
-    function: Optional[ChannelFunction] = Field(default=None, description="Override the channel function (None = use profile)")
-    force_value: Optional[int] = Field(default=None, ge=0, le=255, description="Force this channel to a fixed value (None = dynamic)")
-    enabled: bool = Field(default=True, description="Whether this channel is active")
+    
+    def get_channel_by_type(self, channel_type: ChannelType) -> Optional[ChannelConfig]:
+        """Get first channel with given type."""
+        for ch in self.channels:
+            if ch.channel_type == channel_type:
+                return ch
+        return None
 
 
 class FixtureConfig(BaseModel):
     """Configuration for a single fixture instance."""
     name: str = Field(..., description="Fixture name/identifier")
-    profile_name: str = Field(default="", description="Name of the fixture profile to use (empty for custom)")
+    profile_name: str = Field(default="", description="Name of the fixture profile (empty for custom)")
     start_channel: int = Field(..., ge=1, le=512, description="Starting DMX channel")
-    channel_count: int = Field(default=0, description="Number of channels (0 = use profile)")
     
     # Position in the show (for effects ordering)
-    position: int = Field(default=0, description="Order/position in fixture array (0=leftmost)")
+    position: int = Field(default=0, description="Order/position in fixture array")
     
-    # Per-fixture overrides (optional)
-    intensity_scale: float = Field(default=1.0, ge=0.0, le=1.0, description="Scale intensity for this fixture")
+    # Per-fixture settings
+    intensity_scale: float = Field(default=1.0, ge=0.0, le=1.0)
     
-    # Movement limits (override profile defaults if needed)
+    # Movement limits
     pan_min: int = Field(default=0, ge=0, le=255)
     pan_max: int = Field(default=255, ge=0, le=255)
     tilt_min: int = Field(default=0, ge=0, le=255)
     tilt_max: int = Field(default=255, ge=0, le=255)
     
-    # Custom channel definitions (for fully custom fixtures or overriding profile channels)
-    custom_channels: list[ChannelMapping] = Field(
-        default_factory=list,
-        description="Custom channel mappings (used if no profile or to extend profile)"
-    )
+    # Channel configurations - copied from profile and can be modified per-fixture
+    # If empty, uses profile channels directly
+    channels: list[ChannelConfig] = Field(default_factory=list)
     
-    # Channel overrides - force specific channels to fixed values or change their function
-    channel_overrides: list[ChannelOverride] = Field(
-        default_factory=list,
-        description="Override specific channels (force values or change function)"
-    )
+    def get_channels(self, profile: Optional[FixtureProfile] = None) -> list[ChannelConfig]:
+        """Get effective channel list (fixture-specific or from profile)."""
+        if self.channels:
+            return self.channels
+        if profile:
+            return profile.channels
+        return []
     
-    # Disabled channels - these won't be controlled by the effects engine
-    disabled_channels: list[int] = Field(
-        default_factory=list,
-        description="Channel offsets to disable (won't be touched by effects)"
-    )
-    
-    def get_effective_channels(self, profile: Optional["FixtureProfile"] = None) -> list[ChannelMapping]:
-        """
-        Get the effective channel mappings for this fixture.
-        Combines profile channels with custom channels and applies overrides.
-        """
-        # Start with profile channels or custom channels
-        if profile and not self.custom_channels:
-            channels = list(profile.channels)
-        elif self.custom_channels:
-            channels = list(self.custom_channels)
-        else:
-            channels = []
-        
-        # Apply function overrides
-        for override in self.channel_overrides:
-            if override.function is not None:
-                # Find and update the channel, or add new one
-                found = False
-                for i, ch in enumerate(channels):
-                    if ch.offset == override.offset:
-                        channels[i] = ChannelMapping(
-                            offset=override.offset,
-                            function=override.function,
-                            default_value=ch.default_value,
-                            ranges=ch.ranges
-                        )
-                        found = True
-                        break
-                if not found:
-                    channels.append(ChannelMapping(
-                        offset=override.offset,
-                        function=override.function,
-                        default_value=0
-                    ))
-        
-        return channels
-    
-    def get_force_value(self, offset: int) -> Optional[int]:
-        """Get the forced value for a channel offset, or None if not forced."""
-        for override in self.channel_overrides:
-            if override.offset == offset and override.force_value is not None:
-                return override.force_value
-        return None
-    
-    def is_channel_disabled(self, offset: int) -> bool:
-        """Check if a channel is disabled."""
-        if offset in self.disabled_channels:
-            return True
-        for override in self.channel_overrides:
-            if override.offset == offset and not override.enabled:
-                return True
-        return False
+    def copy_channels_from_profile(self, profile: FixtureProfile) -> None:
+        """Copy channel configs from profile to allow per-fixture customization."""
+        self.channels = [
+            ChannelConfig(
+                offset=ch.offset,
+                name=ch.name,
+                channel_type=ch.channel_type,
+                default_value=ch.default_value,
+                fixed_value=ch.fixed_value,
+                capabilities=list(ch.capabilities),
+                enabled=ch.enabled
+            )
+            for ch in profile.channels
+        ]
 
 
 class DMXConfig(BaseModel):
     """DMX interface configuration."""
-    port: str = Field(default="", description="Serial port (auto-detect if empty)")
+    port: str = Field(default="")
     universe_size: int = Field(default=512, ge=1, le=512)
     fps: int = Field(default=40, ge=1, le=44)
 
@@ -224,15 +222,14 @@ class ShowConfig(BaseModel):
     name: str = Field(default="My Light Show")
     dmx: DMXConfig = Field(default_factory=DMXConfig)
     effects: EffectsConfig = Field(default_factory=EffectsConfig)
-    profiles: list[FixtureProfile] = Field(default_factory=list, description="Available fixture profiles")
-    fixtures: list[FixtureConfig] = Field(default_factory=list, description="Fixture instances")
+    profiles: list[FixtureProfile] = Field(default_factory=list)
+    fixtures: list[FixtureConfig] = Field(default_factory=list)
     
     def get_profile(self, name: str) -> Optional[FixtureProfile]:
         """Get a profile by name."""
         for profile in self.profiles:
             if profile.name == name:
                 return profile
-        # Check built-in presets
         return FIXTURE_PRESETS.get(name)
     
     def save(self, path: str) -> None:
@@ -251,136 +248,76 @@ class ShowConfig(BaseModel):
 
 
 # =============================================================================
-# FIXTURE PRESETS
+# FIXTURE PRESETS (QLC+ compatible)
 # =============================================================================
 
 def _create_muvy_washq_profile() -> FixtureProfile:
-    """Create profile for Purelight Muvy WashQ (14 channel mode)."""
+    """Create profile for Purelight Muvy WashQ (14 channel mode) - based on QLC+ definition."""
     return FixtureProfile(
         name="Purelight Muvy WashQ 14ch",
         manufacturer="Purelight",
         model="Muvy WashQ",
+        fixture_type="Moving Head",
         channel_count=14,
-        has_pan=True,
-        has_tilt=True,
-        has_rgb=True,
-        has_white=True,
-        has_color_macros=True,
-        pan_range=540,
-        tilt_range=230,
+        pan_max=545,
+        tilt_max=184,
         channels=[
-            # Channel 1: Pan (0-255 = 0-540°)
-            ChannelMapping(
-                offset=1,
-                function=ChannelFunction.PAN,
-                default_value=128,
+            ChannelConfig(offset=1, name="Pan", channel_type=ChannelType.POSITION_PAN, default_value=128),
+            ChannelConfig(offset=2, name="Pan Fine", channel_type=ChannelType.POSITION_PAN_FINE, default_value=0),
+            ChannelConfig(offset=3, name="Tilt", channel_type=ChannelType.POSITION_TILT, default_value=128),
+            ChannelConfig(offset=4, name="Tilt Fine", channel_type=ChannelType.POSITION_TILT_FINE, default_value=0),
+            ChannelConfig(offset=5, name="XY Speed", channel_type=ChannelType.SPEED_PAN_TILT_SLOW_FAST, default_value=0),
+            ChannelConfig(
+                offset=6, 
+                name="Dimmer/Shutter", 
+                channel_type=ChannelType.INTENSITY_MASTER_DIMMER, 
+                default_value=255,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=7, name="Off"),
+                    ChannelCapability(min_value=8, max_value=134, name="Master Dimmer"),
+                    ChannelCapability(min_value=135, max_value=239, name="Strobe (slow to fast)"),
+                    ChannelCapability(min_value=240, max_value=255, name="Open"),
+                ]
             ),
-            # Channel 2: Pan Fine
-            ChannelMapping(
-                offset=2,
-                function=ChannelFunction.PAN_FINE,
+            ChannelConfig(offset=7, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
+            ChannelConfig(offset=8, name="Green", channel_type=ChannelType.INTENSITY_GREEN, default_value=0),
+            ChannelConfig(offset=9, name="Blue", channel_type=ChannelType.INTENSITY_BLUE, default_value=0),
+            ChannelConfig(offset=10, name="White", channel_type=ChannelType.INTENSITY_WHITE, default_value=0),
+            ChannelConfig(
+                offset=11, 
+                name="Color Macro", 
+                channel_type=ChannelType.COLOR_MACRO, 
                 default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=7, name="Color selection (manual)"),
+                    ChannelCapability(min_value=8, max_value=231, name="Macro color"),
+                    ChannelCapability(min_value=232, max_value=255, name="Color change jumpy"),
+                ]
             ),
-            # Channel 3: Tilt (0-255 = 0-230°)
-            ChannelMapping(
-                offset=3,
-                function=ChannelFunction.TILT,
-                default_value=128,
-            ),
-            # Channel 4: Tilt Fine
-            ChannelMapping(
-                offset=4,
-                function=ChannelFunction.TILT_FINE,
+            ChannelConfig(offset=12, name="Color Speed", channel_type=ChannelType.EFFECT_SPEED, default_value=0),
+            ChannelConfig(
+                offset=13, 
+                name="Effect Mode", 
+                channel_type=ChannelType.EFFECT, 
                 default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=7, name="Manual operation"),
+                    ChannelCapability(min_value=8, max_value=63, name="Auto fast"),
+                    ChannelCapability(min_value=64, max_value=127, name="Auto slow"),
+                    ChannelCapability(min_value=128, max_value=191, name="Music control 1"),
+                    ChannelCapability(min_value=192, max_value=255, name="Music control 2"),
+                ]
             ),
-            # Channel 5: P/T Speed (0=fast, 255=slow)
-            ChannelMapping(
-                offset=5,
-                function=ChannelFunction.PT_SPEED,
-                default_value=0,  # Fast by default
-            ),
-            # Channel 6: Dimmer/Shutter
-            ChannelMapping(
-                offset=6,
-                function=ChannelFunction.DIMMER,
-                default_value=255,  # Full open
-                ranges=[
-                    ChannelRange(min_value=0, max_value=7, name="Closed", description="No output"),
-                    ChannelRange(min_value=8, max_value=134, name="Dimmer", description="0-100% brightness"),
-                    ChannelRange(min_value=135, max_value=239, name="Strobe", description="Strobe slow to fast"),
-                    ChannelRange(min_value=240, max_value=255, name="Open", description="100% without strobe"),
-                ],
-            ),
-            # Channel 7: Red
-            ChannelMapping(
-                offset=7,
-                function=ChannelFunction.RED,
+            ChannelConfig(
+                offset=14, 
+                name="Reset", 
+                channel_type=ChannelType.MAINTENANCE, 
                 default_value=0,
-            ),
-            # Channel 8: Green
-            ChannelMapping(
-                offset=8,
-                function=ChannelFunction.GREEN,
-                default_value=0,
-            ),
-            # Channel 9: Blue
-            ChannelMapping(
-                offset=9,
-                function=ChannelFunction.BLUE,
-                default_value=0,
-            ),
-            # Channel 10: White
-            ChannelMapping(
-                offset=10,
-                function=ChannelFunction.WHITE,
-                default_value=0,
-            ),
-            # Channel 11: Color Macros
-            ChannelMapping(
-                offset=11,
-                function=ChannelFunction.COLOR_MACRO,
-                default_value=0,  # No macro
-                ranges=[
-                    ChannelRange(min_value=0, max_value=8, name="No function", description="Manual RGBW control"),
-                    ChannelRange(min_value=9, max_value=20, name="RGB", description="RGB mix"),
-                    ChannelRange(min_value=21, max_value=34, name="Red", description="Red"),
-                    ChannelRange(min_value=35, max_value=49, name="Green", description="Green"),
-                    ChannelRange(min_value=50, max_value=63, name="Blue", description="Blue"),
-                    ChannelRange(min_value=64, max_value=77, name="No function", description=""),
-                    ChannelRange(min_value=78, max_value=91, name="RGB", description="RGB mix"),
-                    ChannelRange(min_value=92, max_value=105, name="RB", description="Red+Blue"),
-                    ChannelRange(min_value=106, max_value=119, name="RG", description="Red+Green"),
-                    ChannelRange(min_value=120, max_value=133, name="RGB", description="RGB mix"),
-                    ChannelRange(min_value=134, max_value=147, name="RG", description="Red+Green"),
-                    ChannelRange(min_value=148, max_value=161, name="RGB", description="RGB mix"),
-                    ChannelRange(min_value=162, max_value=189, name="RGBW", description="RGBW mix"),
-                    ChannelRange(min_value=190, max_value=201, name="RBW", description="Red+Blue+White"),
-                    ChannelRange(min_value=202, max_value=217, name="Warm White", description="Warm white"),
-                    ChannelRange(min_value=218, max_value=232, name="Cold White", description="Cold white"),
-                    ChannelRange(min_value=233, max_value=255, name="Macro Color", description="Color change with ch12 speed"),
-                ],
-            ),
-            # Channel 12: Macro Speed
-            ChannelMapping(
-                offset=12,
-                function=ChannelFunction.MACRO_SPEED,
-                default_value=0,
-            ),
-            # Channel 13: Effect Macro (color + movement)
-            ChannelMapping(
-                offset=13,
-                function=ChannelFunction.EFFECT_MACRO,
-                default_value=0,
-            ),
-            # Channel 14: Control (Reset)
-            ChannelMapping(
-                offset=14,
-                function=ChannelFunction.CONTROL,
-                default_value=0,
-                ranges=[
-                    ChannelRange(min_value=0, max_value=249, name="No function", description=""),
-                    ChannelRange(min_value=250, max_value=255, name="Reset", description="Hold 3+ seconds to reset"),
-                ],
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=149, name="No function"),
+                    ChannelCapability(min_value=150, max_value=200, name="Reset"),
+                    ChannelCapability(min_value=201, max_value=255, name="No function"),
+                ]
             ),
         ],
     )
@@ -392,12 +329,12 @@ def _create_generic_rgb_par() -> FixtureProfile:
         name="Generic RGB PAR",
         manufacturer="Generic",
         model="RGB PAR",
+        fixture_type="PAR",
         channel_count=3,
-        has_rgb=True,
         channels=[
-            ChannelMapping(offset=1, function=ChannelFunction.RED, default_value=0),
-            ChannelMapping(offset=2, function=ChannelFunction.GREEN, default_value=0),
-            ChannelMapping(offset=3, function=ChannelFunction.BLUE, default_value=0),
+            ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
+            ChannelConfig(offset=2, name="Green", channel_type=ChannelType.INTENSITY_GREEN, default_value=0),
+            ChannelConfig(offset=3, name="Blue", channel_type=ChannelType.INTENSITY_BLUE, default_value=0),
         ],
     )
 
@@ -408,14 +345,13 @@ def _create_generic_rgbw_par() -> FixtureProfile:
         name="Generic RGBW PAR",
         manufacturer="Generic",
         model="RGBW PAR",
+        fixture_type="PAR",
         channel_count=4,
-        has_rgb=True,
-        has_white=True,
         channels=[
-            ChannelMapping(offset=1, function=ChannelFunction.RED, default_value=0),
-            ChannelMapping(offset=2, function=ChannelFunction.GREEN, default_value=0),
-            ChannelMapping(offset=3, function=ChannelFunction.BLUE, default_value=0),
-            ChannelMapping(offset=4, function=ChannelFunction.WHITE, default_value=0),
+            ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
+            ChannelConfig(offset=2, name="Green", channel_type=ChannelType.INTENSITY_GREEN, default_value=0),
+            ChannelConfig(offset=3, name="Blue", channel_type=ChannelType.INTENSITY_BLUE, default_value=0),
+            ChannelConfig(offset=4, name="White", channel_type=ChannelType.INTENSITY_WHITE, default_value=0),
         ],
     )
 
@@ -425,16 +361,15 @@ def _create_generic_dimmer_rgbw() -> FixtureProfile:
     return FixtureProfile(
         name="Generic Dimmer+RGBW",
         manufacturer="Generic",
-        model="Dimmer+RGBW",
+        model="Dimmer+RGBW PAR",
+        fixture_type="PAR",
         channel_count=5,
-        has_rgb=True,
-        has_white=True,
         channels=[
-            ChannelMapping(offset=1, function=ChannelFunction.DIMMER, default_value=255),
-            ChannelMapping(offset=2, function=ChannelFunction.RED, default_value=0),
-            ChannelMapping(offset=3, function=ChannelFunction.GREEN, default_value=0),
-            ChannelMapping(offset=4, function=ChannelFunction.BLUE, default_value=0),
-            ChannelMapping(offset=5, function=ChannelFunction.WHITE, default_value=0),
+            ChannelConfig(offset=1, name="Dimmer", channel_type=ChannelType.INTENSITY_MASTER_DIMMER, default_value=255),
+            ChannelConfig(offset=2, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
+            ChannelConfig(offset=3, name="Green", channel_type=ChannelType.INTENSITY_GREEN, default_value=0),
+            ChannelConfig(offset=4, name="Blue", channel_type=ChannelType.INTENSITY_BLUE, default_value=0),
+            ChannelConfig(offset=5, name="White", channel_type=ChannelType.INTENSITY_WHITE, default_value=0),
         ],
     )
 
@@ -456,3 +391,53 @@ def get_available_presets() -> list[str]:
 def get_preset(name: str) -> Optional[FixtureProfile]:
     """Get a fixture preset by name."""
     return FIXTURE_PRESETS.get(name)
+
+
+def get_channel_type_display_name(ct: ChannelType) -> str:
+    """Get human-readable name for channel type."""
+    names = {
+        ChannelType.INTENSITY: "Intensity",
+        ChannelType.INTENSITY_MASTER_DIMMER: "Master Dimmer",
+        ChannelType.INTENSITY_DIMMER: "Dimmer",
+        ChannelType.INTENSITY_RED: "Red",
+        ChannelType.INTENSITY_GREEN: "Green",
+        ChannelType.INTENSITY_BLUE: "Blue",
+        ChannelType.INTENSITY_WHITE: "White",
+        ChannelType.INTENSITY_AMBER: "Amber",
+        ChannelType.INTENSITY_UV: "UV",
+        ChannelType.INTENSITY_CYAN: "Cyan",
+        ChannelType.INTENSITY_MAGENTA: "Magenta",
+        ChannelType.INTENSITY_YELLOW: "Yellow",
+        ChannelType.INTENSITY_HUE: "Hue",
+        ChannelType.INTENSITY_SATURATION: "Saturation",
+        ChannelType.INTENSITY_VALUE: "Value",
+        ChannelType.POSITION_PAN: "Pan",
+        ChannelType.POSITION_PAN_FINE: "Pan Fine",
+        ChannelType.POSITION_TILT: "Tilt",
+        ChannelType.POSITION_TILT_FINE: "Tilt Fine",
+        ChannelType.SPEED_PAN_TILT_FAST_SLOW: "P/T Speed (fast-slow)",
+        ChannelType.SPEED_PAN_TILT_SLOW_FAST: "P/T Speed (slow-fast)",
+        ChannelType.COLOR_WHEEL: "Color Wheel",
+        ChannelType.COLOR_MACRO: "Color Macro",
+        ChannelType.COLOR_CTO_MIXER: "CTO",
+        ChannelType.COLOR_CTB_MIXER: "CTB",
+        ChannelType.GOBO_WHEEL: "Gobo Wheel",
+        ChannelType.GOBO_INDEX: "Gobo Index",
+        ChannelType.SHUTTER_STROBE: "Strobe",
+        ChannelType.SHUTTER_STROBE_SLOW_FAST: "Strobe (slow-fast)",
+        ChannelType.SHUTTER_STROBE_FAST_SLOW: "Strobe (fast-slow)",
+        ChannelType.SHUTTER_IRIS_MIN_TO_MAX: "Iris",
+        ChannelType.SHUTTER_IRIS_MAX_TO_MIN: "Iris (inv)",
+        ChannelType.BEAM_ZOOM_SMALL_BIG: "Zoom",
+        ChannelType.BEAM_ZOOM_BIG_SMALL: "Zoom (inv)",
+        ChannelType.BEAM_FOCUS_NEAR_FAR: "Focus",
+        ChannelType.BEAM_FOCUS_FAR_NEAR: "Focus (inv)",
+        ChannelType.PRISM: "Prism",
+        ChannelType.PRISM_ROTATION: "Prism Rotation",
+        ChannelType.EFFECT: "Effect",
+        ChannelType.EFFECT_SPEED: "Effect Speed",
+        ChannelType.MAINTENANCE: "Maintenance",
+        ChannelType.NOTHING: "Nothing",
+        ChannelType.FIXED: "Fixed Value",
+    }
+    return names.get(ct, ct.value)
