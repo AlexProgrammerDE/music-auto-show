@@ -1,6 +1,6 @@
 """
 Real-time audio analyzer that captures system audio and extracts audio features.
-Uses PyAudioWPatch for WASAPI loopback capture and Aubio for beat/tempo detection.
+Uses PyAudioWPatch for WASAPI loopback capture and librosa for beat/tempo detection.
 """
 import threading
 import time
@@ -20,10 +20,10 @@ except ImportError:
         PYAUDIO_AVAILABLE = False
 
 try:
-    import aubio
-    AUBIO_AVAILABLE = True
+    import librosa
+    LIBROSA_AVAILABLE = True
 except ImportError:
-    AUBIO_AVAILABLE = False
+    LIBROSA_AVAILABLE = False
 
 
 @dataclass
@@ -97,7 +97,7 @@ class AnalysisData:
 class AudioAnalyzer:
     """
     Real-time audio analyzer that captures system audio via WASAPI loopback
-    and extracts audio features using Aubio and FFT analysis.
+    and extracts audio features using librosa and FFT analysis.
     """
     
     def __init__(self, 
@@ -125,15 +125,24 @@ class AudioAnalyzer:
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[AnalysisData], None]] = []
         
-        # Aubio analyzers
-        self._tempo_analyzer = None
-        self._onset_analyzer = None
+        # Librosa-based onset detection (we accumulate audio for periodic analysis)
+        self._audio_buffer = deque(maxlen=sample_rate * 2)  # 2 seconds of audio
+        self._onset_envelope = None
+        self._last_tempo_update = 0.0
+        self._tempo_update_interval = 1.0  # Update tempo every second
         
         # Beat tracking state
         self._last_beat_time = 0.0
         self._beat_count = 0
         self._tempo_history = deque(maxlen=8)  # Rolling tempo estimates
         self._onset_history = deque(maxlen=16)  # Recent onset times for tempo calc
+        self._current_tempo = 120.0  # Current estimated tempo
+        
+        # Onset detection state
+        self._prev_onset_strength = 0.0
+        self._onset_threshold = 0.3
+        self._onset_cooldown = 0.0
+        self._min_onset_interval = 0.1  # Minimum 100ms between onsets
         
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
@@ -224,8 +233,8 @@ class AudioAnalyzer:
             print("PyAudio not available. Install with: pip install PyAudioWPatch")
             return False
         
-        if not AUBIO_AVAILABLE:
-            print("Aubio not available. Install with: pip install aubio")
+        if not LIBROSA_AVAILABLE:
+            print("Librosa not available. Install with: pip install librosa")
             return False
         
         try:
@@ -256,21 +265,6 @@ class AudioAnalyzer:
             self.device_index = device.get('index')
             channels = min(device.get('maxInputChannels', 2), 2)
             self.sample_rate = int(device.get('defaultSampleRate', 44100))
-            
-            # Initialize Aubio analyzers
-            self._tempo_analyzer = aubio.tempo(
-                "default", 
-                self.buffer_size * 2,  # win_s
-                self.buffer_size,       # hop_s
-                self.sample_rate
-            )
-            
-            self._onset_analyzer = aubio.onset(
-                "default",
-                self.buffer_size * 2,
-                self.buffer_size,
-                self.sample_rate
-            )
             
             # Setup FFT frequency bins
             self._freq_bins = np.fft.rfftfreq(self._fft_size, 1.0 / self.sample_rate)
@@ -353,39 +347,50 @@ class AudioAnalyzer:
         """Process audio buffer and extract features."""
         current_time = time.time()
         
-        # Ensure correct size for aubio
+        # Ensure correct size
         if len(audio_data) != self.buffer_size:
             if len(audio_data) > self.buffer_size:
                 audio_data = audio_data[:self.buffer_size]
             else:
                 audio_data = np.pad(audio_data, (0, self.buffer_size - len(audio_data)))
         
-        # Convert to aubio format
-        audio_aubio = audio_data.astype(np.float32)
+        # Add to audio buffer for librosa analysis
+        self._audio_buffer.extend(audio_data.tolist())
         
-        # Beat/tempo detection
-        beat_detected = False
-        if self._tempo_analyzer:
-            is_beat = self._tempo_analyzer(audio_aubio)
-            if is_beat:
-                beat_detected = True
-                self._last_beat_time = current_time
-                self._beat_count += 1
-            
-            tempo = self._tempo_analyzer.get_bpm()
-            if tempo > 0:
-                self._tempo_history.append(tempo)
+        # Calculate RMS energy first (needed for onset detection)
+        rms = np.sqrt(np.mean(audio_data ** 2))
         
-        # Onset detection
+        # Real-time onset detection using energy derivative
         onset_detected = False
-        if self._onset_analyzer:
-            is_onset = self._onset_analyzer(audio_aubio)
-            if is_onset:
+        onset_strength = rms
+        if current_time > self._onset_cooldown:
+            # Detect onset when energy rises sharply
+            if onset_strength > self._onset_threshold and onset_strength > self._prev_onset_strength * 1.5:
                 onset_detected = True
                 self._onset_history.append(current_time)
+                self._onset_cooldown = current_time + self._min_onset_interval
+        self._prev_onset_strength = onset_strength * 0.9 + self._prev_onset_strength * 0.1  # Smooth
         
-        # Calculate RMS energy
-        rms = np.sqrt(np.mean(audio_data ** 2))
+        # Adaptive threshold
+        self._onset_threshold = max(0.1, self._onset_threshold * 0.99 + rms * 0.5 * 0.01)
+        
+        # Beat detection based on tempo prediction
+        beat_detected = False
+        if self._current_tempo > 0:
+            beat_interval = 60.0 / self._current_tempo
+            time_since_beat = current_time - self._last_beat_time
+            
+            # Predict beat based on tempo, with onset confirmation
+            if time_since_beat >= beat_interval * 0.9:
+                if onset_detected or time_since_beat >= beat_interval:
+                    beat_detected = True
+                    self._last_beat_time = current_time
+                    self._beat_count += 1
+        
+        # Periodically update tempo using librosa (expensive, so do less often)
+        if current_time - self._last_tempo_update > self._tempo_update_interval:
+            self._update_tempo_librosa()
+            self._last_tempo_update = current_time
         self._energy_history.append(rms)
         
         # FFT for frequency analysis
@@ -420,9 +425,8 @@ class AudioAnalyzer:
             features.mid = np.mean(list(self._mid_history)) if self._mid_history else 0
             features.high = np.mean(list(self._high_history)) if self._high_history else 0
             
-            # Tempo (use median of recent estimates for stability)
-            if self._tempo_history:
-                features.tempo = float(np.median(list(self._tempo_history)))
+            # Tempo (use current estimate with smoothing)
+            features.tempo = self._current_tempo
             
             features.beat_detected = beat_detected
             features.onset_detected = onset_detected
@@ -456,6 +460,45 @@ class AudioAnalyzer:
             # Section intensity based on energy and beat
             beat_pulse = 1.0 - self._data.beat_position if beat_detected else 0
             self._data.section_intensity = features.energy * 0.7 + beat_pulse * 0.3
+    
+    def _update_tempo_librosa(self) -> None:
+        """Update tempo estimate using librosa beat tracking."""
+        if len(self._audio_buffer) < self.sample_rate:  # Need at least 1 second
+            return
+        
+        try:
+            # Convert buffer to numpy array
+            audio_array = np.array(list(self._audio_buffer), dtype=np.float32)
+            
+            # Use librosa to estimate tempo
+            tempo, _ = librosa.beat.beat_track(
+                y=audio_array,
+                sr=self.sample_rate,
+                units='time'
+            )
+            
+            # librosa may return an array, get scalar
+            if hasattr(tempo, '__len__'):
+                tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
+            else:
+                tempo = float(tempo)
+            
+            # Sanity check tempo range (60-200 BPM typical)
+            if 60 <= tempo <= 200:
+                self._tempo_history.append(tempo)
+                # Smooth tempo updates
+                if self._tempo_history:
+                    self._current_tempo = float(np.median(list(self._tempo_history)))
+        except Exception:
+            # If librosa fails, fall back to onset-based tempo estimation
+            if len(self._onset_history) >= 4:
+                intervals = np.diff(list(self._onset_history))
+                if len(intervals) > 0:
+                    avg_interval = np.mean(intervals)
+                    if avg_interval > 0:
+                        estimated_tempo = 60.0 / avg_interval
+                        if 60 <= estimated_tempo <= 200:
+                            self._current_tempo = estimated_tempo
     
     def _get_band_energy(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
         """Get energy in a frequency band from FFT data."""
