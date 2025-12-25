@@ -101,11 +101,20 @@ class FixtureProfile(BaseModel):
         return None
 
 
+class ChannelOverride(BaseModel):
+    """Override a channel's function or force it to a specific value."""
+    offset: int = Field(..., ge=1, description="Channel offset from start (1 = first channel)")
+    function: Optional[ChannelFunction] = Field(default=None, description="Override the channel function (None = use profile)")
+    force_value: Optional[int] = Field(default=None, ge=0, le=255, description="Force this channel to a fixed value (None = dynamic)")
+    enabled: bool = Field(default=True, description="Whether this channel is active")
+
+
 class FixtureConfig(BaseModel):
     """Configuration for a single fixture instance."""
     name: str = Field(..., description="Fixture name/identifier")
-    profile_name: str = Field(..., description="Name of the fixture profile to use")
+    profile_name: str = Field(default="", description="Name of the fixture profile to use (empty for custom)")
     start_channel: int = Field(..., ge=1, le=512, description="Starting DMX channel")
+    channel_count: int = Field(default=0, description="Number of channels (0 = use profile)")
     
     # Position in the show (for effects ordering)
     position: int = Field(default=0, description="Order/position in fixture array (0=leftmost)")
@@ -118,6 +127,77 @@ class FixtureConfig(BaseModel):
     pan_max: int = Field(default=255, ge=0, le=255)
     tilt_min: int = Field(default=0, ge=0, le=255)
     tilt_max: int = Field(default=255, ge=0, le=255)
+    
+    # Custom channel definitions (for fully custom fixtures or overriding profile channels)
+    custom_channels: list[ChannelMapping] = Field(
+        default_factory=list,
+        description="Custom channel mappings (used if no profile or to extend profile)"
+    )
+    
+    # Channel overrides - force specific channels to fixed values or change their function
+    channel_overrides: list[ChannelOverride] = Field(
+        default_factory=list,
+        description="Override specific channels (force values or change function)"
+    )
+    
+    # Disabled channels - these won't be controlled by the effects engine
+    disabled_channels: list[int] = Field(
+        default_factory=list,
+        description="Channel offsets to disable (won't be touched by effects)"
+    )
+    
+    def get_effective_channels(self, profile: Optional["FixtureProfile"] = None) -> list[ChannelMapping]:
+        """
+        Get the effective channel mappings for this fixture.
+        Combines profile channels with custom channels and applies overrides.
+        """
+        # Start with profile channels or custom channels
+        if profile and not self.custom_channels:
+            channels = list(profile.channels)
+        elif self.custom_channels:
+            channels = list(self.custom_channels)
+        else:
+            channels = []
+        
+        # Apply function overrides
+        for override in self.channel_overrides:
+            if override.function is not None:
+                # Find and update the channel, or add new one
+                found = False
+                for i, ch in enumerate(channels):
+                    if ch.offset == override.offset:
+                        channels[i] = ChannelMapping(
+                            offset=override.offset,
+                            function=override.function,
+                            default_value=ch.default_value,
+                            ranges=ch.ranges
+                        )
+                        found = True
+                        break
+                if not found:
+                    channels.append(ChannelMapping(
+                        offset=override.offset,
+                        function=override.function,
+                        default_value=0
+                    ))
+        
+        return channels
+    
+    def get_force_value(self, offset: int) -> Optional[int]:
+        """Get the forced value for a channel offset, or None if not forced."""
+        for override in self.channel_overrides:
+            if override.offset == offset and override.force_value is not None:
+                return override.force_value
+        return None
+    
+    def is_channel_disabled(self, offset: int) -> bool:
+        """Check if a channel is disabled."""
+        if offset in self.disabled_channels:
+            return True
+        for override in self.channel_overrides:
+            if override.offset == offset and not override.enabled:
+                return True
+        return False
 
 
 class DMXConfig(BaseModel):

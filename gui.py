@@ -15,8 +15,8 @@ except ImportError:
     DEARPYGUI_AVAILABLE = False
 
 from config import (
-    ShowConfig, FixtureConfig, FixtureProfile,
-    VisualizationMode, DMXConfig, EffectsConfig,
+    ShowConfig, FixtureConfig, FixtureProfile, ChannelOverride, ChannelMapping,
+    VisualizationMode, DMXConfig, EffectsConfig, ChannelFunction,
     get_available_presets, get_preset, FIXTURE_PRESETS
 )
 from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
@@ -359,10 +359,286 @@ class MusicAutoShowGUI:
             self._edit_fixture(user_data)
     
     def _edit_fixture(self, fixture: FixtureConfig) -> None:
-        """Edit an existing fixture."""
+        """Edit an existing fixture with full channel control."""
         if fixture is None:
             return
-        print(f"Edit fixture: {fixture.name}")
+        
+        # Store reference to fixture being edited
+        self._editing_fixture = fixture
+        
+        if dpg.does_item_exist("edit_fixture_window"):
+            dpg.delete_item("edit_fixture_window")
+        
+        with dpg.window(label=f"Edit Fixture: {fixture.name}", modal=True, 
+                       tag="edit_fixture_window", width=700, height=600, pos=(300, 50)):
+            
+            # Basic settings
+            with dpg.collapsing_header(label="Basic Settings", default_open=True):
+                dpg.add_input_text(label="Name", default_value=fixture.name, 
+                                  tag="edit_fixture_name", width=200)
+                dpg.add_input_int(label="Start Channel", default_value=fixture.start_channel,
+                                 tag="edit_fixture_start", min_value=1, max_value=512, width=100)
+                dpg.add_input_int(label="Position", default_value=fixture.position,
+                                 tag="edit_fixture_position", width=100)
+                dpg.add_slider_float(label="Intensity Scale", default_value=fixture.intensity_scale,
+                                    tag="edit_fixture_intensity", min_value=0.0, max_value=1.0, width=200)
+            
+            # Profile selection
+            with dpg.collapsing_header(label="Fixture Profile", default_open=True):
+                preset_names = ["(Custom)"] + get_available_presets()
+                current_profile = fixture.profile_name if fixture.profile_name else "(Custom)"
+                dpg.add_combo(label="Profile", items=preset_names, default_value=current_profile,
+                             tag="edit_fixture_profile", width=300,
+                             callback=self._on_profile_changed)
+                
+                dpg.add_text("Profile provides default channel mappings.", color=(150, 150, 150))
+                dpg.add_text("You can override individual channels below.", color=(150, 150, 150))
+            
+            # Movement limits
+            with dpg.collapsing_header(label="Movement Limits", default_open=False):
+                with dpg.group(horizontal=True):
+                    dpg.add_input_int(label="Pan Min", default_value=fixture.pan_min,
+                                     tag="edit_pan_min", width=80)
+                    dpg.add_input_int(label="Pan Max", default_value=fixture.pan_max,
+                                     tag="edit_pan_max", width=80)
+                with dpg.group(horizontal=True):
+                    dpg.add_input_int(label="Tilt Min", default_value=fixture.tilt_min,
+                                     tag="edit_tilt_min", width=80)
+                    dpg.add_input_int(label="Tilt Max", default_value=fixture.tilt_max,
+                                     tag="edit_tilt_max", width=80)
+            
+            # Channel Overrides
+            with dpg.collapsing_header(label="Channel Overrides (Force Values)", default_open=True):
+                dpg.add_text("Force specific channels to fixed DMX values.", color=(150, 150, 150))
+                dpg.add_text("Leave value empty for dynamic control.", color=(150, 150, 150))
+                
+                dpg.add_separator()
+                
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Add Override", callback=self._add_channel_override)
+                
+                dpg.add_separator()
+                
+                # Override list container
+                with dpg.child_window(height=150, border=True, tag="override_list_container"):
+                    dpg.add_group(tag="override_list")
+                    self._refresh_override_list(fixture)
+            
+            # Custom Channels (for custom fixtures)
+            with dpg.collapsing_header(label="Custom Channels", default_open=False):
+                dpg.add_text("Define custom channel mappings (for fixtures without a profile).", 
+                            color=(150, 150, 150))
+                
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Add Channel", callback=self._add_custom_channel)
+                
+                dpg.add_separator()
+                
+                with dpg.child_window(height=120, border=True, tag="custom_channel_list_container"):
+                    dpg.add_group(tag="custom_channel_list")
+                    self._refresh_custom_channel_list(fixture)
+            
+            dpg.add_separator()
+            
+            # Buttons
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save", callback=self._save_fixture_edit, width=100)
+                dpg.add_button(label="Cancel", 
+                              callback=lambda: dpg.delete_item("edit_fixture_window"), width=100)
+    
+    def _on_profile_changed(self, sender, app_data) -> None:
+        """Handle profile selection change in edit dialog."""
+        pass  # Profile change is handled on save
+    
+    def _refresh_override_list(self, fixture: FixtureConfig) -> None:
+        """Refresh the channel override list in the edit dialog."""
+        if not dpg.does_item_exist("override_list"):
+            return
+        
+        dpg.delete_item("override_list", children_only=True)
+        
+        for i, override in enumerate(fixture.channel_overrides):
+            with dpg.group(horizontal=True, parent="override_list"):
+                dpg.add_text(f"Ch {override.offset}:")
+                if override.force_value is not None:
+                    dpg.add_text(f"= {override.force_value}", color=(255, 200, 100))
+                else:
+                    func_name = override.function.value if override.function else "default"
+                    dpg.add_text(f"-> {func_name}", color=(100, 200, 100))
+                dpg.add_button(label="X", callback=lambda s, a, idx=i: self._remove_override(idx),
+                              width=30)
+    
+    def _add_channel_override(self) -> None:
+        """Show dialog to add a channel override."""
+        if dpg.does_item_exist("add_override_window"):
+            dpg.delete_item("add_override_window")
+        
+        with dpg.window(label="Add Channel Override", modal=True, tag="add_override_window",
+                       width=400, height=250, pos=(450, 200)):
+            dpg.add_input_int(label="Channel Offset", tag="override_offset", default_value=1,
+                             min_value=1, max_value=512, width=100)
+            
+            dpg.add_separator()
+            dpg.add_text("Choose ONE option:")
+            
+            dpg.add_checkbox(label="Force to fixed value", tag="override_force_check",
+                            callback=self._toggle_override_mode)
+            dpg.add_input_int(label="DMX Value (0-255)", tag="override_force_value", 
+                             default_value=0, min_value=0, max_value=255, width=100)
+            
+            dpg.add_separator()
+            
+            dpg.add_checkbox(label="Change function", tag="override_func_check",
+                            callback=self._toggle_override_mode)
+            functions = [f.value for f in ChannelFunction]
+            dpg.add_combo(label="Function", items=functions, default_value=functions[0],
+                         tag="override_function", width=200)
+            
+            dpg.add_separator()
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Add", callback=self._confirm_add_override, width=80)
+                dpg.add_button(label="Cancel", 
+                              callback=lambda: dpg.delete_item("add_override_window"), width=80)
+    
+    def _toggle_override_mode(self, sender, app_data) -> None:
+        """Toggle between force value and function override modes."""
+        if sender == "override_force_check" and app_data:
+            dpg.set_value("override_func_check", False)
+        elif sender == "override_func_check" and app_data:
+            dpg.set_value("override_force_check", False)
+    
+    def _confirm_add_override(self) -> None:
+        """Confirm adding a channel override."""
+        if not hasattr(self, '_editing_fixture') or self._editing_fixture is None:
+            return
+        
+        offset = dpg.get_value("override_offset")
+        force_check = dpg.get_value("override_force_check")
+        func_check = dpg.get_value("override_func_check")
+        
+        override = ChannelOverride(offset=offset)
+        
+        if force_check:
+            override.force_value = dpg.get_value("override_force_value")
+        elif func_check:
+            override.function = ChannelFunction(dpg.get_value("override_function"))
+        
+        # Remove existing override for same offset
+        self._editing_fixture.channel_overrides = [
+            o for o in self._editing_fixture.channel_overrides if o.offset != offset
+        ]
+        self._editing_fixture.channel_overrides.append(override)
+        
+        self._refresh_override_list(self._editing_fixture)
+        dpg.delete_item("add_override_window")
+    
+    def _remove_override(self, index: int) -> None:
+        """Remove a channel override."""
+        if hasattr(self, '_editing_fixture') and self._editing_fixture:
+            if 0 <= index < len(self._editing_fixture.channel_overrides):
+                self._editing_fixture.channel_overrides.pop(index)
+                self._refresh_override_list(self._editing_fixture)
+    
+    def _refresh_custom_channel_list(self, fixture: FixtureConfig) -> None:
+        """Refresh the custom channel list."""
+        if not dpg.does_item_exist("custom_channel_list"):
+            return
+        
+        dpg.delete_item("custom_channel_list", children_only=True)
+        
+        for i, ch in enumerate(fixture.custom_channels):
+            with dpg.group(horizontal=True, parent="custom_channel_list"):
+                dpg.add_text(f"Ch {ch.offset}: {ch.function.value}")
+                dpg.add_button(label="X", callback=lambda s, a, idx=i: self._remove_custom_channel(idx),
+                              width=30)
+    
+    def _add_custom_channel(self) -> None:
+        """Show dialog to add a custom channel."""
+        if dpg.does_item_exist("add_channel_window"):
+            dpg.delete_item("add_channel_window")
+        
+        with dpg.window(label="Add Custom Channel", modal=True, tag="add_channel_window",
+                       width=350, height=200, pos=(450, 200)):
+            dpg.add_input_int(label="Channel Offset", tag="channel_offset", default_value=1,
+                             min_value=1, max_value=512, width=100)
+            
+            functions = [f.value for f in ChannelFunction]
+            dpg.add_combo(label="Function", items=functions, default_value=functions[0],
+                         tag="channel_function", width=200)
+            
+            dpg.add_input_int(label="Default Value", tag="channel_default", default_value=0,
+                             min_value=0, max_value=255, width=100)
+            
+            dpg.add_separator()
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Add", callback=self._confirm_add_channel, width=80)
+                dpg.add_button(label="Cancel", 
+                              callback=lambda: dpg.delete_item("add_channel_window"), width=80)
+    
+    def _confirm_add_channel(self) -> None:
+        """Confirm adding a custom channel."""
+        if not hasattr(self, '_editing_fixture') or self._editing_fixture is None:
+            return
+        
+        offset = dpg.get_value("channel_offset")
+        function = ChannelFunction(dpg.get_value("channel_function"))
+        default_value = dpg.get_value("channel_default")
+        
+        # Remove existing channel with same offset
+        self._editing_fixture.custom_channels = [
+            c for c in self._editing_fixture.custom_channels if c.offset != offset
+        ]
+        
+        self._editing_fixture.custom_channels.append(
+            ChannelMapping(offset=offset, function=function, default_value=default_value)
+        )
+        
+        self._refresh_custom_channel_list(self._editing_fixture)
+        dpg.delete_item("add_channel_window")
+    
+    def _remove_custom_channel(self, index: int) -> None:
+        """Remove a custom channel."""
+        if hasattr(self, '_editing_fixture') and self._editing_fixture:
+            if 0 <= index < len(self._editing_fixture.custom_channels):
+                self._editing_fixture.custom_channels.pop(index)
+                self._refresh_custom_channel_list(self._editing_fixture)
+    
+    def _save_fixture_edit(self) -> None:
+        """Save fixture edits."""
+        if not hasattr(self, '_editing_fixture') or self._editing_fixture is None:
+            return
+        
+        fixture = self._editing_fixture
+        
+        # Update basic settings
+        fixture.name = dpg.get_value("edit_fixture_name")
+        fixture.start_channel = dpg.get_value("edit_fixture_start")
+        fixture.position = dpg.get_value("edit_fixture_position")
+        fixture.intensity_scale = dpg.get_value("edit_fixture_intensity")
+        
+        # Update profile
+        profile_value = dpg.get_value("edit_fixture_profile")
+        fixture.profile_name = "" if profile_value == "(Custom)" else profile_value
+        
+        # Update movement limits
+        fixture.pan_min = dpg.get_value("edit_pan_min")
+        fixture.pan_max = dpg.get_value("edit_pan_max")
+        fixture.tilt_min = dpg.get_value("edit_tilt_min")
+        fixture.tilt_max = dpg.get_value("edit_tilt_max")
+        
+        # Overrides and custom channels are already updated in-place
+        
+        # Refresh UI
+        self._refresh_fixture_list()
+        
+        # Update effects engine if running
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
+        
+        dpg.delete_item("edit_fixture_window")
+        self._editing_fixture = None
     
     def _remove_fixture(self) -> None:
         """Remove selected fixture."""

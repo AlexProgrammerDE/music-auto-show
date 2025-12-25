@@ -105,8 +105,10 @@ class EffectsEngine:
             self._smoothed_values[fixture.name] = FixtureState()
     
     def _get_profile(self, fixture: FixtureConfig) -> Optional[FixtureProfile]:
-        """Get the profile for a fixture."""
-        return self._profiles.get(fixture.profile_name)
+        """Get the profile for a fixture (may be None for custom fixtures)."""
+        if fixture.profile_name:
+            return self._profiles.get(fixture.profile_name)
+        return None
     
     def update_config(self, config: ShowConfig) -> None:
         """Update configuration."""
@@ -333,7 +335,13 @@ class EffectsEngine:
         
         for fixture in self.config.fixtures:
             profile = self._get_profile(fixture)
-            if not profile or not (profile.has_pan or profile.has_tilt):
+            channels = fixture.get_effective_channels(profile)
+            
+            # Check if fixture has pan/tilt channels
+            has_pan = any(ch.function == ChannelFunction.PAN for ch in channels)
+            has_tilt = any(ch.function == ChannelFunction.TILT for ch in channels)
+            
+            if not (has_pan or has_tilt):
                 continue
             
             state = self._states[fixture.name]
@@ -342,14 +350,14 @@ class EffectsEngine:
             beat_phase = data.beat_position * math.pi * 2
             
             # Pan: slow sweep based on bar
-            if profile.has_pan:
+            if has_pan:
                 pan_range = fixture.pan_max - fixture.pan_min
                 pan_center = (fixture.pan_max + fixture.pan_min) / 2
                 pan_offset = math.sin(bar_phase) * (pan_range / 2) * speed
                 state.pan = int(pan_center + pan_offset)
             
             # Tilt: bob based on beat
-            if profile.has_tilt:
+            if has_tilt:
                 tilt_range = fixture.tilt_max - fixture.tilt_min
                 tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
                 tilt_offset = math.sin(beat_phase) * (tilt_range / 4) * speed
@@ -402,16 +410,29 @@ class EffectsEngine:
         """Output fixture states to DMX controller."""
         for fixture in self.config.fixtures:
             profile = self._get_profile(fixture)
-            if not profile:
-                continue
-            
             state = self._smoothed_values[fixture.name]
             start_ch = fixture.start_channel
             
-            for ch_mapping in profile.channels:
+            # Get effective channels (profile + custom + overrides)
+            channels = fixture.get_effective_channels(profile)
+            
+            if not channels:
+                continue
+            
+            for ch_mapping in channels:
+                # Skip disabled channels
+                if fixture.is_channel_disabled(ch_mapping.offset):
+                    continue
+                
                 dmx_channel = ch_mapping.get_dmx_channel(start_ch)
-                value = self._get_channel_value(state, ch_mapping, profile)
-                self.dmx.set_channel(dmx_channel, value)
+                
+                # Check for forced value first
+                force_value = fixture.get_force_value(ch_mapping.offset)
+                if force_value is not None:
+                    self.dmx.set_channel(dmx_channel, force_value)
+                else:
+                    value = self._get_channel_value(state, ch_mapping, profile)
+                    self.dmx.set_channel(dmx_channel, value)
     
     def _get_channel_value(self, state: FixtureState, ch_mapping: ChannelMapping, profile: FixtureProfile) -> int:
         """Get the DMX value for a channel based on fixture state."""
