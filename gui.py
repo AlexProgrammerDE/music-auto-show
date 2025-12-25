@@ -283,7 +283,8 @@ class MusicAutoShowGUI:
                 with dpg.group(horizontal=True, parent=self._fixture_list_id):
                     dpg.add_selectable(label=f"{fixture.name} [{fixture.profile_name}] (Ch {fixture.start_channel})",
                                        width=350, tag=f"fixture_sel_{i}",
-                                       callback=lambda s, a, f=fixture: self._edit_fixture(f))
+                                       callback=self._on_fixture_selected,
+                                       user_data=fixture)
     
     def _add_fixture_dialog(self) -> None:
         """Show dialog to add a new fixture."""
@@ -352,8 +353,15 @@ class MusicAutoShowGUI:
         
         dpg.delete_item("add_fixture_window")
     
+    def _on_fixture_selected(self, sender, app_data, user_data) -> None:
+        """Handle fixture selection from list."""
+        if user_data is not None:
+            self._edit_fixture(user_data)
+    
     def _edit_fixture(self, fixture: FixtureConfig) -> None:
         """Edit an existing fixture."""
+        if fixture is None:
+            return
         print(f"Edit fixture: {fixture.name}")
     
     def _remove_fixture(self) -> None:
