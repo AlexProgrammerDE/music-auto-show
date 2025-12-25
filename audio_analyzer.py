@@ -25,6 +25,12 @@ try:
 except ImportError:
     LIBROSA_AVAILABLE = False
 
+try:
+    from media_info import MediaInfoProvider, MediaInfo
+    MEDIA_INFO_AVAILABLE = True
+except ImportError:
+    MEDIA_INFO_AVAILABLE = False
+
 
 @dataclass
 class AudioFeatures:
@@ -152,6 +158,14 @@ class AudioAnalyzer:
         self._max_mid = 0.01
         self._max_high = 0.01
         self._band_decay = 0.999  # Decay rate for band maxes
+        
+        # Media info provider (for track name/artist display)
+        self._media_info_provider = None
+        if MEDIA_INFO_AVAILABLE:
+            try:
+                self._media_info_provider = MediaInfoProvider()
+            except Exception:
+                pass
         
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
@@ -292,6 +306,10 @@ class AudioAnalyzer:
             self._running = True
             self._stream.start_stream()
             
+            # Start media info provider (for track name display)
+            if self._media_info_provider:
+                self._media_info_provider.start()
+            
             # Start analysis thread
             self._thread = threading.Thread(target=self._analysis_loop, daemon=True)
             self._thread.start()
@@ -306,6 +324,9 @@ class AudioAnalyzer:
     def stop(self) -> None:
         """Stop audio capture and analysis."""
         self._running = False
+        
+        if self._media_info_provider:
+            self._media_info_provider.stop()
         
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -567,6 +588,21 @@ class AudioAnalyzer:
     def _analysis_loop(self) -> None:
         """Main analysis loop - notifies callbacks."""
         while self._running:
+            # Get media info if available
+            track_name = "System Audio"
+            artist_name = ""
+            media_is_playing = True
+            
+            if self._media_info_provider:
+                try:
+                    media_info = self._media_info_provider.get_info()
+                    if media_info.title:
+                        track_name = media_info.title
+                        artist_name = media_info.artist
+                        media_is_playing = media_info.is_playing
+                except Exception:
+                    pass
+            
             # Get current data
             with self._lock:
                 data = AnalysisData(
@@ -588,7 +624,10 @@ class AudioAnalyzer:
                     bar_position=self._data.bar_position,
                     section_intensity=self._data.section_intensity,
                     estimated_beat=self._data.estimated_beat,
-                    estimated_bar=self._data.estimated_bar
+                    estimated_bar=self._data.estimated_bar,
+                    track_name=track_name,
+                    artist_name=artist_name,
+                    is_playing=media_is_playing
                 )
                 # Reset beat detected flag after reading
                 self._data.features.beat_detected = False

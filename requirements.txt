@@ -13,5 +13,12 @@ pyserial>=3.5          # Generic serial DMX
 # GUI
 dearpygui>=1.10.0
 
+# Media Info - OS-specific (optional, for track info display)
+# Windows: winsdk
+# Linux: dbus-python
+# macOS: uses built-in osascript (no extra deps)
+winsdk>=1.0.0b10; sys_platform == 'win32'
+dbus-python>=1.3.2; sys_platform == 'linux'
+
 # Spotify API (optional - for track info display only)
 spotipy>=2.23.0

@@ -487,11 +487,17 @@ class MusicAutoShowGUI:
         if not dpg.is_dearpygui_running():
             return
         
-        # Update track info (show audio source)
-        if data.is_playing:
+        # Update track info (show currently playing media)
+        if data.track_name and data.track_name != "System Audio":
+            if data.artist_name:
+                track_text = f"{data.artist_name} - {data.track_name} ({data.features.tempo:.0f} BPM)"
+            else:
+                track_text = f"{data.track_name} ({data.features.tempo:.0f} BPM)"
+        else:
             track_text = f"System Audio - {data.features.tempo:.0f} BPM"
-            if dpg.does_item_exist("track_info"):
-                dpg.set_value("track_info", track_text[:60])
+        
+        if dpg.does_item_exist("track_info"):
+            dpg.set_value("track_info", track_text[:80])
         
         # Update audio feature bars
         if dpg.does_item_exist("energy_bar"):
