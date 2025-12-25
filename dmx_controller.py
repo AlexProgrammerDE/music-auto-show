@@ -151,9 +151,17 @@ class SerialDMXInterface(DMXInterface):
                 self.port = self._detect_port()
             
             if not self.port:
-                print("No serial device found")
+                # List available ports to help user
+                ports = serial.tools.list_ports.comports()
+                if ports:
+                    print("No FTDI/DMX device found. Available ports:")
+                    for p in ports:
+                        print(f"  {p.device}: {p.description} (VID:{p.vid}, PID:{p.pid})")
+                else:
+                    print("No serial ports found. Check USB connection.")
                 return False
             
+            print(f"Opening DMX on {self.port}")
             self._serial = serial.Serial(
                 self.port,
                 baudrate=250000,
@@ -171,15 +179,19 @@ class SerialDMXInterface(DMXInterface):
         """Auto-detect serial DMX device."""
         ports = serial.tools.list_ports.comports()
         for port in ports:
-            # Look for FTDI devices
-            if 'FTDI' in port.description or 'FT232' in port.description:
+            desc = port.description.upper() if port.description else ""
+            # Look for FTDI devices (ENTTEC Open DMX uses FTDI FT232R)
+            if 'FTDI' in desc or 'FT232' in desc:
                 return port.device
             # Or devices with DMX in name
-            if 'DMX' in port.description.upper():
+            if 'DMX' in desc:
+                return port.device
+            # Check VID:PID for FTDI (0403:6001 is FT232R used by ENTTEC)
+            if port.vid == 0x0403:
                 return port.device
         # Return first USB serial if nothing specific found
         for port in ports:
-            if 'USB' in port.device.upper():
+            if 'USB' in port.device.upper() or 'COM' in port.device.upper():
                 return port.device
         return ""
     
@@ -355,10 +367,12 @@ def create_dmx_controller(port: str = "", simulate: bool = False, fps: int = 40)
     """
     if simulate:
         interface = SimulatedDMXInterface()
-    elif PYFTDI_AVAILABLE:
-        interface = FTDIDMXInterface(port)
     elif PYSERIAL_AVAILABLE:
+        # Try pyserial first - works better on Windows with standard FTDI drivers
         interface = SerialDMXInterface(port)
+    elif PYFTDI_AVAILABLE:
+        # pyftdi requires libusb/Zadig driver on Windows
+        interface = FTDIDMXInterface(port)
     else:
         print("No DMX library available, using simulation")
         interface = SimulatedDMXInterface()
