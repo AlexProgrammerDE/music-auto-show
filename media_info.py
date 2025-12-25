@@ -140,13 +140,17 @@ class _DummyBackend(_MediaInfoBackend):
 
 
 class _WindowsMediaBackend(_MediaInfoBackend):
-    """Windows backend using winsdk (GlobalSystemMediaTransportControls)."""
+    """Windows backend using winrt (GlobalSystemMediaTransportControls)."""
     
     def __init__(self):
         # Import here to avoid errors on other platforms
-        import winsdk.windows.media.control as wmc
-        self._wmc = wmc
-        self._loop = None
+        # Using winrt-Windows.Media.Control package (pre-built wheels)
+        from winrt.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager,
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+        )
+        self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
+        self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
     
     def get_media_info(self) -> MediaInfo:
         try:
@@ -157,8 +161,8 @@ class _WindowsMediaBackend(_MediaInfoBackend):
     
     async def _get_media_info_async(self) -> MediaInfo:
         try:
-            sessions = await self._wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-            session = sessions.get_current_session()
+            manager = await self._SessionManager.request_async()
+            session = manager.get_current_session()
             
             if session is None:
                 return MediaInfo()
@@ -166,8 +170,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             # Get playback status
             playback_info = session.get_playback_info()
             is_playing = (
-                playback_info.playback_status == 
-                self._wmc.GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING
+                playback_info.playback_status == self._PlaybackStatus.PLAYING
             )
             
             # Get media properties
