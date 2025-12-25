@@ -19,7 +19,7 @@ from config import (
     VisualizationMode, DMXConfig, SpotifyConfig, EffectsConfig
 )
 from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
-from spotify_analyzer import AnalysisData, create_spotify_analyzer
+from audio_analyzer import AnalysisData, AudioAnalyzer, create_audio_analyzer
 from effects_engine import EffectsEngine, FixtureState
 
 
@@ -32,7 +32,7 @@ class MusicAutoShowGUI:
         self.config = ShowConfig()
         self.dmx_controller: Optional[DMXController] = None
         self.dmx_interface = None
-        self.spotify_analyzer = None
+        self.audio_analyzer = None
         self.effects_engine: Optional[EffectsEngine] = None
         
         self._running = False
@@ -148,19 +148,12 @@ class MusicAutoShowGUI:
         
         dpg.add_spacer(height=10)
         
-        # Spotify Configuration
-        with dpg.collapsing_header(label="Spotify Settings", default_open=True):
-            dpg.add_input_text(label="Client ID", width=250,
-                              callback=lambda s, a: setattr(self.config.spotify, 'client_id', a),
-                              tag="spotify_client_id")
-            dpg.add_input_text(label="Client Secret", width=250, password=True,
-                              callback=lambda s, a: setattr(self.config.spotify, 'client_secret', a),
-                              tag="spotify_client_secret")
-            dpg.add_input_text(label="Redirect URI", width=250,
-                              default_value=self.config.spotify.redirect_uri,
-                              callback=lambda s, a: setattr(self.config.spotify, 'redirect_uri', a))
-            dpg.add_checkbox(label="Simulate Spotify (no API)", tag="simulate_spotify",
+        # Audio Input Configuration
+        with dpg.collapsing_header(label="Audio Input", default_open=True):
+            dpg.add_text("Captures system audio (WASAPI loopback)")
+            dpg.add_checkbox(label="Simulate Audio (no capture)", tag="simulate_audio",
                             callback=self._on_simulate_changed)
+            dpg.add_button(label="List Audio Devices", callback=self._list_audio_devices)
         
         dpg.add_spacer(height=10)
         
@@ -235,23 +228,27 @@ class MusicAutoShowGUI:
         dpg.add_spacer(height=10)
         
         # Audio features display
-        with dpg.collapsing_header(label="Audio Features", default_open=True):
+        with dpg.collapsing_header(label="Audio Analysis", default_open=True):
             with dpg.group(horizontal=True):
-                with dpg.child_window(width=300, height=150, border=True):
+                with dpg.child_window(width=300, height=180, border=True):
                     dpg.add_text("Energy:")
-                    dpg.add_progress_bar(tag="energy_bar", default_value=0.5, width=-1)
-                    dpg.add_text("Danceability:")
-                    dpg.add_progress_bar(tag="dance_bar", default_value=0.5, width=-1)
-                    dpg.add_text("Valence:")
-                    dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
+                    dpg.add_progress_bar(tag="energy_bar", default_value=0.0, width=-1)
+                    dpg.add_text("Bass:")
+                    dpg.add_progress_bar(tag="bass_bar", default_value=0.0, width=-1)
+                    dpg.add_text("Mid:")
+                    dpg.add_progress_bar(tag="mid_bar", default_value=0.0, width=-1)
+                    dpg.add_text("High:")
+                    dpg.add_progress_bar(tag="high_bar", default_value=0.0, width=-1)
                 
-                with dpg.child_window(width=300, height=150, border=True):
+                with dpg.child_window(width=300, height=180, border=True):
                     dpg.add_text("Tempo:", tag="tempo_text")
                     dpg.add_progress_bar(tag="tempo_bar", default_value=0.5, width=-1)
                     dpg.add_text("Beat Position:")
                     dpg.add_progress_bar(tag="beat_bar", default_value=0.0, width=-1)
-                    dpg.add_text("Bar Position:")
-                    dpg.add_progress_bar(tag="bar_bar", default_value=0.0, width=-1)
+                    dpg.add_text("Danceability:")
+                    dpg.add_progress_bar(tag="dance_bar", default_value=0.5, width=-1)
+                    dpg.add_text("Valence:")
+                    dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
         
         dpg.add_spacer(height=10)
         
@@ -405,7 +402,7 @@ class MusicAutoShowGUI:
     def _start_show(self) -> None:
         """Start the light show."""
         simulate_dmx = dpg.get_value("simulate_dmx") if dpg.does_item_exist("simulate_dmx") else True
-        simulate_spotify = dpg.get_value("simulate_spotify") if dpg.does_item_exist("simulate_spotify") else True
+        simulate_audio = dpg.get_value("simulate_audio") if dpg.does_item_exist("simulate_audio") else False
         
         # Create DMX controller
         self.dmx_controller, self.dmx_interface = create_dmx_controller(
@@ -422,22 +419,13 @@ class MusicAutoShowGUI:
             dpg.set_value(self._status_text_id, "Status: DMX start failed!")
             return
         
-        # Create Spotify analyzer
-        try:
-            self.spotify_analyzer = create_spotify_analyzer(
-                client_id=self.config.spotify.client_id,
-                client_secret=self.config.spotify.client_secret,
-                redirect_uri=self.config.spotify.redirect_uri,
-                simulate=simulate_spotify
-            )
-        except ValueError as e:
-            dpg.set_value(self._status_text_id, f"Status: {e}")
+        # Create audio analyzer
+        self.audio_analyzer = create_audio_analyzer(simulate=simulate_audio)
+        
+        if not self.audio_analyzer.start():
+            dpg.set_value(self._status_text_id, "Status: Audio capture failed!")
             self.dmx_controller.stop()
             self.dmx_interface.close()
-            return
-        
-        if not self.spotify_analyzer.start():
-            dpg.set_value(self._status_text_id, "Status: Spotify connection failed!")
             return
         
         # Create effects engine
@@ -455,9 +443,9 @@ class MusicAutoShowGUI:
             self.effects_engine.blackout()
             self.effects_engine = None
         
-        if self.spotify_analyzer:
-            self.spotify_analyzer.stop()
-            self.spotify_analyzer = None
+        if self.audio_analyzer:
+            self.audio_analyzer.stop()
+            self.audio_analyzer = None
         
         if self.dmx_controller:
             self.dmx_controller.stop()
@@ -478,9 +466,9 @@ class MusicAutoShowGUI:
     def _update_loop(self) -> None:
         """Background update loop."""
         while self._running:
-            if self.effects_engine and self.spotify_analyzer:
+            if self.effects_engine and self.audio_analyzer:
                 # Get analysis data
-                data = self.spotify_analyzer.get_data()
+                data = self.audio_analyzer.get_data()
                 self._current_analysis = data
                 
                 # Process through effects engine
@@ -499,15 +487,21 @@ class MusicAutoShowGUI:
         if not dpg.is_dearpygui_running():
             return
         
-        # Update track info
-        if data.track.is_playing:
-            track_text = f"{data.track.artist} - {data.track.name}"
+        # Update track info (show audio source)
+        if data.is_playing:
+            track_text = f"System Audio - {data.features.tempo:.0f} BPM"
             if dpg.does_item_exist("track_info"):
                 dpg.set_value("track_info", track_text[:60])
         
         # Update audio feature bars
         if dpg.does_item_exist("energy_bar"):
             dpg.set_value("energy_bar", data.features.energy)
+        if dpg.does_item_exist("bass_bar"):
+            dpg.set_value("bass_bar", data.features.bass)
+        if dpg.does_item_exist("mid_bar"):
+            dpg.set_value("mid_bar", data.features.mid)
+        if dpg.does_item_exist("high_bar"):
+            dpg.set_value("high_bar", data.features.high)
         if dpg.does_item_exist("dance_bar"):
             dpg.set_value("dance_bar", data.features.danceability)
         if dpg.does_item_exist("valence_bar"):
@@ -518,8 +512,6 @@ class MusicAutoShowGUI:
             dpg.set_value("tempo_bar", data.normalized_tempo)
         if dpg.does_item_exist("beat_bar"):
             dpg.set_value("beat_bar", data.beat_position)
-        if dpg.does_item_exist("bar_bar"):
-            dpg.set_value("bar_bar", data.bar_position)
         
         # Update DMX channel display
         if self.dmx_controller:
@@ -530,6 +522,19 @@ class MusicAutoShowGUI:
         
         # Update visualizer
         self._draw_visualizer()
+    
+    def _list_audio_devices(self) -> None:
+        """List available audio input devices."""
+        analyzer = AudioAnalyzer()
+        devices = analyzer.list_devices()
+        
+        if not devices:
+            print("No audio input devices found")
+            return
+        
+        print("\nAvailable audio input devices:")
+        for dev in devices:
+            print(f"  [{dev['index']}] {dev['name']} ({dev['channels']}ch, {dev['sample_rate']}Hz)")
     
     def _draw_visualizer(self) -> None:
         """Draw the fixture visualizer."""

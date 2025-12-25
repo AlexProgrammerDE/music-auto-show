@@ -1,0 +1,653 @@
+"""
+Real-time audio analyzer that captures system audio and extracts audio features.
+Uses PyAudioWPatch for WASAPI loopback capture and Aubio for beat/tempo detection.
+"""
+import threading
+import time
+import numpy as np
+from typing import Optional, Callable
+from dataclasses import dataclass, field
+from collections import deque
+
+try:
+    import pyaudiowpatch as pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    try:
+        import pyaudio
+        PYAUDIO_AVAILABLE = True
+    except ImportError:
+        PYAUDIO_AVAILABLE = False
+
+try:
+    import aubio
+    AUBIO_AVAILABLE = True
+except ImportError:
+    AUBIO_AVAILABLE = False
+
+
+@dataclass
+class AudioFeatures:
+    """Real-time audio features extracted from system audio."""
+    # Energy/loudness (0-1 scale)
+    energy: float = 0.0
+    rms: float = 0.0
+    
+    # Frequency bands (0-1 scale)
+    bass: float = 0.0      # 20-250 Hz
+    mid: float = 0.0       # 250-4000 Hz
+    high: float = 0.0      # 4000-20000 Hz
+    
+    # Beat/tempo
+    tempo: float = 120.0   # BPM
+    beat_detected: bool = False
+    onset_detected: bool = False
+    
+    # Beat timing
+    time_since_beat: float = 0.0  # Seconds since last beat
+    beat_confidence: float = 0.0   # 0-1 confidence in tempo
+    
+    # Derived
+    danceability: float = 0.5  # Estimated from beat regularity
+    valence: float = 0.5       # Estimated from frequency balance
+
+
+@dataclass 
+class AnalysisData:
+    """Combined analysis data for visualization (compatible with effects engine)."""
+    features: AudioFeatures = field(default_factory=AudioFeatures)
+    
+    # Beat position tracking
+    beat_position: float = 0.0   # 0-1 within current beat
+    bar_position: float = 0.0    # 0-1 within current bar
+    section_intensity: float = 0.5
+    
+    # Beat counters
+    estimated_beat: int = 0
+    estimated_bar: int = 0
+    
+    # Track info (optional, for display only)
+    track_name: str = "System Audio"
+    artist_name: str = ""
+    is_playing: bool = True
+    
+    @property
+    def normalized_energy(self) -> float:
+        return self.features.energy
+    
+    @property
+    def normalized_tempo(self) -> float:
+        """Get tempo normalized to 0-1 (60-180 BPM range)."""
+        return max(0.0, min(1.0, (self.features.tempo - 60) / 120))
+    
+    @property
+    def beat_interval_ms(self) -> float:
+        """Get beat interval in milliseconds."""
+        if self.features.tempo > 0:
+            return 60000.0 / self.features.tempo
+        return 500.0
+    
+    # Compatibility properties for TrackInfo-like access
+    @property
+    def track(self):
+        """Compatibility shim for code expecting track.is_playing etc."""
+        return self
+
+
+class AudioAnalyzer:
+    """
+    Real-time audio analyzer that captures system audio via WASAPI loopback
+    and extracts audio features using Aubio and FFT analysis.
+    """
+    
+    def __init__(self, 
+                 buffer_size: int = 1024,
+                 sample_rate: int = 44100,
+                 device_index: Optional[int] = None):
+        """
+        Initialize the audio analyzer.
+        
+        Args:
+            buffer_size: Audio buffer size (smaller = lower latency, higher CPU)
+            sample_rate: Sample rate for audio capture
+            device_index: Specific audio device index, or None for default loopback
+        """
+        self.buffer_size = buffer_size
+        self.sample_rate = sample_rate
+        self.device_index = device_index
+        
+        self._pyaudio: Optional[pyaudio.PyAudio] = None
+        self._stream = None
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        
+        self._data = AnalysisData()
+        self._lock = threading.Lock()
+        self._callbacks: list[Callable[[AnalysisData], None]] = []
+        
+        # Aubio analyzers
+        self._tempo_analyzer = None
+        self._onset_analyzer = None
+        
+        # Beat tracking state
+        self._last_beat_time = 0.0
+        self._beat_count = 0
+        self._tempo_history = deque(maxlen=8)  # Rolling tempo estimates
+        self._onset_history = deque(maxlen=16)  # Recent onset times for tempo calc
+        
+        # Energy smoothing
+        self._energy_history = deque(maxlen=10)
+        self._bass_history = deque(maxlen=5)
+        self._mid_history = deque(maxlen=5)
+        self._high_history = deque(maxlen=5)
+        
+        # FFT setup
+        self._fft_size = buffer_size
+        self._freq_bins = None
+        
+    def add_callback(self, callback: Callable[[AnalysisData], None]) -> None:
+        """Add a callback to be called when analysis data updates."""
+        self._callbacks.append(callback)
+    
+    def remove_callback(self, callback: Callable[[AnalysisData], None]) -> None:
+        """Remove a callback."""
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+    
+    def get_loopback_device(self) -> Optional[dict]:
+        """Find the default WASAPI loopback device."""
+        if not PYAUDIO_AVAILABLE:
+            return None
+            
+        try:
+            p = pyaudio.PyAudio()
+            
+            # Try to get WASAPI loopback device (PyAudioWPatch method)
+            if hasattr(p, 'get_default_wasapi_loopback'):
+                device = p.get_default_wasapi_loopback()
+                p.terminate()
+                return device
+            
+            # Fallback: search for loopback device manually
+            wasapi_info = None
+            for i in range(p.get_host_api_count()):
+                info = p.get_host_api_info_by_index(i)
+                if 'WASAPI' in info.get('name', ''):
+                    wasapi_info = info
+                    break
+            
+            if wasapi_info:
+                # Find loopback device
+                for i in range(p.get_device_count()):
+                    dev = p.get_device_info_by_index(i)
+                    if dev.get('hostApi') == wasapi_info.get('index'):
+                        if dev.get('maxInputChannels', 0) > 0:
+                            # Check if it's a loopback device (name contains output device name)
+                            if 'loopback' in dev.get('name', '').lower():
+                                p.terminate()
+                                return dev
+            
+            p.terminate()
+            return None
+        except Exception as e:
+            print(f"Error finding loopback device: {e}")
+            return None
+    
+    def list_devices(self) -> list[dict]:
+        """List available audio input devices."""
+        devices = []
+        if not PYAUDIO_AVAILABLE:
+            return devices
+            
+        try:
+            p = pyaudio.PyAudio()
+            for i in range(p.get_device_count()):
+                dev = p.get_device_info_by_index(i)
+                if dev.get('maxInputChannels', 0) > 0:
+                    devices.append({
+                        'index': i,
+                        'name': dev.get('name', 'Unknown'),
+                        'channels': dev.get('maxInputChannels', 0),
+                        'sample_rate': int(dev.get('defaultSampleRate', 44100))
+                    })
+            p.terminate()
+        except Exception as e:
+            print(f"Error listing devices: {e}")
+        return devices
+    
+    def start(self) -> bool:
+        """Start audio capture and analysis."""
+        if self._running:
+            return True
+        
+        if not PYAUDIO_AVAILABLE:
+            print("PyAudio not available. Install with: pip install PyAudioWPatch")
+            return False
+        
+        if not AUBIO_AVAILABLE:
+            print("Aubio not available. Install with: pip install aubio")
+            return False
+        
+        try:
+            self._pyaudio = pyaudio.PyAudio()
+            
+            # Find loopback device if not specified
+            device = None
+            if self.device_index is not None:
+                device = self._pyaudio.get_device_info_by_index(self.device_index)
+            else:
+                # Try to get default WASAPI loopback
+                if hasattr(self._pyaudio, 'get_default_wasapi_loopback'):
+                    try:
+                        device = self._pyaudio.get_default_wasapi_loopback()
+                        print(f"Using WASAPI loopback: {device.get('name', 'Unknown')}")
+                    except Exception:
+                        pass
+                
+                if not device:
+                    # Fall back to default input
+                    device = self._pyaudio.get_default_input_device_info()
+                    print(f"Using default input: {device.get('name', 'Unknown')}")
+            
+            if not device:
+                print("No audio input device found")
+                return False
+            
+            self.device_index = device.get('index')
+            channels = min(device.get('maxInputChannels', 2), 2)
+            self.sample_rate = int(device.get('defaultSampleRate', 44100))
+            
+            # Initialize Aubio analyzers
+            self._tempo_analyzer = aubio.tempo(
+                "default", 
+                self.buffer_size * 2,  # win_s
+                self.buffer_size,       # hop_s
+                self.sample_rate
+            )
+            
+            self._onset_analyzer = aubio.onset(
+                "default",
+                self.buffer_size * 2,
+                self.buffer_size,
+                self.sample_rate
+            )
+            
+            # Setup FFT frequency bins
+            self._freq_bins = np.fft.rfftfreq(self._fft_size, 1.0 / self.sample_rate)
+            
+            # Open audio stream
+            self._stream = self._pyaudio.open(
+                format=pyaudio.paFloat32,
+                channels=channels,
+                rate=self.sample_rate,
+                input=True,
+                input_device_index=self.device_index,
+                frames_per_buffer=self.buffer_size,
+                stream_callback=self._audio_callback
+            )
+            
+            self._running = True
+            self._stream.start_stream()
+            
+            # Start analysis thread
+            self._thread = threading.Thread(target=self._analysis_loop, daemon=True)
+            self._thread.start()
+            
+            return True
+            
+        except Exception as e:
+            print(f"Failed to start audio analyzer: {e}")
+            self._cleanup()
+            return False
+    
+    def stop(self) -> None:
+        """Stop audio capture and analysis."""
+        self._running = False
+        
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        
+        self._cleanup()
+    
+    def _cleanup(self) -> None:
+        """Clean up audio resources."""
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        
+        if self._pyaudio:
+            try:
+                self._pyaudio.terminate()
+            except Exception:
+                pass
+            self._pyaudio = None
+    
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """PyAudio callback - process incoming audio data."""
+        if not self._running:
+            return (None, pyaudio.paComplete)
+        
+        try:
+            # Convert bytes to numpy array
+            audio_data = np.frombuffer(in_data, dtype=np.float32)
+            
+            # Convert stereo to mono if needed
+            if len(audio_data) > frame_count:
+                audio_data = audio_data.reshape(-1, 2).mean(axis=1)
+            
+            # Process audio
+            self._process_audio(audio_data)
+            
+        except Exception as e:
+            # Don't print errors in callback to avoid spam
+            pass
+        
+        return (None, pyaudio.paContinue)
+    
+    def _process_audio(self, audio_data: np.ndarray) -> None:
+        """Process audio buffer and extract features."""
+        current_time = time.time()
+        
+        # Ensure correct size for aubio
+        if len(audio_data) != self.buffer_size:
+            if len(audio_data) > self.buffer_size:
+                audio_data = audio_data[:self.buffer_size]
+            else:
+                audio_data = np.pad(audio_data, (0, self.buffer_size - len(audio_data)))
+        
+        # Convert to aubio format
+        audio_aubio = audio_data.astype(np.float32)
+        
+        # Beat/tempo detection
+        beat_detected = False
+        if self._tempo_analyzer:
+            is_beat = self._tempo_analyzer(audio_aubio)
+            if is_beat:
+                beat_detected = True
+                self._last_beat_time = current_time
+                self._beat_count += 1
+            
+            tempo = self._tempo_analyzer.get_bpm()
+            if tempo > 0:
+                self._tempo_history.append(tempo)
+        
+        # Onset detection
+        onset_detected = False
+        if self._onset_analyzer:
+            is_onset = self._onset_analyzer(audio_aubio)
+            if is_onset:
+                onset_detected = True
+                self._onset_history.append(current_time)
+        
+        # Calculate RMS energy
+        rms = np.sqrt(np.mean(audio_data ** 2))
+        self._energy_history.append(rms)
+        
+        # FFT for frequency analysis
+        if len(audio_data) >= self._fft_size:
+            fft_data = np.abs(np.fft.rfft(audio_data[:self._fft_size]))
+            
+            # Normalize FFT
+            fft_max = np.max(fft_data)
+            if fft_max > 0:
+                fft_data = fft_data / fft_max
+            
+            # Calculate frequency bands
+            bass = self._get_band_energy(fft_data, 20, 250)
+            mid = self._get_band_energy(fft_data, 250, 4000)
+            high = self._get_band_energy(fft_data, 4000, 20000)
+            
+            self._bass_history.append(bass)
+            self._mid_history.append(mid)
+            self._high_history.append(high)
+        
+        # Update features with smoothing
+        with self._lock:
+            features = self._data.features
+            
+            # Smooth energy (prevents flickering)
+            avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
+            features.rms = rms
+            features.energy = min(1.0, avg_energy * 3)  # Scale up for visibility
+            
+            # Smooth frequency bands
+            features.bass = np.mean(list(self._bass_history)) if self._bass_history else 0
+            features.mid = np.mean(list(self._mid_history)) if self._mid_history else 0
+            features.high = np.mean(list(self._high_history)) if self._high_history else 0
+            
+            # Tempo (use median of recent estimates for stability)
+            if self._tempo_history:
+                features.tempo = float(np.median(list(self._tempo_history)))
+            
+            features.beat_detected = beat_detected
+            features.onset_detected = onset_detected
+            features.time_since_beat = current_time - self._last_beat_time
+            
+            # Estimate danceability from beat regularity
+            if len(self._onset_history) >= 4:
+                intervals = np.diff(list(self._onset_history))
+                if len(intervals) > 0 and np.mean(intervals) > 0:
+                    regularity = 1.0 - min(1.0, np.std(intervals) / np.mean(intervals))
+                    features.danceability = regularity
+            
+            # Estimate valence from frequency balance (brighter = happier)
+            if features.bass + features.mid + features.high > 0:
+                brightness = (features.mid + features.high * 2) / (features.bass + features.mid + features.high + 0.001)
+                features.valence = min(1.0, brightness)
+            
+            # Update beat position
+            if features.tempo > 0:
+                beat_duration = 60.0 / features.tempo
+                self._data.beat_position = min(1.0, features.time_since_beat / beat_duration)
+                
+                # Bar position (assuming 4/4)
+                beats_per_bar = 4
+                bar_beat = self._beat_count % beats_per_bar
+                self._data.bar_position = (bar_beat + self._data.beat_position) / beats_per_bar
+                
+                self._data.estimated_beat = self._beat_count
+                self._data.estimated_bar = self._beat_count // beats_per_bar
+            
+            # Section intensity based on energy and beat
+            beat_pulse = 1.0 - self._data.beat_position if beat_detected else 0
+            self._data.section_intensity = features.energy * 0.7 + beat_pulse * 0.3
+    
+    def _get_band_energy(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
+        """Get energy in a frequency band from FFT data."""
+        if self._freq_bins is None or len(fft_data) == 0:
+            return 0.0
+        
+        # Find indices for frequency range
+        low_idx = np.searchsorted(self._freq_bins, low_freq)
+        high_idx = np.searchsorted(self._freq_bins, high_freq)
+        
+        if high_idx <= low_idx:
+            return 0.0
+        
+        # Calculate mean energy in band
+        band_energy = np.mean(fft_data[low_idx:high_idx])
+        return float(min(1.0, band_energy * 2))  # Scale for visibility
+    
+    def _analysis_loop(self) -> None:
+        """Main analysis loop - notifies callbacks."""
+        while self._running:
+            # Get current data
+            with self._lock:
+                data = AnalysisData(
+                    features=AudioFeatures(
+                        energy=self._data.features.energy,
+                        rms=self._data.features.rms,
+                        bass=self._data.features.bass,
+                        mid=self._data.features.mid,
+                        high=self._data.features.high,
+                        tempo=self._data.features.tempo,
+                        beat_detected=self._data.features.beat_detected,
+                        onset_detected=self._data.features.onset_detected,
+                        time_since_beat=self._data.features.time_since_beat,
+                        beat_confidence=self._data.features.beat_confidence,
+                        danceability=self._data.features.danceability,
+                        valence=self._data.features.valence
+                    ),
+                    beat_position=self._data.beat_position,
+                    bar_position=self._data.bar_position,
+                    section_intensity=self._data.section_intensity,
+                    estimated_beat=self._data.estimated_beat,
+                    estimated_bar=self._data.estimated_bar
+                )
+                # Reset beat detected flag after reading
+                self._data.features.beat_detected = False
+                self._data.features.onset_detected = False
+            
+            # Notify callbacks
+            for callback in self._callbacks:
+                try:
+                    callback(data)
+                except Exception:
+                    pass
+            
+            time.sleep(0.025)  # 40 Hz update rate
+    
+    def get_data(self) -> AnalysisData:
+        """Get current analysis data."""
+        with self._lock:
+            return AnalysisData(
+                features=AudioFeatures(
+                    energy=self._data.features.energy,
+                    rms=self._data.features.rms,
+                    bass=self._data.features.bass,
+                    mid=self._data.features.mid,
+                    high=self._data.features.high,
+                    tempo=self._data.features.tempo,
+                    beat_detected=self._data.features.beat_detected,
+                    onset_detected=self._data.features.onset_detected,
+                    time_since_beat=self._data.features.time_since_beat,
+                    beat_confidence=self._data.features.beat_confidence,
+                    danceability=self._data.features.danceability,
+                    valence=self._data.features.valence
+                ),
+                beat_position=self._data.beat_position,
+                bar_position=self._data.bar_position,
+                section_intensity=self._data.section_intensity,
+                estimated_beat=self._data.estimated_beat,
+                estimated_bar=self._data.estimated_bar
+            )
+
+
+class SimulatedAudioAnalyzer:
+    """Simulated audio analyzer for testing without audio hardware."""
+    
+    def __init__(self):
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._data = AnalysisData()
+        self._lock = threading.Lock()
+        self._callbacks: list[Callable[[AnalysisData], None]] = []
+        self._start_time = 0.0
+        self._beat_count = 0
+    
+    def add_callback(self, callback: Callable[[AnalysisData], None]) -> None:
+        self._callbacks.append(callback)
+    
+    def remove_callback(self, callback: Callable[[AnalysisData], None]) -> None:
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+    
+    def start(self) -> bool:
+        if self._running:
+            return True
+        
+        self._running = True
+        self._start_time = time.time()
+        
+        # Set up simulated data
+        with self._lock:
+            self._data.features.tempo = 128.0
+            self._data.features.energy = 0.7
+            self._data.track_name = "Simulated Audio"
+        
+        self._thread = threading.Thread(target=self._simulation_loop, daemon=True)
+        self._thread.start()
+        return True
+    
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+    
+    def get_data(self) -> AnalysisData:
+        with self._lock:
+            return self._data
+    
+    def _simulation_loop(self) -> None:
+        import math
+        
+        tempo = 128.0
+        beat_interval = 60.0 / tempo
+        last_beat_time = self._start_time
+        
+        while self._running:
+            current_time = time.time()
+            elapsed = current_time - self._start_time
+            
+            # Check for beat
+            time_since_beat = current_time - last_beat_time
+            beat_detected = False
+            if time_since_beat >= beat_interval:
+                beat_detected = True
+                last_beat_time = current_time
+                self._beat_count += 1
+                time_since_beat = 0
+            
+            with self._lock:
+                # Simulate varying energy
+                base_energy = 0.5 + 0.3 * math.sin(elapsed * 0.2)
+                beat_pulse = 0.2 * (1.0 - time_since_beat / beat_interval)
+                
+                self._data.features.energy = base_energy + beat_pulse
+                self._data.features.tempo = tempo
+                self._data.features.beat_detected = beat_detected
+                self._data.features.time_since_beat = time_since_beat
+                
+                # Simulate frequency bands
+                self._data.features.bass = 0.6 + 0.3 * math.sin(elapsed * 0.5)
+                self._data.features.mid = 0.5 + 0.2 * math.sin(elapsed * 0.7)
+                self._data.features.high = 0.4 + 0.2 * math.sin(elapsed * 1.1)
+                
+                # Beat position
+                self._data.beat_position = time_since_beat / beat_interval
+                self._data.bar_position = ((self._beat_count % 4) + self._data.beat_position) / 4
+                self._data.estimated_beat = self._beat_count
+                self._data.estimated_bar = self._beat_count // 4
+                self._data.section_intensity = base_energy + beat_pulse * 0.5
+            
+            # Notify callbacks
+            for callback in self._callbacks:
+                try:
+                    callback(self._data)
+                except Exception:
+                    pass
+            
+            time.sleep(0.025)  # 40 Hz
+
+
+def create_audio_analyzer(simulate: bool = False, device_index: Optional[int] = None):
+    """
+    Factory function to create an audio analyzer.
+    
+    Args:
+        simulate: Use simulated analyzer (for testing)
+        device_index: Specific audio device index, or None for auto-detect
+    
+    Returns:
+        AudioAnalyzer or SimulatedAudioAnalyzer
+    """
+    if simulate:
+        return SimulatedAudioAnalyzer()
+    
+    return AudioAnalyzer(device_index=device_index)

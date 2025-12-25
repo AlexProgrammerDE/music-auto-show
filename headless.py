@@ -10,7 +10,7 @@ from pathlib import Path
 
 from config import ShowConfig
 from dmx_controller import create_dmx_controller
-from spotify_analyzer import create_spotify_analyzer
+from audio_analyzer import create_audio_analyzer
 from effects_engine import EffectsEngine
 
 
@@ -19,15 +19,15 @@ class HeadlessRunner:
     Headless runner for Music Auto Show.
     """
     
-    def __init__(self, config_path: str, simulate_dmx: bool = False, simulate_spotify: bool = False):
+    def __init__(self, config_path: str, simulate_dmx: bool = False, simulate_audio: bool = False):
         self.config_path = config_path
         self.simulate_dmx = simulate_dmx
-        self.simulate_spotify = simulate_spotify
+        self.simulate_audio = simulate_audio
         
         self.config = None
         self.dmx_controller = None
         self.dmx_interface = None
-        self.spotify_analyzer = None
+        self.audio_analyzer = None
         self.effects_engine = None
         
         self._running = False
@@ -68,20 +68,15 @@ class HeadlessRunner:
         
         print("DMX initialized" + (" (simulated)" if self.simulate_dmx else ""))
         
-        # Initialize Spotify
-        print("Initializing Spotify...")
-        self.spotify_analyzer = create_spotify_analyzer(
-            client_id=self.config.spotify.client_id,
-            client_secret=self.config.spotify.client_secret,
-            redirect_uri=self.config.spotify.redirect_uri,
-            simulate=self.simulate_spotify
-        )
+        # Initialize audio analyzer
+        print("Initializing audio capture...")
+        self.audio_analyzer = create_audio_analyzer(simulate=self.simulate_audio)
         
-        if not self.spotify_analyzer.start():
-            print("Failed to start Spotify analyzer")
+        if not self.audio_analyzer.start():
+            print("Failed to start audio analyzer")
             return False
         
-        print("Spotify initialized" + (" (simulated)" if self.simulate_spotify else ""))
+        print("Audio initialized" + (" (simulated)" if self.simulate_audio else ""))
         
         # Initialize effects engine
         self.effects_engine = EffectsEngine(
@@ -107,18 +102,15 @@ class HeadlessRunner:
         
         while self._running:
             # Get analysis data and process
-            data = self.spotify_analyzer.get_data()
+            data = self.audio_analyzer.get_data()
             self.effects_engine.process(data)
             
             # Print status every 5 seconds
             now = time.time()
             if now - last_status >= 5.0:
-                if data.track.is_playing:
-                    print(f"Playing: {data.track.artist} - {data.track.name} "
-                          f"| Energy: {data.features.energy:.2f} "
-                          f"| Tempo: {data.features.tempo:.0f} BPM")
-                else:
-                    print("Waiting for playback...")
+                print(f"Audio: Energy: {data.features.energy:.2f} "
+                      f"| Bass: {data.features.bass:.2f} "
+                      f"| Tempo: {data.features.tempo:.0f} BPM")
                 last_status = now
             
             time.sleep(0.025)  # 40 Hz
@@ -130,8 +122,8 @@ class HeadlessRunner:
         if self.effects_engine:
             self.effects_engine.blackout()
         
-        if self.spotify_analyzer:
-            self.spotify_analyzer.stop()
+        if self.audio_analyzer:
+            self.audio_analyzer.stop()
         
         if self.dmx_controller:
             self.dmx_controller.stop()
@@ -214,10 +206,10 @@ def main():
                        help="Create example configuration file")
     parser.add_argument("--simulate-dmx", action="store_true",
                        help="Simulate DMX output (no hardware required)")
-    parser.add_argument("--simulate-spotify", action="store_true",
-                       help="Simulate Spotify (no API required)")
+    parser.add_argument("--simulate-audio", action="store_true",
+                       help="Simulate audio input (no capture required)")
     parser.add_argument("--simulate", action="store_true",
-                       help="Simulate both DMX and Spotify")
+                       help="Simulate both DMX and audio")
     
     args = parser.parse_args()
     
@@ -236,9 +228,9 @@ def main():
         sys.exit(1)
     
     simulate_dmx = args.simulate_dmx or args.simulate
-    simulate_spotify = args.simulate_spotify or args.simulate
+    simulate_audio = args.simulate_audio or args.simulate
     
-    runner = HeadlessRunner(args.config, simulate_dmx, simulate_spotify)
+    runner = HeadlessRunner(args.config, simulate_dmx, simulate_audio)
     
     if runner.start():
         try:

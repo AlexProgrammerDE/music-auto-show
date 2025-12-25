@@ -1,16 +1,17 @@
-# DMX Control
-pyftdi>=0.54.0
-pyserial>=3.5
-
-# Spotify API
-spotipy>=2.23.0
-
-# Audio Analysis
+# Core
+pydantic>=2.0.0
 numpy>=1.24.0
-scipy>=1.11.0
+
+# Real-time Audio Analysis (required)
+PyAudioWPatch>=0.2.12  # WASAPI loopback support on Windows
+aubio>=0.4.9           # Beat/tempo detection
+
+# DMX Control
+pyftdi>=0.54.0         # FTDI-based DMX interfaces
+pyserial>=3.5          # Generic serial DMX
 
 # GUI
 dearpygui>=1.10.0
 
-# Utilities
-pydantic>=2.0.0
+# Spotify API (optional - for track info display only)
+spotipy>=2.23.0

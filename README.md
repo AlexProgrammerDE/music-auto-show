@@ -1,13 +1,17 @@
 # Music Auto Show
 
-A cross-platform Python application that automatically visualizes music from Spotify to DMX-controlled lighting fixtures.
+A cross-platform Python application that automatically visualizes system audio to DMX-controlled lighting fixtures in real-time.
 
 ## Features
 
+- **Real-Time Audio Analysis**: Captures system audio via WASAPI loopback (Windows) and analyzes it live
+  - BPM/Tempo detection using Aubio
+  - Beat tracking and onset detection
+  - Energy/loudness levels
+  - Frequency bands (bass/mid/high)
 - **ENTTEC Open DMX USB Support**: Works with ENTTEC Open DMX USB and compatible FTDI-based DMX interfaces
-- **Spotify Integration**: Real-time audio feature analysis (energy, tempo, beats, etc.)
 - **Multiple Visualization Modes**:
-  - Energy - Intensity based on track energy
+  - Energy - Intensity based on audio energy
   - Frequency Split - Bass/mid/high across fixtures
   - Beat Pulse - Pulse on beat detection
   - Color Cycle - Tempo-based color cycling
@@ -19,10 +23,9 @@ A cross-platform Python application that automatically visualizes music from Spo
   - Support for RGB, RGBW, dimmer, strobe
   - Pan/tilt with movement limits
   - Position/orientation for effects ordering
-- **GUI with Live Visualizer**: See fixture colors and positions in real-time
+- **GUI with Live Visualizer**: See fixture colors and audio analysis in real-time
 - **Headless Mode**: Run from JSON config without GUI
-- **Cross-Platform**: Works on Windows, macOS, Linux
-- **Simulation Mode**: Test without hardware or Spotify API
+- **Works with Any Audio Source**: Spotify, YouTube, local files, games - anything playing through your system
 
 ## Installation
 
@@ -39,12 +42,17 @@ pip install -r requirements.txt
 **Required:**
 - `pydantic` - Configuration validation
 - `numpy` - Numerical operations
+- `PyAudioWPatch` - WASAPI loopback audio capture (Windows)
+- `aubio` - Real-time beat/tempo detection
 
 **Optional (but recommended):**
 - `dearpygui` - GUI interface
 - `pyftdi` - FTDI/ENTTEC Open DMX USB support
 - `pyserial` - Generic serial DMX support
-- `spotipy` - Spotify API integration
+
+### Windows Audio Setup
+
+The application captures system audio using WASAPI loopback. This works automatically on Windows - no additional configuration needed. The app will capture whatever audio is playing through your default speakers/headphones.
 
 ## Quick Start
 
@@ -60,7 +68,7 @@ python main.py
 # Run with configuration file
 python main.py --headless example_config.json
 
-# Run with simulation (no hardware/API required)
+# Run with simulation (no hardware required)
 python main.py --headless example_config.json --simulate
 ```
 
@@ -87,11 +95,6 @@ Configuration is stored as JSON. Example structure:
     "port": "",
     "universe_size": 512,
     "fps": 40
-  },
-  "spotify": {
-    "client_id": "your_client_id",
-    "client_secret": "your_client_secret",
-    "redirect_uri": "http://127.0.0.1:8888/callback"
   },
   "effects": {
     "mode": "rainbow_wave",
@@ -142,7 +145,7 @@ Configuration is stored as JSON. Example structure:
 
 | Mode | Description |
 |------|-------------|
-| `energy` | Track energy drives overall brightness |
+| `energy` | Audio energy drives overall brightness |
 | `frequency_split` | Split fixtures into bass/mid/high bands |
 | `beat_pulse` | Pulse intensity on beats |
 | `color_cycle` | Cycle through colors based on tempo |
@@ -150,13 +153,19 @@ Configuration is stored as JSON. Example structure:
 | `strobe_beat` | Strobe flash on beats |
 | `random_flash` | Random fixtures flash on beats |
 
-## Spotify Setup
+## Audio Analysis Features
 
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Create a new application
-3. Add `http://127.0.0.1:8888/callback` to Redirect URIs
-4. Copy Client ID and Client Secret to your config
-5. When first running, a browser will open for authentication
+The real-time audio analyzer provides:
+
+| Feature | Description |
+|---------|-------------|
+| **Energy** | Overall loudness/intensity (0-1) |
+| **Bass** | Low frequency energy (20-250 Hz) |
+| **Mid** | Mid frequency energy (250-4000 Hz) |
+| **High** | High frequency energy (4000-20000 Hz) |
+| **Tempo** | Detected BPM (beats per minute) |
+| **Beat** | Beat detection with timing |
+| **Onset** | Note/hit detection |
 
 ## Hardware Setup
 
@@ -182,7 +191,7 @@ music-auto-show/
 ├── main.py              # Entry point
 ├── config.py            # Configuration models
 ├── dmx_controller.py    # DMX interface layer
-├── spotify_analyzer.py  # Spotify API integration
+├── audio_analyzer.py    # Real-time audio analysis
 ├── effects_engine.py    # Visualization engine
 ├── gui.py               # Dear PyGui interface
 ├── headless.py          # Headless mode runner
@@ -190,6 +199,19 @@ music-auto-show/
 ├── example_config.json  # Example configuration
 └── README.md            # This file
 ```
+
+## Troubleshooting
+
+### No audio detected
+- Make sure audio is playing through your default output device
+- Check that PyAudioWPatch is installed: `pip install PyAudioWPatch`
+- Try running with `--simulate-audio` to test without audio capture
+
+### DMX not working
+- Check the USB connection
+- On Windows, ensure FTDI drivers are installed
+- Try specifying the port manually in the config
+- Use `--simulate-dmx` to test without hardware
 
 ## License
 
