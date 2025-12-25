@@ -151,37 +151,71 @@ class _WindowsMediaBackend(_MediaInfoBackend):
         )
         self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
         self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._last_error: str = ""
+    
+    def _get_or_create_loop(self) -> asyncio.AbstractEventLoop:
+        """Get or create an event loop for this thread."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop
+        except RuntimeError:
+            # No event loop in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop
     
     def get_media_info(self) -> MediaInfo:
         try:
-            # Run async code in sync context
-            return asyncio.run(self._get_media_info_async())
-        except Exception:
+            loop = self._get_or_create_loop()
+            return loop.run_until_complete(self._get_media_info_async())
+        except Exception as e:
+            self._last_error = str(e)
             return MediaInfo()
     
     async def _get_media_info_async(self) -> MediaInfo:
         try:
             manager = await self._SessionManager.request_async()
+            if manager is None:
+                self._last_error = "Failed to get session manager"
+                return MediaInfo()
+            
             session = manager.get_current_session()
             
             if session is None:
+                # No active media session
                 return MediaInfo()
             
-            # Get playback status
-            playback_info = session.get_playback_info()
-            is_playing = (
-                playback_info.playback_status == self._PlaybackStatus.PLAYING
-            )
-            
-            # Get media properties
-            properties = await session.try_get_media_properties_async()
-            
-            # Get source app
+            # Get source app first (for debugging)
             source_app = session.source_app_user_model_id or ""
             # Clean up app name (extract readable name)
             if source_app:
                 # e.g., "Spotify.exe" -> "Spotify"
-                source_app = source_app.split('!')[-1].split('\\')[-1].replace('.exe', '')
+                # e.g., "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" -> "Spotify"
+                if '!' in source_app:
+                    source_app = source_app.split('!')[-1]
+                source_app = source_app.split('\\')[-1].replace('.exe', '')
+            
+            # Get playback status
+            playback_info = session.get_playback_info()
+            is_playing = False
+            if playback_info:
+                is_playing = (
+                    playback_info.playback_status == self._PlaybackStatus.PLAYING
+                )
+            
+            # Get media properties
+            properties = await session.try_get_media_properties_async()
+            
+            if properties is None:
+                # Session exists but no properties
+                return MediaInfo(
+                    is_playing=is_playing,
+                    source_app=source_app
+                )
             
             return MediaInfo(
                 title=properties.title or "",
@@ -190,7 +224,8 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                 is_playing=is_playing,
                 source_app=source_app
             )
-        except Exception:
+        except Exception as e:
+            self._last_error = str(e)
             return MediaInfo()
 
 
@@ -374,6 +409,9 @@ if __name__ == "__main__":
     print("Testing media info provider...")
     print(f"Platform: {sys.platform}")
     
+    provider = MediaInfoProvider()
+    print(f"Backend: {type(provider._backend).__name__}")
+    
     info = get_current_media()
     print(f"\nCurrent media:")
     print(f"  Title: {info.title or '(none)'}")
@@ -381,3 +419,22 @@ if __name__ == "__main__":
     print(f"  Album: {info.album or '(none)'}")
     print(f"  Playing: {info.is_playing}")
     print(f"  Source: {info.source_app or '(none)'}")
+    
+    # Show error if available (Windows)
+    if hasattr(provider._backend, '_last_error') and provider._backend._last_error:
+        print(f"  Last error: {provider._backend._last_error}")
+    
+    # Continuous test
+    print("\nStarting continuous monitoring (Ctrl+C to stop)...")
+    try:
+        provider.start()
+        while True:
+            time.sleep(2)
+            info = provider.get_info()
+            if info.title:
+                print(f"  Now: {info.artist} - {info.title} [{info.source_app}] {'▶' if info.is_playing else '⏸'}")
+            else:
+                print(f"  No media detected (source: {info.source_app or 'none'})")
+    except KeyboardInterrupt:
+        print("\nStopped.")
+        provider.stop()
