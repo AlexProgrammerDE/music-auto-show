@@ -138,11 +138,10 @@ class AudioAnalyzer:
         self._onset_history = deque(maxlen=16)  # Recent onset times for tempo calc
         self._current_tempo = 120.0  # Current estimated tempo
         
-        # Onset detection state
+        # Onset detection state (uses normalized 0-1 values)
         self._prev_onset_strength = 0.0
-        self._onset_threshold = 0.3
         self._onset_cooldown = 0.0
-        self._min_onset_interval = 0.1  # Minimum 100ms between onsets
+        self._min_onset_interval = 0.08  # Minimum 80ms between onsets (faster response)
         
         # Adaptive energy scaling (auto-gain)
         self._max_rms_observed = 0.01  # Start with small value, will grow
@@ -371,19 +370,17 @@ class AudioAnalyzer:
             self._max_rms_observed *= self._rms_decay  # Slowly decay to adapt to quieter sections
         self._max_rms_observed = max(0.01, self._max_rms_observed)  # Prevent division by zero
         
-        # Real-time onset detection using energy derivative
+        # Real-time onset detection using normalized energy derivative
         onset_detected = False
-        onset_strength = rms
+        # Use normalized RMS for onset detection (0-1 range)
+        normalized_rms = rms / self._max_rms_observed
         if current_time > self._onset_cooldown:
-            # Detect onset when energy rises sharply
-            if onset_strength > self._onset_threshold and onset_strength > self._prev_onset_strength * 1.5:
+            # Detect onset when normalized energy rises sharply
+            if normalized_rms > 0.3 and normalized_rms > self._prev_onset_strength * 1.3:
                 onset_detected = True
                 self._onset_history.append(current_time)
                 self._onset_cooldown = current_time + self._min_onset_interval
-        self._prev_onset_strength = onset_strength * 0.9 + self._prev_onset_strength * 0.1  # Smooth
-        
-        # Adaptive threshold
-        self._onset_threshold = max(0.1, self._onset_threshold * 0.99 + rms * 0.5 * 0.01)
+        self._prev_onset_strength = normalized_rms * 0.7 + self._prev_onset_strength * 0.3  # Smooth
         
         # Beat detection based on tempo prediction
         beat_detected = False
@@ -445,12 +442,19 @@ class AudioAnalyzer:
             features.onset_detected = onset_detected
             features.time_since_beat = current_time - self._last_beat_time
             
-            # Estimate danceability from beat regularity
-            if len(self._onset_history) >= 4:
+            # Estimate danceability from beat regularity and bass energy
+            if len(self._onset_history) >= 3:
                 intervals = np.diff(list(self._onset_history))
                 if len(intervals) > 0 and np.mean(intervals) > 0:
-                    regularity = 1.0 - min(1.0, np.std(intervals) / np.mean(intervals))
-                    features.danceability = regularity
+                    # Regularity: how consistent are the intervals (lower std = more regular)
+                    coefficient_of_variation = np.std(intervals) / np.mean(intervals)
+                    regularity = 1.0 - min(1.0, coefficient_of_variation)
+                    # Combine regularity with bass presence for danceability
+                    bass_factor = features.bass * 0.3
+                    features.danceability = min(1.0, regularity * 0.7 + bass_factor + 0.1)
+            else:
+                # Fallback: estimate from bass and energy
+                features.danceability = min(1.0, features.bass * 0.5 + features.energy * 0.3 + 0.2)
             
             # Estimate valence from frequency balance (brighter = happier)
             if features.bass + features.mid + features.high > 0:
