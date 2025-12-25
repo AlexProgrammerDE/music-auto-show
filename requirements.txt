@@ -1,0 +1,16 @@
+# DMX Control
+pyftdi>=0.54.0
+pyserial>=3.5
+
+# Spotify API
+spotipy>=2.23.0
+
+# Audio Analysis
+numpy>=1.24.0
+scipy>=1.11.0
+
+# GUI
+dearpygui>=1.10.0
+
+# Utilities
+pydantic>=2.0.0

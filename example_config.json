@@ -1,0 +1,129 @@
+{
+  "name": "Example Light Show",
+  "dmx": {
+    "port": "",
+    "universe_size": 512,
+    "fps": 40
+  },
+  "spotify": {
+    "client_id": "",
+    "client_secret": "",
+    "redirect_uri": "http://localhost:8888/callback"
+  },
+  "effects": {
+    "mode": "rainbow_wave",
+    "intensity": 0.8,
+    "color_speed": 1.0,
+    "beat_sensitivity": 0.5,
+    "smooth_factor": 0.3,
+    "strobe_on_drop": false,
+    "movement_enabled": true,
+    "movement_speed": 0.5
+  },
+  "fixtures": [
+    {
+      "name": "Par Left",
+      "start_channel": 1,
+      "channels": [
+        {"channel": 1, "channel_type": "red"},
+        {"channel": 2, "channel_type": "green"},
+        {"channel": 3, "channel_type": "blue"},
+        {"channel": 4, "channel_type": "dimmer"}
+      ],
+      "position": 0,
+      "orientation": 0.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "strobe_enabled": false,
+      "strobe_speed": 128
+    },
+    {
+      "name": "Par Center",
+      "start_channel": 5,
+      "channels": [
+        {"channel": 5, "channel_type": "red"},
+        {"channel": 6, "channel_type": "green"},
+        {"channel": 7, "channel_type": "blue"},
+        {"channel": 8, "channel_type": "dimmer"}
+      ],
+      "position": 1,
+      "orientation": 0.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "strobe_enabled": false,
+      "strobe_speed": 128
+    },
+    {
+      "name": "Par Right",
+      "start_channel": 9,
+      "channels": [
+        {"channel": 9, "channel_type": "red"},
+        {"channel": 10, "channel_type": "green"},
+        {"channel": 11, "channel_type": "blue"},
+        {"channel": 12, "channel_type": "dimmer"}
+      ],
+      "position": 2,
+      "orientation": 0.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "strobe_enabled": false,
+      "strobe_speed": 128
+    },
+    {
+      "name": "Moving Head 1",
+      "start_channel": 13,
+      "channels": [
+        {"channel": 13, "channel_type": "pan"},
+        {"channel": 14, "channel_type": "pan_fine"},
+        {"channel": 15, "channel_type": "tilt"},
+        {"channel": 16, "channel_type": "tilt_fine"},
+        {"channel": 17, "channel_type": "speed"},
+        {"channel": 18, "channel_type": "red"},
+        {"channel": 19, "channel_type": "green"},
+        {"channel": 20, "channel_type": "blue"},
+        {"channel": 21, "channel_type": "white"},
+        {"channel": 22, "channel_type": "dimmer"},
+        {"channel": 23, "channel_type": "strobe"}
+      ],
+      "position": 3,
+      "orientation": 0.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 30,
+      "tilt_max": 200,
+      "strobe_enabled": false,
+      "strobe_speed": 128
+    },
+    {
+      "name": "Moving Head 2",
+      "start_channel": 24,
+      "channels": [
+        {"channel": 24, "channel_type": "pan"},
+        {"channel": 25, "channel_type": "pan_fine"},
+        {"channel": 26, "channel_type": "tilt"},
+        {"channel": 27, "channel_type": "tilt_fine"},
+        {"channel": 28, "channel_type": "speed"},
+        {"channel": 29, "channel_type": "red"},
+        {"channel": 30, "channel_type": "green"},
+        {"channel": 31, "channel_type": "blue"},
+        {"channel": 32, "channel_type": "white"},
+        {"channel": 33, "channel_type": "dimmer"},
+        {"channel": 34, "channel_type": "strobe"}
+      ],
+      "position": 4,
+      "orientation": 0.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 30,
+      "tilt_max": 200,
+      "strobe_enabled": false,
+      "strobe_speed": 128
+    }
+  ]
+}

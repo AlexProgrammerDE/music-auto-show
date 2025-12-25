@@ -1,0 +1,652 @@
+"""
+GUI for Music Auto Show using Dear PyGui.
+Provides fixture configuration, live visualization, and effect controls.
+"""
+import json
+import threading
+import time
+from typing import Optional
+from pathlib import Path
+
+try:
+    import dearpygui.dearpygui as dpg
+    DEARPYGUI_AVAILABLE = True
+except ImportError:
+    DEARPYGUI_AVAILABLE = False
+
+from config import (
+    ShowConfig, FixtureConfig, ChannelConfig, ChannelType,
+    VisualizationMode, DMXConfig, SpotifyConfig, EffectsConfig
+)
+from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
+from spotify_analyzer import AnalysisData, create_spotify_analyzer
+from effects_engine import EffectsEngine, FixtureState
+
+
+class MusicAutoShowGUI:
+    """
+    Main GUI application for Music Auto Show.
+    """
+    
+    def __init__(self):
+        self.config = ShowConfig()
+        self.dmx_controller: Optional[DMXController] = None
+        self.dmx_interface = None
+        self.spotify_analyzer = None
+        self.effects_engine: Optional[EffectsEngine] = None
+        
+        self._running = False
+        self._update_thread: Optional[threading.Thread] = None
+        self._fixture_states: dict[str, FixtureState] = {}
+        self._current_analysis: Optional[AnalysisData] = None
+        
+        # GUI element IDs
+        self._fixture_list_id = None
+        self._visualizer_id = None
+        self._status_text_id = None
+        self._track_info_id = None
+    
+    def run(self) -> None:
+        """Run the GUI application."""
+        if not DEARPYGUI_AVAILABLE:
+            print("Dear PyGui not available. Install with: pip install dearpygui")
+            return
+        
+        dpg.create_context()
+        dpg.create_viewport(title="Music Auto Show", width=1400, height=900)
+        
+        self._setup_theme()
+        self._create_main_window()
+        
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+        
+        # Start update loop
+        self._running = True
+        self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
+        self._update_thread.start()
+        
+        dpg.start_dearpygui()
+        
+        # Cleanup
+        self._running = False
+        self._stop_show()
+        dpg.destroy_context()
+    
+    def _setup_theme(self) -> None:
+        """Setup GUI theme."""
+        with dpg.theme() as global_theme:
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 5)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 8, 4)
+                dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (30, 30, 40))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (45, 45, 60))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (70, 70, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (90, 90, 130))
+        dpg.bind_theme(global_theme)
+    
+    def _create_main_window(self) -> None:
+        """Create main application window."""
+        with dpg.window(label="Music Auto Show", tag="main_window", no_title_bar=True):
+            dpg.set_primary_window("main_window", True)
+            
+            # Menu bar
+            with dpg.menu_bar():
+                with dpg.menu(label="File"):
+                    dpg.add_menu_item(label="New Config", callback=self._new_config)
+                    dpg.add_menu_item(label="Load Config", callback=self._load_config_dialog)
+                    dpg.add_menu_item(label="Save Config", callback=self._save_config_dialog)
+                    dpg.add_separator()
+                    dpg.add_menu_item(label="Export JSON", callback=self._export_json)
+                    dpg.add_separator()
+                    dpg.add_menu_item(label="Exit", callback=lambda: dpg.stop_dearpygui())
+                
+                with dpg.menu(label="View"):
+                    dpg.add_menu_item(label="Reset Layout", callback=self._reset_layout)
+            
+            # Main layout with columns
+            with dpg.group(horizontal=True):
+                # Left panel - Configuration
+                with dpg.child_window(width=400, height=-1, border=True):
+                    self._create_config_panel()
+                
+                # Right panel - Visualization and controls
+                with dpg.child_window(width=-1, height=-1, border=True):
+                    self._create_visualization_panel()
+    
+    def _create_config_panel(self) -> None:
+        """Create configuration panel."""
+        dpg.add_text("Configuration", color=(200, 200, 255))
+        dpg.add_separator()
+        
+        # Show name
+        with dpg.group(horizontal=True):
+            dpg.add_text("Show Name:")
+            dpg.add_input_text(default_value=self.config.name, width=200,
+                              callback=lambda s, a: setattr(self.config, 'name', a),
+                              tag="show_name_input")
+        
+        dpg.add_spacing(count=2)
+        
+        # DMX Configuration
+        with dpg.collapsing_header(label="DMX Settings", default_open=True):
+            with dpg.group(horizontal=True):
+                dpg.add_text("Port:")
+                dpg.add_input_text(default_value=self.config.dmx.port, width=200,
+                                  hint="Auto-detect if empty",
+                                  callback=lambda s, a: setattr(self.config.dmx, 'port', a),
+                                  tag="dmx_port_input")
+            
+            with dpg.group(horizontal=True):
+                dpg.add_text("FPS:")
+                dpg.add_slider_int(default_value=self.config.dmx.fps, min_value=1, max_value=44,
+                                  width=150, callback=lambda s, a: setattr(self.config.dmx, 'fps', a))
+            
+            dpg.add_checkbox(label="Simulate DMX (no hardware)", tag="simulate_dmx",
+                            callback=self._on_simulate_changed)
+        
+        dpg.add_spacing(count=2)
+        
+        # Spotify Configuration
+        with dpg.collapsing_header(label="Spotify Settings", default_open=True):
+            dpg.add_input_text(label="Client ID", width=250,
+                              callback=lambda s, a: setattr(self.config.spotify, 'client_id', a),
+                              tag="spotify_client_id")
+            dpg.add_input_text(label="Client Secret", width=250, password=True,
+                              callback=lambda s, a: setattr(self.config.spotify, 'client_secret', a),
+                              tag="spotify_client_secret")
+            dpg.add_input_text(label="Redirect URI", width=250,
+                              default_value=self.config.spotify.redirect_uri,
+                              callback=lambda s, a: setattr(self.config.spotify, 'redirect_uri', a))
+            dpg.add_checkbox(label="Simulate Spotify (no API)", tag="simulate_spotify",
+                            callback=self._on_simulate_changed)
+        
+        dpg.add_spacing(count=2)
+        
+        # Fixtures
+        with dpg.collapsing_header(label="Fixtures", default_open=True):
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Add Fixture", callback=self._add_fixture_dialog)
+                dpg.add_button(label="Remove Selected", callback=self._remove_fixture)
+            
+            dpg.add_separator()
+            
+            # Fixture list
+            with dpg.child_window(height=200, border=True, tag="fixture_list_container"):
+                self._fixture_list_id = dpg.add_group(tag="fixture_list")
+                self._refresh_fixture_list()
+        
+        dpg.add_spacing(count=2)
+        
+        # Effects Configuration
+        with dpg.collapsing_header(label="Effects", default_open=True):
+            # Mode selection
+            modes = [m.value for m in VisualizationMode]
+            dpg.add_combo(label="Mode", items=modes, default_value=self.config.effects.mode.value,
+                         callback=self._on_mode_changed, tag="effect_mode")
+            
+            dpg.add_slider_float(label="Intensity", default_value=self.config.effects.intensity,
+                                min_value=0.0, max_value=1.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'intensity', a))
+            
+            dpg.add_slider_float(label="Color Speed", default_value=self.config.effects.color_speed,
+                                min_value=0.1, max_value=10.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'color_speed', a))
+            
+            dpg.add_slider_float(label="Beat Sensitivity", default_value=self.config.effects.beat_sensitivity,
+                                min_value=0.0, max_value=1.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'beat_sensitivity', a))
+            
+            dpg.add_slider_float(label="Smoothing", default_value=self.config.effects.smooth_factor,
+                                min_value=0.0, max_value=1.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'smooth_factor', a))
+            
+            dpg.add_checkbox(label="Strobe on Drop", default_value=self.config.effects.strobe_on_drop,
+                            callback=lambda s, a: setattr(self.config.effects, 'strobe_on_drop', a))
+            
+            dpg.add_checkbox(label="Enable Movement", default_value=self.config.effects.movement_enabled,
+                            callback=lambda s, a: setattr(self.config.effects, 'movement_enabled', a))
+            
+            dpg.add_slider_float(label="Movement Speed", default_value=self.config.effects.movement_speed,
+                                min_value=0.0, max_value=1.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'movement_speed', a))
+    
+    def _create_visualization_panel(self) -> None:
+        """Create visualization panel."""
+        # Control buttons
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Start Show", callback=self._start_show, tag="start_btn",
+                          width=120, height=40)
+            dpg.add_button(label="Stop Show", callback=self._stop_show, tag="stop_btn",
+                          width=120, height=40)
+            dpg.add_button(label="Blackout", callback=self._blackout, width=100, height=40)
+            
+            dpg.add_spacer(width=20)
+            self._status_text_id = dpg.add_text("Status: Stopped", color=(255, 200, 100))
+        
+        dpg.add_spacing(count=2)
+        dpg.add_separator()
+        
+        # Track info
+        dpg.add_text("Now Playing:", color=(200, 200, 255))
+        self._track_info_id = dpg.add_text("No track playing", tag="track_info")
+        
+        dpg.add_spacing(count=2)
+        
+        # Audio features display
+        with dpg.collapsing_header(label="Audio Features", default_open=True):
+            with dpg.group(horizontal=True):
+                with dpg.child_window(width=300, height=150, border=True):
+                    dpg.add_text("Energy:")
+                    dpg.add_progress_bar(tag="energy_bar", default_value=0.5, width=-1)
+                    dpg.add_text("Danceability:")
+                    dpg.add_progress_bar(tag="dance_bar", default_value=0.5, width=-1)
+                    dpg.add_text("Valence:")
+                    dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
+                
+                with dpg.child_window(width=300, height=150, border=True):
+                    dpg.add_text("Tempo:", tag="tempo_text")
+                    dpg.add_progress_bar(tag="tempo_bar", default_value=0.5, width=-1)
+                    dpg.add_text("Beat Position:")
+                    dpg.add_progress_bar(tag="beat_bar", default_value=0.0, width=-1)
+                    dpg.add_text("Bar Position:")
+                    dpg.add_progress_bar(tag="bar_bar", default_value=0.0, width=-1)
+        
+        dpg.add_spacing(count=2)
+        
+        # Live visualizer
+        with dpg.collapsing_header(label="Fixture Visualizer", default_open=True):
+            # Create drawing canvas
+            with dpg.drawlist(width=900, height=300, tag="visualizer"):
+                self._visualizer_id = "visualizer"
+                # Initial placeholder
+                dpg.draw_rectangle((0, 0), (900, 300), fill=(30, 30, 40))
+                dpg.draw_text((400, 140), "Start show to see visualization", size=16,
+                             color=(100, 100, 100))
+        
+        dpg.add_spacing(count=2)
+        
+        # DMX Universe view
+        with dpg.collapsing_header(label="DMX Universe", default_open=False):
+            with dpg.child_window(height=100, border=True, horizontal_scrollbar=True):
+                with dpg.group(horizontal=True, tag="dmx_channels"):
+                    for i in range(1, 33):  # Show first 32 channels
+                        with dpg.group():
+                            dpg.add_text(f"{i}", color=(150, 150, 150))
+                            dpg.add_progress_bar(tag=f"ch_{i}", default_value=0.0, width=20)
+    
+    def _refresh_fixture_list(self) -> None:
+        """Refresh the fixture list display."""
+        if self._fixture_list_id:
+            dpg.delete_item(self._fixture_list_id, children_only=True)
+            
+            for i, fixture in enumerate(self.config.fixtures):
+                with dpg.group(horizontal=True, parent=self._fixture_list_id):
+                    dpg.add_selectable(label=f"{fixture.name} (Ch {fixture.start_channel})",
+                                       width=300, tag=f"fixture_sel_{i}",
+                                       callback=lambda s, a, f=fixture: self._edit_fixture(f))
+    
+    def _add_fixture_dialog(self) -> None:
+        """Show dialog to add a new fixture."""
+        if dpg.does_item_exist("add_fixture_window"):
+            dpg.delete_item("add_fixture_window")
+        
+        with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
+                       width=500, height=600, pos=(400, 100)):
+            dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture")
+            dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
+                             min_value=1, max_value=512)
+            dpg.add_input_int(label="Position", tag="new_fixture_position", default_value=0)
+            dpg.add_input_float(label="Orientation", tag="new_fixture_orientation", default_value=0.0)
+            
+            dpg.add_separator()
+            dpg.add_text("Channel Mappings:")
+            
+            # Channel type options
+            channel_types = [ct.value for ct in ChannelType]
+            
+            # Add up to 16 channels
+            for i in range(16):
+                with dpg.group(horizontal=True):
+                    dpg.add_input_int(label=f"", tag=f"new_ch_{i}_num", default_value=0,
+                                     min_value=0, max_value=512, width=80)
+                    dpg.add_combo(items=channel_types, default_value="none",
+                                 tag=f"new_ch_{i}_type", width=120)
+            
+            dpg.add_separator()
+            dpg.add_text("Movement Limits:")
+            
+            with dpg.group(horizontal=True):
+                dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
+                dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=80)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
+                dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
+            
+            dpg.add_separator()
+            dpg.add_checkbox(label="Enable Strobe", tag="new_strobe_enabled")
+            dpg.add_slider_int(label="Strobe Speed", tag="new_strobe_speed", default_value=128,
+                              min_value=0, max_value=255)
+            
+            dpg.add_separator()
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Add", callback=self._add_fixture_confirm, width=100)
+                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_fixture_window"),
+                              width=100)
+    
+    def _add_fixture_confirm(self) -> None:
+        """Confirm adding a new fixture."""
+        name = dpg.get_value("new_fixture_name")
+        start_channel = dpg.get_value("new_fixture_start")
+        position = dpg.get_value("new_fixture_position")
+        orientation = dpg.get_value("new_fixture_orientation")
+        
+        # Collect channels
+        channels = []
+        for i in range(16):
+            ch_num = dpg.get_value(f"new_ch_{i}_num")
+            ch_type = dpg.get_value(f"new_ch_{i}_type")
+            if ch_num > 0 and ch_type != "none":
+                channels.append(ChannelConfig(
+                    channel=ch_num,
+                    channel_type=ChannelType(ch_type)
+                ))
+        
+        fixture = FixtureConfig(
+            name=name,
+            start_channel=start_channel,
+            channels=channels,
+            position=position,
+            orientation=orientation,
+            pan_min=dpg.get_value("new_pan_min"),
+            pan_max=dpg.get_value("new_pan_max"),
+            tilt_min=dpg.get_value("new_tilt_min"),
+            tilt_max=dpg.get_value("new_tilt_max"),
+            strobe_enabled=dpg.get_value("new_strobe_enabled"),
+            strobe_speed=dpg.get_value("new_strobe_speed")
+        )
+        
+        self.config.fixtures.append(fixture)
+        self._refresh_fixture_list()
+        
+        # Update effects engine if running
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config.fixtures, self.config.effects)
+        
+        dpg.delete_item("add_fixture_window")
+    
+    def _edit_fixture(self, fixture: FixtureConfig) -> None:
+        """Edit an existing fixture."""
+        # For simplicity, just show a message. Full implementation would open edit dialog.
+        print(f"Edit fixture: {fixture.name}")
+    
+    def _remove_fixture(self) -> None:
+        """Remove selected fixture."""
+        # Find selected fixture
+        for i, fixture in enumerate(self.config.fixtures):
+            if dpg.does_item_exist(f"fixture_sel_{i}"):
+                if dpg.get_value(f"fixture_sel_{i}"):
+                    self.config.fixtures.pop(i)
+                    self._refresh_fixture_list()
+                    break
+    
+    def _on_mode_changed(self, sender, app_data) -> None:
+        """Handle visualization mode change."""
+        self.config.effects.mode = VisualizationMode(app_data)
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config.fixtures, self.config.effects)
+    
+    def _on_simulate_changed(self, sender, app_data) -> None:
+        """Handle simulation checkbox change."""
+        pass  # Will be used when starting show
+    
+    def _start_show(self) -> None:
+        """Start the light show."""
+        simulate_dmx = dpg.get_value("simulate_dmx") if dpg.does_item_exist("simulate_dmx") else True
+        simulate_spotify = dpg.get_value("simulate_spotify") if dpg.does_item_exist("simulate_spotify") else True
+        
+        # Create DMX controller
+        self.dmx_controller, self.dmx_interface = create_dmx_controller(
+            port=self.config.dmx.port,
+            simulate=simulate_dmx,
+            fps=self.config.dmx.fps
+        )
+        
+        if not self.dmx_interface.open():
+            dpg.set_value(self._status_text_id, "Status: DMX connection failed!")
+            return
+        
+        if not self.dmx_controller.start():
+            dpg.set_value(self._status_text_id, "Status: DMX start failed!")
+            return
+        
+        # Create Spotify analyzer
+        self.spotify_analyzer = create_spotify_analyzer(
+            client_id=self.config.spotify.client_id,
+            client_secret=self.config.spotify.client_secret,
+            redirect_uri=self.config.spotify.redirect_uri,
+            simulate=simulate_spotify
+        )
+        
+        if not self.spotify_analyzer.start():
+            dpg.set_value(self._status_text_id, "Status: Spotify connection failed!")
+            return
+        
+        # Create effects engine
+        self.effects_engine = EffectsEngine(
+            self.dmx_controller,
+            self.config.fixtures,
+            self.config.effects
+        )
+        
+        dpg.set_value(self._status_text_id, "Status: Running")
+    
+    def _stop_show(self) -> None:
+        """Stop the light show."""
+        if self.effects_engine:
+            self.effects_engine.blackout()
+            self.effects_engine = None
+        
+        if self.spotify_analyzer:
+            self.spotify_analyzer.stop()
+            self.spotify_analyzer = None
+        
+        if self.dmx_controller:
+            self.dmx_controller.stop()
+            self.dmx_controller = None
+        
+        if self.dmx_interface:
+            self.dmx_interface.close()
+            self.dmx_interface = None
+        
+        if self._status_text_id and dpg.does_item_exist(self._status_text_id):
+            dpg.set_value(self._status_text_id, "Status: Stopped")
+    
+    def _blackout(self) -> None:
+        """Trigger blackout."""
+        if self.effects_engine:
+            self.effects_engine.blackout()
+    
+    def _update_loop(self) -> None:
+        """Background update loop."""
+        while self._running:
+            if self.effects_engine and self.spotify_analyzer:
+                # Get analysis data
+                data = self.spotify_analyzer.get_data()
+                self._current_analysis = data
+                
+                # Process through effects engine
+                self._fixture_states = self.effects_engine.process(data)
+                
+                # Update GUI (schedule on main thread)
+                try:
+                    self._update_gui(data)
+                except Exception:
+                    pass
+            
+            time.sleep(0.033)  # ~30 FPS GUI updates
+    
+    def _update_gui(self, data: AnalysisData) -> None:
+        """Update GUI elements with current data."""
+        if not dpg.is_dearpygui_running():
+            return
+        
+        # Update track info
+        if data.track.is_playing:
+            track_text = f"{data.track.artist} - {data.track.name}"
+            if dpg.does_item_exist("track_info"):
+                dpg.set_value("track_info", track_text[:60])
+        
+        # Update audio feature bars
+        if dpg.does_item_exist("energy_bar"):
+            dpg.set_value("energy_bar", data.features.energy)
+        if dpg.does_item_exist("dance_bar"):
+            dpg.set_value("dance_bar", data.features.danceability)
+        if dpg.does_item_exist("valence_bar"):
+            dpg.set_value("valence_bar", data.features.valence)
+        if dpg.does_item_exist("tempo_text"):
+            dpg.set_value("tempo_text", f"Tempo: {data.features.tempo:.0f} BPM")
+        if dpg.does_item_exist("tempo_bar"):
+            dpg.set_value("tempo_bar", data.normalized_tempo)
+        if dpg.does_item_exist("beat_bar"):
+            dpg.set_value("beat_bar", data.beat_position)
+        if dpg.does_item_exist("bar_bar"):
+            dpg.set_value("bar_bar", data.bar_position)
+        
+        # Update DMX channel display
+        if self.dmx_controller:
+            channels = self.dmx_controller.get_all_channels()
+            for i in range(min(32, len(channels))):
+                if dpg.does_item_exist(f"ch_{i+1}"):
+                    dpg.set_value(f"ch_{i+1}", channels[i] / 255.0)
+        
+        # Update visualizer
+        self._draw_visualizer()
+    
+    def _draw_visualizer(self) -> None:
+        """Draw the fixture visualizer."""
+        if not self._visualizer_id or not dpg.does_item_exist(self._visualizer_id):
+            return
+        
+        # Clear previous drawing
+        dpg.delete_item(self._visualizer_id, children_only=True)
+        
+        # Background
+        dpg.draw_rectangle((0, 0), (900, 300), fill=(20, 20, 30), parent=self._visualizer_id)
+        
+        if not self.config.fixtures:
+            dpg.draw_text((350, 140), "No fixtures configured", size=16,
+                         color=(100, 100, 100), parent=self._visualizer_id)
+            return
+        
+        # Draw each fixture
+        num_fixtures = len(self.config.fixtures)
+        fixture_width = min(100, (900 - 50) // max(1, num_fixtures))
+        spacing = (900 - num_fixtures * fixture_width) // (num_fixtures + 1)
+        
+        sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
+        
+        for i, fixture in enumerate(sorted_fixtures):
+            x = spacing + i * (fixture_width + spacing)
+            y = 50
+            
+            # Get fixture state
+            state = self._fixture_states.get(fixture.name, FixtureState())
+            
+            # Draw fixture body
+            dpg.draw_rectangle((x, y), (x + fixture_width, y + 180),
+                              fill=(40, 40, 50), rounding=5, parent=self._visualizer_id)
+            
+            # Draw light beam
+            beam_color = (state.red, state.green, state.blue, 180)
+            beam_center_x = x + fixture_width // 2
+            
+            # Calculate beam direction from pan/tilt
+            pan_offset = (state.pan - 128) / 128 * 50  # -50 to +50 pixels
+            tilt_factor = state.tilt / 255
+            
+            beam_end_x = beam_center_x + pan_offset
+            beam_end_y = y + 180 + 100 * tilt_factor
+            
+            # Draw beam as triangle
+            dpg.draw_triangle(
+                (beam_center_x - 10, y + 40),
+                (beam_center_x + 10, y + 40),
+                (beam_end_x, beam_end_y),
+                fill=beam_color,
+                parent=self._visualizer_id
+            )
+            
+            # Draw LED indicator
+            led_color = (state.red, state.green, state.blue, 255)
+            dpg.draw_circle((beam_center_x, y + 30), 15, fill=led_color,
+                           parent=self._visualizer_id)
+            
+            # Draw fixture name
+            dpg.draw_text((x + 5, y + 185), fixture.name[:12], size=12,
+                         color=(200, 200, 200), parent=self._visualizer_id)
+            
+            # Draw DMX values
+            dpg.draw_text((x + 5, y + 200), f"R:{state.red} G:{state.green} B:{state.blue}",
+                         size=10, color=(150, 150, 150), parent=self._visualizer_id)
+    
+    def _new_config(self) -> None:
+        """Create new configuration."""
+        self.config = ShowConfig()
+        self._refresh_fixture_list()
+        if dpg.does_item_exist("show_name_input"):
+            dpg.set_value("show_name_input", self.config.name)
+    
+    def _load_config_dialog(self) -> None:
+        """Show load config dialog."""
+        with dpg.file_dialog(directory_selector=False, show=True, 
+                            callback=self._load_config_callback,
+                            width=600, height=400):
+            dpg.add_file_extension(".json", color=(0, 255, 0))
+    
+    def _load_config_callback(self, sender, app_data) -> None:
+        """Load config from file."""
+        if app_data and 'file_path_name' in app_data:
+            try:
+                self.config = ShowConfig.load(app_data['file_path_name'])
+                self._refresh_fixture_list()
+                if dpg.does_item_exist("show_name_input"):
+                    dpg.set_value("show_name_input", self.config.name)
+            except Exception as e:
+                print(f"Failed to load config: {e}")
+    
+    def _save_config_dialog(self) -> None:
+        """Show save config dialog."""
+        with dpg.file_dialog(directory_selector=False, show=True,
+                            callback=self._save_config_callback,
+                            default_filename="show_config.json",
+                            width=600, height=400):
+            dpg.add_file_extension(".json", color=(0, 255, 0))
+    
+    def _save_config_callback(self, sender, app_data) -> None:
+        """Save config to file."""
+        if app_data and 'file_path_name' in app_data:
+            try:
+                self.config.save(app_data['file_path_name'])
+            except Exception as e:
+                print(f"Failed to save config: {e}")
+    
+    def _export_json(self) -> None:
+        """Export config as JSON."""
+        self._save_config_dialog()
+    
+    def _reset_layout(self) -> None:
+        """Reset window layout."""
+        pass  # Could implement window layout reset
+
+
+def run_gui():
+    """Run the GUI application."""
+    app = MusicAutoShowGUI()
+    app.run()
+
+
+if __name__ == "__main__":
+    run_gui()
