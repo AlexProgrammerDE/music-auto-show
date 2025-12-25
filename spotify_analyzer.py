@@ -110,6 +110,7 @@ class SpotifyAnalyzer:
         self._last_track_id = ""
         self._features_cache: dict[str, AudioFeatures] = {}
         self._poll_interval = 1.0  # seconds
+        self._audio_features_warned = False  # Track if we've warned about 403
     
     def add_callback(self, callback: Callable[[AnalysisData], None]) -> None:
         """Add a callback to be called when analysis data updates."""
@@ -240,7 +241,11 @@ class SpotifyAnalyzer:
             print(f"API update error: {e}")
     
     def _get_features(self, track_id: str) -> AudioFeatures:
-        """Get audio features for a track (with caching)."""
+        """Get audio features for a track (with caching).
+        
+        Note: Spotify deprecated the Audio Features API for new apps in Nov 2024.
+        If the API returns 403, we fall back to default values.
+        """
         if track_id in self._features_cache:
             return self._features_cache[track_id]
         
@@ -265,9 +270,20 @@ class SpotifyAnalyzer:
                 self._features_cache[track_id] = result
                 return result
         except Exception as e:
-            print(f"Failed to get audio features: {e}")
+            # Spotify deprecated Audio Features API for new apps (Nov 2024)
+            # 403 errors are expected - warn once then use defaults
+            if "403" in str(e):
+                if not self._audio_features_warned:
+                    print("Note: Audio Features API unavailable (Spotify deprecated this for new apps).")
+                    print("      Using default values - beat sync still works via playback timing.")
+                    self._audio_features_warned = True
+            else:
+                print(f"Failed to get audio features: {e}")
         
-        return AudioFeatures()
+        # Return default features (will still sync to playback)
+        result = AudioFeatures()
+        self._features_cache[track_id] = result
+        return result
     
     def _update_estimates(self) -> None:
         """Update beat/bar position estimates based on progress."""
