@@ -425,8 +425,12 @@ class EffectsEngine:
             return state.tilt_fine
         
         # Speed channels
-        elif ct in (ChannelType.SPEED_PAN_TILT_FAST_SLOW, ChannelType.SPEED_PAN_TILT_SLOW_FAST):
+        elif ct == ChannelType.SPEED_PAN_TILT_FAST_SLOW:
+            # 0=fast, 255=slow - invert pt_speed (which is 0=fast internally)
             return state.pt_speed
+        elif ct == ChannelType.SPEED_PAN_TILT_SLOW_FAST:
+            # 0=slow, 255=fast - invert for this type
+            return 255 - state.pt_speed
         
         # Shutter/strobe
         elif ct in (ChannelType.SHUTTER_STROBE, ChannelType.SHUTTER_STROBE_SLOW_FAST, ChannelType.SHUTTER_STROBE_FAST_SLOW):

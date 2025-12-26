@@ -479,54 +479,53 @@ class MusicAutoShowGUI:
                           parent="channel_list_container")
             return
         
-        # Header
-        with dpg.group(horizontal=True, parent="channel_list_container"):
-            dpg.add_text("Ch", color=(150, 150, 150))
-            dpg.add_spacer(width=20)
-            dpg.add_text("Name", color=(150, 150, 150))
-            dpg.add_spacer(width=80)
-            dpg.add_text("Type", color=(150, 150, 150))
-            dpg.add_spacer(width=100)
-            dpg.add_text("Fixed", color=(150, 150, 150))
-            dpg.add_spacer(width=30)
-            dpg.add_text("Value", color=(150, 150, 150))
-        
-        dpg.add_separator(parent="channel_list_container")
-        
-        # Channel rows
-        for i, ch in enumerate(channels):
-            dmx_ch = ch.get_dmx_channel(fixture.start_channel)
-            type_name = get_channel_type_display_name(ch.channel_type)
+        # Use a table for proper column alignment
+        with dpg.table(header_row=True, borders_innerH=True, borders_outerH=True,
+                       borders_innerV=True, borders_outerV=True, row_background=True,
+                       parent="channel_list_container", resizable=True):
             
-            with dpg.group(horizontal=True, parent="channel_list_container"):
-                dpg.add_text(f"{dmx_ch:3d}", color=(100, 150, 200))
-                dpg.add_spacer(width=10)
-                dpg.add_input_text(default_value=ch.name, width=100, tag=f"ch_name_{i}",
-                                  callback=lambda s, a, idx=i: self._update_channel_name(idx, a))
+            dpg.add_table_column(label="DMX", width_fixed=True, init_width_or_weight=40)
+            dpg.add_table_column(label="Name", width_fixed=True, init_width_or_weight=100)
+            dpg.add_table_column(label="Type", width_fixed=True, init_width_or_weight=140)
+            dpg.add_table_column(label="Fixed", width_fixed=True, init_width_or_weight=40)
+            dpg.add_table_column(label="Value", width_fixed=True, init_width_or_weight=60)
+            dpg.add_table_column(label="On", width_fixed=True, init_width_or_weight=40)
+            
+            # Channel rows
+            for i, ch in enumerate(channels):
+                dmx_ch = ch.get_dmx_channel(fixture.start_channel)
                 
-                # Channel type dropdown
-                type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
-                current_type_name = get_channel_type_display_name(ch.channel_type)
-                dpg.add_combo(items=type_names, default_value=current_type_name, width=130,
-                             tag=f"ch_type_{i}",
-                             callback=lambda s, a, idx=i: self._update_channel_type(idx, a))
-                
-                # Fixed value checkbox
-                is_fixed = ch.fixed_value is not None
-                dpg.add_checkbox(default_value=is_fixed, tag=f"ch_fixed_{i}",
-                                callback=lambda s, a, idx=i: self._toggle_fixed_value(idx, a))
-                
-                # Fixed value input (only if type is FIXED or fixed is checked)
-                fixed_val = ch.fixed_value if ch.fixed_value is not None else ch.default_value
-                dpg.add_input_int(default_value=fixed_val, width=60, min_value=0, max_value=255,
-                                 tag=f"ch_fixed_val_{i}",
-                                 callback=lambda s, a, idx=i: self._update_fixed_value(idx, a))
-                
-                # Enabled checkbox
-                dpg.add_checkbox(label="On", default_value=ch.enabled, tag=f"ch_enabled_{i}",
-                                callback=lambda s, a, idx=i: self._update_channel_enabled(idx, a))
+                with dpg.table_row():
+                    # DMX Channel number
+                    dpg.add_text(f"{dmx_ch}")
+                    
+                    # Name input
+                    dpg.add_input_text(default_value=ch.name, width=-1, tag=f"ch_name_{i}",
+                                      callback=lambda s, a, idx=i: self._update_channel_name(idx, a))
+                    
+                    # Channel type dropdown
+                    type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
+                    current_type_name = get_channel_type_display_name(ch.channel_type)
+                    dpg.add_combo(items=type_names, default_value=current_type_name, width=-1,
+                                 tag=f"ch_type_{i}",
+                                 callback=lambda s, a, idx=i: self._update_channel_type(idx, a))
+                    
+                    # Fixed value checkbox
+                    is_fixed = ch.fixed_value is not None
+                    dpg.add_checkbox(default_value=is_fixed, tag=f"ch_fixed_{i}",
+                                    callback=lambda s, a, idx=i: self._toggle_fixed_value(idx, a))
+                    
+                    # Fixed value input
+                    fixed_val = ch.fixed_value if ch.fixed_value is not None else ch.default_value
+                    dpg.add_input_int(default_value=fixed_val, width=-1, min_value=0, max_value=255,
+                                     tag=f"ch_fixed_val_{i}",
+                                     callback=lambda s, a, idx=i: self._update_fixed_value(idx, a))
+                    
+                    # Enabled checkbox
+                    dpg.add_checkbox(default_value=ch.enabled, tag=f"ch_enabled_{i}",
+                                    callback=lambda s, a, idx=i: self._update_channel_enabled(idx, a))
         
-        dpg.add_separator(parent="channel_list_container")
+        dpg.add_spacer(height=5, parent="channel_list_container")
         dpg.add_button(label="Add Channel", callback=self._add_channel_dialog, parent="channel_list_container")
     
     def _update_channel_name(self, idx: int, name: str) -> None:
@@ -648,6 +647,37 @@ class MusicAutoShowGUI:
         
         profile_value = dpg.get_value("edit_fixture_profile")
         fixture.profile_name = "" if profile_value == "(Custom)" else profile_value
+        
+        # Capture all channel settings from GUI
+        for i, ch in enumerate(fixture.channels):
+            # Get name
+            name_tag = f"ch_name_{i}"
+            if dpg.does_item_exist(name_tag):
+                ch.name = dpg.get_value(name_tag)
+            
+            # Get type
+            type_tag = f"ch_type_{i}"
+            if dpg.does_item_exist(type_tag):
+                type_display_name = dpg.get_value(type_tag)
+                for ct in ChannelType:
+                    if get_channel_type_display_name(ct) == type_display_name:
+                        ch.channel_type = ct
+                        break
+            
+            # Get fixed checkbox and value
+            fixed_tag = f"ch_fixed_{i}"
+            fixed_val_tag = f"ch_fixed_val_{i}"
+            if dpg.does_item_exist(fixed_tag):
+                is_fixed = dpg.get_value(fixed_tag)
+                if is_fixed and dpg.does_item_exist(fixed_val_tag):
+                    ch.fixed_value = dpg.get_value(fixed_val_tag)
+                else:
+                    ch.fixed_value = None
+            
+            # Get enabled
+            enabled_tag = f"ch_enabled_{i}"
+            if dpg.does_item_exist(enabled_tag):
+                ch.enabled = dpg.get_value(enabled_tag)
         
         self._refresh_fixture_list()
         

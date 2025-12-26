@@ -266,7 +266,7 @@ def _create_muvy_washq_profile() -> FixtureProfile:
             ChannelConfig(offset=2, name="Pan Fine", channel_type=ChannelType.POSITION_PAN_FINE, default_value=0),
             ChannelConfig(offset=3, name="Tilt", channel_type=ChannelType.POSITION_TILT, default_value=128),
             ChannelConfig(offset=4, name="Tilt Fine", channel_type=ChannelType.POSITION_TILT_FINE, default_value=0),
-            ChannelConfig(offset=5, name="XY Speed", channel_type=ChannelType.SPEED_PAN_TILT_SLOW_FAST, default_value=0),
+            ChannelConfig(offset=5, name="XY Speed", channel_type=ChannelType.SPEED_PAN_TILT_FAST_SLOW, default_value=0),
             ChannelConfig(
                 offset=6, 
                 name="Dimmer/Shutter", 
