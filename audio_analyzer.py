@@ -8,6 +8,7 @@ import numpy as np
 from typing import Optional, Callable
 from dataclasses import dataclass, field
 from collections import deque
+from typing import List, Tuple
 
 try:
     import pyaudiowpatch as pyaudio
@@ -76,6 +77,9 @@ class AnalysisData:
     track_name: str = "System Audio"
     artist_name: str = ""
     is_playing: bool = True
+    
+    # Album art colors (RGB tuples extracted from cover art)
+    album_colors: List[Tuple[int, int, int]] = field(default_factory=list)
     
     @property
     def normalized_energy(self) -> float:
@@ -171,6 +175,7 @@ class AudioAnalyzer:
         self._track_name = "System Audio"
         self._artist_name = ""
         self._is_playing = True
+        self._album_colors: List[Tuple[int, int, int]] = []
         
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
@@ -598,6 +603,8 @@ class AudioAnalyzer:
             artist_name = ""
             media_is_playing = True
             
+            album_colors: List[Tuple[int, int, int]] = []
+            
             if self._media_info_provider:
                 try:
                     media_info = self._media_info_provider.get_info()
@@ -605,6 +612,7 @@ class AudioAnalyzer:
                         track_name = media_info.title
                         artist_name = media_info.artist
                         media_is_playing = media_info.is_playing
+                        album_colors = media_info.colors
                 except Exception:
                     pass
             
@@ -612,6 +620,7 @@ class AudioAnalyzer:
             self._track_name = track_name
             self._artist_name = artist_name
             self._is_playing = media_is_playing
+            self._album_colors = album_colors
             
             # Get current data
             with self._lock:
@@ -637,7 +646,8 @@ class AudioAnalyzer:
                     estimated_bar=self._data.estimated_bar,
                     track_name=track_name,
                     artist_name=artist_name,
-                    is_playing=media_is_playing
+                    is_playing=media_is_playing,
+                    album_colors=album_colors
                 )
                 # Reset beat detected flag after reading
                 self._data.features.beat_detected = False
@@ -677,7 +687,8 @@ class AudioAnalyzer:
                 estimated_bar=self._data.estimated_bar,
                 track_name=self._track_name,
                 artist_name=self._artist_name,
-                is_playing=self._is_playing
+                is_playing=self._is_playing,
+                album_colors=list(self._album_colors)
             )
 
 

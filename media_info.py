@@ -1,13 +1,24 @@
 """
 Cross-platform module to get currently playing media information.
 Supports Windows (via winsdk), Linux (via MPRIS/D-Bus), and macOS (via osascript).
+Includes album art color extraction for dynamic lighting.
 """
 import sys
 import asyncio
 import threading
 import time
-from dataclasses import dataclass
-from typing import Optional, Callable
+import colorsys
+from dataclasses import dataclass, field
+from typing import Optional, Callable, List, Tuple
+from io import BytesIO
+
+# Try to import PIL for image processing
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
 
 @dataclass
 class MediaInfo:
@@ -18,6 +29,115 @@ class MediaInfo:
     is_playing: bool = False
     source_app: str = ""  # e.g., "Spotify", "Chrome", "VLC"
     
+    # Album art colors (list of RGB tuples, sorted by dominance)
+    # Each color is (R, G, B) with values 0-255
+    colors: List[Tuple[int, int, int]] = field(default_factory=list)
+    
+    # Thumbnail data (raw bytes, can be None)
+    thumbnail_data: Optional[bytes] = None
+    
+
+def extract_colors_from_image(image_data: bytes, num_colors: int = 5) -> List[Tuple[int, int, int]]:
+    """
+    Extract dominant colors from image data.
+    Uses a simple color quantization approach.
+    
+    Args:
+        image_data: Raw image bytes (PNG, JPEG, etc.)
+        num_colors: Number of colors to extract
+    
+    Returns:
+        List of (R, G, B) tuples sorted by dominance
+    """
+    if not PIL_AVAILABLE or not image_data:
+        return []
+    
+    try:
+        # Open image from bytes
+        img = Image.open(BytesIO(image_data))
+        
+        # Convert to RGB if needed
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Resize for faster processing
+        img = img.resize((100, 100), Image.Resampling.LANCZOS)
+        
+        # Get all pixels
+        pixels = list(img.getdata())
+        
+        # Simple color quantization using binning
+        # Group similar colors together
+        color_counts: dict[Tuple[int, int, int], int] = {}
+        
+        for r, g, b in pixels:
+            # Quantize to reduce color space (round to nearest 16)
+            qr = (r // 24) * 24
+            qg = (g // 24) * 24
+            qb = (b // 24) * 24
+            
+            # Skip very dark or very light colors (less interesting for lighting)
+            brightness = (r + g + b) / 3
+            if brightness < 30 or brightness > 240:
+                continue
+            
+            # Skip very desaturated colors (grays)
+            max_c = max(r, g, b)
+            min_c = min(r, g, b)
+            if max_c - min_c < 30:
+                continue
+            
+            key = (qr, qg, qb)
+            color_counts[key] = color_counts.get(key, 0) + 1
+        
+        if not color_counts:
+            # Fallback: just get most common colors without filtering
+            color_counts = {}
+            for r, g, b in pixels:
+                qr = (r // 32) * 32
+                qg = (g // 32) * 32
+                qb = (b // 32) * 32
+                key = (qr, qg, qb)
+                color_counts[key] = color_counts.get(key, 0) + 1
+        
+        # Sort by count (most common first)
+        sorted_colors = sorted(color_counts.items(), key=lambda x: -x[1])
+        
+        # Get top colors, ensuring they're distinct
+        result = []
+        for color, count in sorted_colors:
+            # Check if this color is distinct enough from already selected colors
+            is_distinct = True
+            for existing in result:
+                # Calculate color distance
+                dr = abs(color[0] - existing[0])
+                dg = abs(color[1] - existing[1])
+                db = abs(color[2] - existing[2])
+                if dr + dg + db < 60:  # Too similar
+                    is_distinct = False
+                    break
+            
+            if is_distinct:
+                result.append(color)
+                if len(result) >= num_colors:
+                    break
+        
+        return result
+        
+    except Exception as e:
+        return []
+
+
+def rgb_to_hsv(r: int, g: int, b: int) -> Tuple[float, float, float]:
+    """Convert RGB (0-255) to HSV (0-1)."""
+    return colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+
+
+def hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
+    """Convert HSV (0-1) to RGB (0-255)."""
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
 
 class MediaInfoProvider:
     """
@@ -34,6 +154,10 @@ class MediaInfoProvider:
         self._callbacks: list[Callable[[MediaInfo], None]] = []
         self._poll_interval = 2.0  # Poll every 2 seconds
         
+        # Cache for album art colors (to avoid re-processing)
+        self._last_track_key = ""
+        self._cached_colors: List[Tuple[int, int, int]] = []
+        
         # Initialize platform-specific backend
         self._init_backend()
     
@@ -42,8 +166,9 @@ class MediaInfoProvider:
         if sys.platform == 'win32':
             try:
                 self._backend = _WindowsMediaBackend()
-            except ImportError:
-                print("winsdk not available. Install with: pip install winsdk")
+            except ImportError as e:
+                print(f"Windows media backend not available: {e}")
+                print("Install with: pip install winrt-Windows.Media.Control")
                 self._backend = _DummyBackend()
         elif sys.platform == 'linux':
             try:
@@ -93,7 +218,9 @@ class MediaInfoProvider:
                 artist=self._info.artist,
                 album=self._info.album,
                 is_playing=self._info.is_playing,
-                source_app=self._info.source_app
+                source_app=self._info.source_app,
+                colors=list(self._info.colors),
+                thumbnail_data=self._info.thumbnail_data
             )
     
     def _poll_loop(self) -> None:
@@ -103,12 +230,24 @@ class MediaInfoProvider:
                 if self._backend:
                     new_info = self._backend.get_media_info()
                     
+                    # Extract colors from thumbnail if available and track changed
+                    track_key = f"{new_info.artist}|{new_info.title}|{new_info.album}"
+                    if track_key != self._last_track_key:
+                        self._last_track_key = track_key
+                        if new_info.thumbnail_data:
+                            self._cached_colors = extract_colors_from_image(new_info.thumbnail_data)
+                        else:
+                            self._cached_colors = []
+                    
+                    new_info.colors = self._cached_colors
+                    
                     # Check if info changed
                     with self._lock:
                         changed = (
                             new_info.title != self._info.title or
                             new_info.artist != self._info.artist or
-                            new_info.is_playing != self._info.is_playing
+                            new_info.is_playing != self._info.is_playing or
+                            new_info.colors != self._info.colors
                         )
                         self._info = new_info
                     
@@ -144,7 +283,6 @@ class _WindowsMediaBackend(_MediaInfoBackend):
     
     def __init__(self):
         # Import here to avoid errors on other platforms
-        # Try different import patterns for winrt
         self._SessionManager = None
         self._PlaybackStatus = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -159,7 +297,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
             self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
         except ImportError:
-            # Try alternative import for older winrt versions
+            # Try alternative import for winsdk
             try:
                 from winsdk.windows.media.control import (
                     GlobalSystemMediaTransportControlsSessionManager,
@@ -212,8 +350,6 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             source_app = session.source_app_user_model_id or ""
             # Clean up app name (extract readable name)
             if source_app:
-                # e.g., "Spotify.exe" -> "Spotify"
-                # e.g., "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" -> "Spotify"
                 if '!' in source_app:
                     source_app = source_app.split('!')[-1]
                 source_app = source_app.split('\\')[-1].replace('.exe', '')
@@ -230,18 +366,40 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             properties = await session.try_get_media_properties_async()
             
             if properties is None:
-                # Session exists but no properties
                 return MediaInfo(
                     is_playing=is_playing,
                     source_app=source_app
                 )
+            
+            # Try to get thumbnail
+            thumbnail_data = None
+            try:
+                thumbnail = properties.thumbnail
+                if thumbnail:
+                    # Read the thumbnail stream
+                    stream = await thumbnail.open_read_async()
+                    if stream:
+                        size = stream.size
+                        if size > 0 and size < 10_000_000:  # Max 10MB
+                            from winrt.windows.storage.streams import DataReader
+                            reader = DataReader(stream)
+                            await reader.load_async(size)
+                            buffer = reader.read_buffer(size)
+                            # Convert to bytes
+                            thumbnail_data = bytes(buffer)
+                            reader.close()
+                        stream.close()
+            except Exception as e:
+                # Thumbnail extraction failed, continue without it
+                self._last_error = f"Thumbnail error: {e}"
             
             return MediaInfo(
                 title=properties.title or "",
                 artist=properties.artist or "",
                 album=properties.album_title or "",
                 is_playing=is_playing,
-                source_app=source_app
+                source_app=source_app,
+                thumbnail_data=thumbnail_data
             )
         except Exception as e:
             self._last_error = str(e)
@@ -279,16 +437,23 @@ class _LinuxMediaBackend(_MediaInfoBackend):
                         
                         album = str(metadata.get('xesam:album', '')) if metadata else ''
                         
+                        # Try to get album art URL
+                        thumbnail_data = None
+                        art_url = str(metadata.get('mpris:artUrl', '')) if metadata else ''
+                        if art_url:
+                            thumbnail_data = self._fetch_art(art_url)
+                        
                         # Extract app name from service
                         source_app = service.replace('org.mpris.MediaPlayer2.', '')
                         
-                        if title or is_playing:  # Found active player
+                        if title or is_playing:
                             return MediaInfo(
                                 title=title,
                                 artist=artist,
                                 album=album,
                                 is_playing=is_playing,
-                                source_app=source_app
+                                source_app=source_app,
+                                thumbnail_data=thumbnail_data
                             )
                     except Exception:
                         continue
@@ -296,6 +461,23 @@ class _LinuxMediaBackend(_MediaInfoBackend):
             return MediaInfo()
         except Exception:
             return MediaInfo()
+    
+    def _fetch_art(self, url: str) -> Optional[bytes]:
+        """Fetch album art from URL."""
+        try:
+            if url.startswith('file://'):
+                # Local file
+                path = url[7:]
+                with open(path, 'rb') as f:
+                    return f.read()
+            elif url.startswith('http://') or url.startswith('https://'):
+                # Remote URL
+                import urllib.request
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    return response.read()
+        except Exception:
+            pass
+        return None
 
 
 class _MacOSMediaBackend(_MediaInfoBackend):
@@ -307,7 +489,7 @@ class _MacOSMediaBackend(_MediaInfoBackend):
         # Try common media apps
         apps = [
             ('Spotify', self._get_spotify_info),
-            ('Music', self._get_music_app_info),  # Apple Music
+            ('Music', self._get_music_app_info),
             ('iTunes', self._get_itunes_info),
         ]
         
@@ -344,22 +526,38 @@ class _MacOSMediaBackend(_MediaInfoBackend):
                 set trackName to name of current track
                 set artistName to artist of current track
                 set albumName to album of current track
+                set artworkUrl to artwork url of current track
                 set isPlaying to player state is playing
-                return trackName & "|" & artistName & "|" & albumName & "|" & isPlaying
+                return trackName & "|" & artistName & "|" & albumName & "|" & artworkUrl & "|" & isPlaying
             end tell
         end if
         '''
         result = self._run_osascript(script)
         if result and '|' in result:
             parts = result.split('|')
-            if len(parts) >= 4:
+            if len(parts) >= 5:
+                thumbnail_data = None
+                if parts[3]:
+                    thumbnail_data = self._fetch_art(parts[3])
                 return MediaInfo(
                     title=parts[0],
                     artist=parts[1],
                     album=parts[2],
-                    is_playing=parts[3].lower() == 'true'
+                    is_playing=parts[4].lower() == 'true',
+                    thumbnail_data=thumbnail_data
                 )
         return MediaInfo()
+    
+    def _fetch_art(self, url: str) -> Optional[bytes]:
+        """Fetch album art from URL."""
+        try:
+            if url.startswith('http://') or url.startswith('https://'):
+                import urllib.request
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    return response.read()
+        except Exception:
+            pass
+        return None
     
     def _get_music_app_info(self) -> MediaInfo:
         """Get info from Apple Music app."""
@@ -414,12 +612,26 @@ class _MacOSMediaBackend(_MediaInfoBackend):
         return MediaInfo()
 
 
+def format_colors_for_display(colors: List[Tuple[int, int, int]]) -> str:
+    """Format color list for display/logging."""
+    if not colors:
+        return "(no colors)"
+    parts = []
+    for r, g, b in colors[:5]:
+        parts.append(f"#{r:02x}{g:02x}{b:02x}")
+    return " ".join(parts)
+
+
 # Convenience function
 def get_current_media() -> MediaInfo:
     """Get currently playing media info (one-shot, blocking)."""
     provider = MediaInfoProvider()
     if provider._backend:
-        return provider._backend.get_media_info()
+        info = provider._backend.get_media_info()
+        # Extract colors if thumbnail available
+        if info.thumbnail_data:
+            info.colors = extract_colors_from_image(info.thumbnail_data)
+        return info
     return MediaInfo()
 
 
@@ -427,6 +639,7 @@ if __name__ == "__main__":
     # Test the module
     print("Testing media info provider...")
     print(f"Platform: {sys.platform}")
+    print(f"PIL available: {PIL_AVAILABLE}")
     
     provider = MediaInfoProvider()
     print(f"Backend: {type(provider._backend).__name__}")
@@ -438,6 +651,8 @@ if __name__ == "__main__":
     print(f"  Album: {info.album or '(none)'}")
     print(f"  Playing: {info.is_playing}")
     print(f"  Source: {info.source_app or '(none)'}")
+    print(f"  Thumbnail: {'Yes' if info.thumbnail_data else 'No'} ({len(info.thumbnail_data) if info.thumbnail_data else 0} bytes)")
+    print(f"  Colors: {format_colors_for_display(info.colors)}")
     
     # Show error if available (Windows)
     if hasattr(provider._backend, '_last_error') and provider._backend._last_error:
@@ -451,7 +666,9 @@ if __name__ == "__main__":
             time.sleep(2)
             info = provider.get_info()
             if info.title:
+                colors_str = format_colors_for_display(info.colors)
                 print(f"  Now: {info.artist} - {info.title} [{info.source_app}] {'▶' if info.is_playing else '⏸'}")
+                print(f"       Colors: {colors_str}")
             else:
                 print(f"  No media detected (source: {info.source_app or 'none'})")
     except KeyboardInterrupt:

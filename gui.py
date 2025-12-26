@@ -17,7 +17,7 @@ except ImportError:
 
 from config import (
     ShowConfig, FixtureConfig, FixtureProfile, ChannelConfig,
-    VisualizationMode, DMXConfig, EffectsConfig, ChannelType,
+    VisualizationMode, MovementMode, DMXConfig, EffectsConfig, ChannelType,
     get_available_presets, get_preset, FIXTURE_PRESETS, get_channel_type_display_name
 )
 from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
@@ -169,6 +169,14 @@ class MusicAutoShowGUI:
             dpg.add_checkbox(label="Enable Movement", default_value=self.config.effects.movement_enabled,
                             callback=lambda s, a: setattr(self.config.effects, 'movement_enabled', a))
             
+            # Movement mode selector
+            movement_modes = [m.value for m in MovementMode]
+            dpg.add_combo(label="Movement Mode", items=movement_modes, 
+                         default_value=self.config.effects.movement_mode.value,
+                         callback=self._on_movement_mode_changed, tag="movement_mode", width=200)
+            dpg.add_text("", tag="movement_mode_hint", color=(130, 130, 160))
+            self._update_movement_mode_hint(self.config.effects.movement_mode.value)
+            
             dpg.add_slider_float(label="Movement Speed", default_value=self.config.effects.movement_speed,
                                 min_value=0.0, max_value=1.0, width=200,
                                 callback=lambda s, a: setattr(self.config.effects, 'movement_speed', a))
@@ -186,6 +194,15 @@ class MusicAutoShowGUI:
         
         dpg.add_text("Now Playing:", color=(200, 200, 255))
         self._track_info_id = dpg.add_text("No track playing", tag="track_info")
+        
+        # Album color palette display
+        with dpg.group(horizontal=True):
+            dpg.add_text("Album Colors:", color=(150, 150, 180))
+            dpg.add_spacer(width=10)
+            # Create 5 color swatches using drawlist
+            with dpg.drawlist(width=200, height=20, tag="color_palette"):
+                # Will be drawn in _update_gui
+                pass
         
         dpg.add_spacer(height=10)
         
@@ -705,6 +722,26 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
     
+    def _on_movement_mode_changed(self, sender, app_data) -> None:
+        self.config.effects.movement_mode = MovementMode(app_data)
+        self._update_movement_mode_hint(app_data)
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
+    
+    def _update_movement_mode_hint(self, mode_value: str) -> None:
+        """Update the movement mode hint text."""
+        hints = {
+            "subtle": "Small adjustments, stays mostly centered",
+            "standard": "Moderate movement on beats/bars",
+            "dramatic": "Full range, aggressive movement",
+            "wall_wash": "Targets walls and corners",
+            "sweep": "Slow continuous sweeping",
+            "random": "Unpredictable positions",
+        }
+        hint = hints.get(mode_value, "")
+        if dpg.does_item_exist("movement_mode_hint"):
+            dpg.set_value("movement_mode_hint", hint)
+    
     def _start_show(self) -> None:
         logger.info("=" * 50)
         logger.info("STARTING SHOW")
@@ -813,6 +850,13 @@ class MusicAutoShowGUI:
                     logger.info(f"Audio: energy={data.features.energy:.2f}, bass={data.features.bass:.2f}, "
                                f"tempo={data.features.tempo:.0f} BPM")
                     
+                    # Log track and colors
+                    if data.track_name and data.track_name != "System Audio":
+                        logger.info(f"  Track: {data.artist_name} - {data.track_name}")
+                        if data.album_colors:
+                            colors_str = " ".join([f"#{r:02x}{g:02x}{b:02x}" for r, g, b in data.album_colors[:5]])
+                            logger.info(f"  Album colors: {colors_str}")
+                    
                     # Log fixture states
                     for name, state in self._fixture_states.items():
                         logger.info(f"  Fixture '{name}': R={state.red} G={state.green} B={state.blue} "
@@ -868,6 +912,25 @@ class MusicAutoShowGUI:
             dpg.set_value("tempo_bar", data.normalized_tempo)
         if dpg.does_item_exist("beat_bar"):
             dpg.set_value("beat_bar", data.beat_position)
+        
+        # Draw album color palette
+        if dpg.does_item_exist("color_palette"):
+            dpg.delete_item("color_palette", children_only=True)
+            if data.album_colors:
+                swatch_width = 35
+                for i, color in enumerate(data.album_colors[:5]):
+                    x = i * (swatch_width + 5)
+                    dpg.draw_rectangle(
+                        (x, 2), (x + swatch_width, 18),
+                        fill=(color[0], color[1], color[2], 255),
+                        color=(100, 100, 120),
+                        thickness=1,
+                        rounding=3,
+                        parent="color_palette"
+                    )
+            else:
+                dpg.draw_text((0, 3), "(no colors detected)", size=11, 
+                             color=(100, 100, 120), parent="color_palette")
         
         if self.dmx_controller:
             channels = self.dmx_controller.get_all_channels()

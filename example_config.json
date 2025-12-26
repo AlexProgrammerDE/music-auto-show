@@ -18,7 +18,8 @@
     "smooth_factor": 0.3,
     "strobe_on_drop": false,
     "movement_enabled": true,
-    "movement_speed": 0.5
+    "movement_speed": 0.5,
+    "movement_mode": "wall_wash"
   },
   "fixtures": [
     {

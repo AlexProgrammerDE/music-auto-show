@@ -14,12 +14,12 @@ Colors shift smoothly based on musical mood, not randomly.
 import math
 import time
 import colorsys
-from typing import Optional
+from typing import Optional, List, Tuple
 from dataclasses import dataclass, field
 
 from config import (
     FixtureConfig, FixtureProfile, EffectsConfig, VisualizationMode,
-    ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS
+    ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS, MovementMode
 )
 from audio_analyzer import AnalysisData
 from dmx_controller import DMXController
@@ -122,6 +122,11 @@ class EffectsEngine:
         self._target_hue = 0.0  # Target hue for smooth transitions
         self._current_hue = 0.0  # Actual displayed hue
         
+        # Album color palette (from album art)
+        self._album_colors: List[Tuple[int, int, int]] = []
+        self._album_hues: List[float] = []  # Hue values extracted from album colors
+        self._color_index = 0  # Current index in album color palette
+        
         self._movement_triggered = False
         
         # Intensity state
@@ -141,6 +146,12 @@ class EffectsEngine:
         
         # Blackout state
         self._blackout_active = False
+        
+        # Movement state for sweep/continuous modes
+        self._sweep_phase: dict[str, float] = {}  # Current phase in sweep pattern (0-1)
+        self._sweep_direction: dict[str, int] = {}  # 1 or -1 for direction
+        self._last_position_update = 0.0  # Time of last position target update
+        self._wall_corner_index: dict[str, int] = {}  # Which corner/wall the fixture is targeting
     
     def _load_profiles(self) -> None:
         self._profiles.update(FIXTURE_PRESETS)
@@ -154,6 +165,10 @@ class EffectsEngine:
             # Initialize movement targets to center
             self._target_pan[fixture.name] = 128
             self._target_tilt[fixture.name] = 128
+            # Initialize sweep/continuous movement state
+            self._sweep_phase[fixture.name] = 0.0
+            self._sweep_direction[fixture.name] = 1
+            self._wall_corner_index[fixture.name] = 0
     
     def _get_profile(self, fixture: FixtureConfig) -> Optional[FixtureProfile]:
         if fixture.profile_name:
@@ -169,6 +184,9 @@ class EffectsEngine:
                 self._smoothed_values[fixture.name] = FixtureState()
                 self._target_pan[fixture.name] = 128
                 self._target_tilt[fixture.name] = 128
+                self._sweep_phase[fixture.name] = 0.0
+                self._sweep_direction[fixture.name] = 1
+                self._wall_corner_index[fixture.name] = 0
     
     def process(self, data: AnalysisData) -> dict[str, FixtureState]:
         """Process audio data and update fixture states."""
@@ -178,6 +196,17 @@ class EffectsEngine:
             return self._smoothed_values.copy()
         
         self._time = time.time()
+        
+        # Update album colors if they changed
+        if data.album_colors != self._album_colors:
+            self._album_colors = list(data.album_colors)
+            # Convert RGB colors to HSV for easier color manipulation
+            self._album_hues = []
+            for r, g, b in self._album_colors:
+                h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+                if s > 0.2 and v > 0.2:  # Only use saturated, visible colors
+                    self._album_hues.append(h)
+            self._color_index = 0
         
         # Detect beat and bar changes
         beat_triggered = data.estimated_beat != self._last_beat
@@ -267,25 +296,36 @@ class EffectsEngine:
     def _apply_energy_mode(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
         """
         Energy mode: Bass drives intensity, mids drive color, movement on strong beats.
+        When album colors are available, uses those instead of time-based color drift.
         """
         bass = data.features.bass
         mid = data.features.mid
         high = data.features.high
         energy = data.features.energy
         
-        # === COLOR: Based on mids and slow drift ===
-        # Base hue drifts slowly over time (full cycle every ~30 seconds)
-        time_offset = (self._time - self._start_time) * 0.03 * self.config.effects.color_speed
-        self._base_hue = time_offset % 1.0
-        
-        # Mids influence hue offset (higher mids = warmer colors)
-        mid_offset = mid * 0.2  # Up to 0.2 hue shift based on mids
-        
-        # On bar changes, shift color more dramatically
-        if bar_triggered:
-            self._target_hue = (self._base_hue + mid_offset + 0.25) % 1.0
-        else:
+        # === COLOR: Use album colors if available, otherwise drift ===
+        if self._album_hues:
+            # Cycle through album hues on bar changes
+            if bar_triggered:
+                self._color_index = (self._color_index + 1) % len(self._album_hues)
+            
+            # Use album hue as base, with slight mid-frequency influence
+            self._base_hue = self._album_hues[self._color_index]
+            mid_offset = mid * 0.08  # Subtle variation based on mids
             self._target_hue = (self._base_hue + mid_offset) % 1.0
+        else:
+            # Fallback: Base hue drifts slowly over time (full cycle every ~30 seconds)
+            time_offset = (self._time - self._start_time) * 0.03 * self.config.effects.color_speed
+            self._base_hue = time_offset % 1.0
+            
+            # Mids influence hue offset (higher mids = warmer colors)
+            mid_offset = mid * 0.2  # Up to 0.2 hue shift based on mids
+            
+            # On bar changes, shift color more dramatically
+            if bar_triggered:
+                self._target_hue = (self._base_hue + mid_offset + 0.25) % 1.0
+            else:
+                self._target_hue = (self._base_hue + mid_offset) % 1.0
         
         # Smooth transition to target hue
         hue_diff = self._target_hue - self._current_hue
@@ -371,11 +411,16 @@ class EffectsEngine:
     def _apply_beat_pulse_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
         """
         Beat pulse: Flash on beats with color shifts on bars.
+        Uses album colors when available.
         """
-        # Shift color palette every 4 beats (on bar)
         bar_num = data.estimated_bar
-        palette_hues = [0.0, 0.15, 0.55, 0.75, 0.9]  # Red, orange, cyan, purple, magenta
-        base_hue = palette_hues[bar_num % len(palette_hues)]
+        
+        # Use album hues if available, otherwise use default palette
+        if self._album_hues:
+            base_hue = self._album_hues[bar_num % len(self._album_hues)]
+        else:
+            palette_hues = [0.0, 0.15, 0.55, 0.75, 0.9]  # Red, orange, cyan, purple, magenta
+            base_hue = palette_hues[bar_num % len(palette_hues)]
         
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
@@ -397,14 +442,33 @@ class EffectsEngine:
     
     def _apply_color_cycle_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
         """
-        Color cycle: Smooth rainbow progression synced to tempo.
+        Color cycle: Smooth progression synced to tempo.
+        Uses album colors when available, otherwise full rainbow.
         """
-        # Color cycles through spectrum, one full cycle per 8 bars
-        beats_per_cycle = 32  # 8 bars * 4 beats
-        cycle_position = (data.estimated_beat % beats_per_cycle) / beats_per_cycle
-        cycle_position += data.beat_position / beats_per_cycle
-        
-        base_hue = cycle_position
+        if self._album_hues:
+            # Cycle through album colors, one color per bar
+            bar_num = data.estimated_bar
+            current_idx = bar_num % len(self._album_hues)
+            next_idx = (current_idx + 1) % len(self._album_hues)
+            
+            # Interpolate between current and next album hue based on beat position
+            t = data.beat_position
+            current_hue = self._album_hues[current_idx]
+            next_hue = self._album_hues[next_idx]
+            
+            # Handle hue wrap-around for smooth interpolation
+            hue_diff = next_hue - current_hue
+            if hue_diff > 0.5:
+                hue_diff -= 1.0
+            elif hue_diff < -0.5:
+                hue_diff += 1.0
+            base_hue = (current_hue + hue_diff * t) % 1.0
+        else:
+            # Color cycles through spectrum, one full cycle per 8 bars
+            beats_per_cycle = 32  # 8 bars * 4 beats
+            cycle_position = (data.estimated_beat % beats_per_cycle) / beats_per_cycle
+            cycle_position += data.beat_position / beats_per_cycle
+            base_hue = cycle_position
         
         # Brightness based on energy with beat pulse
         energy = data.features.energy
@@ -494,8 +558,11 @@ class EffectsEngine:
             num_to_flash = max(1, len(fixtures) // 3)
             flashing = random.sample(list(fixtures), min(num_to_flash, len(fixtures)))
             flash_names = {f.name for f in flashing}
-            # Random color for this beat
-            flash_hue = random.random()
+            # Use album colors if available, otherwise random
+            if self._album_hues:
+                flash_hue = random.choice(self._album_hues)
+            else:
+                flash_hue = random.random()
         else:
             flash_names = set()
             flash_hue = 0
@@ -517,14 +584,17 @@ class EffectsEngine:
     
     def _apply_movement(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
         """
-        Apply movement to fixtures - but only on musical events, not constantly.
+        Apply movement to fixtures based on the selected movement mode.
         
-        Movement principles:
-        - Pan moves on bar changes (slower, sweeping motion)
-        - Tilt moves on strong beats (bass-driven)
-        - Movement amount based on energy level
-        - P/T speed is fast so fixture can reach position before next move
+        Movement modes:
+        - SUBTLE: Minimal movement, small adjustments on bars only
+        - STANDARD: Moderate movement on beats and bars (original behavior)
+        - DRAMATIC: Full range, aggressive movement utilizing entire pan/tilt range
+        - WALL_WASH: Targets walls/corners, good for closed room effects
+        - SWEEP: Slow continuous sweeping motion, theatrical
+        - RANDOM: Unpredictable positions for variety
         """
+        mode = self.config.effects.movement_mode
         speed = self.config.effects.movement_speed
         bass = data.features.bass
         energy = data.features.energy
@@ -541,60 +611,308 @@ class EffectsEngine:
             
             state = self._states[fixture.name]
             
-            # === PAN: Move on bar changes ===
-            if bar_triggered and has_pan:
-                pan_range = fixture.pan_max - fixture.pan_min
-                pan_center = (fixture.pan_max + fixture.pan_min) / 2
-                
-                # Choose a new pan position based on bar number
-                # Creates a pattern that feels intentional
-                bar_num = data.estimated_bar
-                pan_positions = [0.0, 0.7, 0.3, -0.5, 0.5, -0.7, -0.3, 0.0]
+            # Get fixture's pan/tilt ranges
+            pan_range = fixture.pan_max - fixture.pan_min
+            pan_center = (fixture.pan_max + fixture.pan_min) / 2
+            tilt_range = fixture.tilt_max - fixture.tilt_min
+            tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
+            
+            # Dispatch to the appropriate movement mode handler
+            if mode == MovementMode.SUBTLE:
+                self._apply_subtle_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            elif mode == MovementMode.STANDARD:
+                self._apply_standard_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            elif mode == MovementMode.DRAMATIC:
+                self._apply_dramatic_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            elif mode == MovementMode.WALL_WASH:
+                self._apply_wall_wash_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            elif mode == MovementMode.SWEEP:
+                self._apply_sweep_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            elif mode == MovementMode.RANDOM:
+                self._apply_random_movement(
+                    fixture, state, data, beat_triggered, bar_triggered,
+                    has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                    speed, energy, bass
+                )
+            
+            # Smoothly interpolate toward targets - speed varies by mode
+            self._interpolate_position(fixture, state, mode, speed)
+    
+    def _apply_subtle_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """Minimal movement - small subtle adjustments, mostly stays centered."""
+        # Only move on bar changes, with very small range
+        if bar_triggered:
+            bar_num = data.estimated_bar
+            
+            if has_pan:
+                # Very subtle pan wobble - max 15% of range
+                pan_positions = [0.0, 0.1, -0.05, 0.08, -0.1, 0.05, -0.08, 0.0]
                 pan_factor = pan_positions[bar_num % len(pan_positions)]
-                
-                # Scale by movement speed and energy
-                pan_offset = pan_factor * (pan_range / 2) * speed * (0.5 + energy * 0.5)
+                pan_offset = pan_factor * (pan_range / 2) * speed * 0.3
                 self._target_pan[fixture.name] = int(pan_center + pan_offset)
             
-            # === TILT: Move more frequently based on energy and beats ===
-            # Move on beats when there's decent energy, or every few beats regardless
-            should_tilt = beat_triggered and (
-                energy > 0.25 or  # Any decent energy
-                self._beats_since_move >= 4  # Or at least every 4 beats
-            )
-            
-            if should_tilt and has_tilt:
-                tilt_range = fixture.tilt_max - fixture.tilt_min
-                tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
-                
-                # Alternate between up and down positions with more variety
-                beat_num = data.estimated_beat
-                # More positions for variety, ranging from looking up to looking down
-                tilt_positions = [0.6, -0.4, 0.3, -0.6, 0.5, -0.2, 0.4, -0.5]
-                tilt_factor = tilt_positions[beat_num % len(tilt_positions)]
-                
-                # Scale by energy and bass (bass makes it more dramatic)
-                intensity_scale = 0.5 + bass * 0.5  # 0.5 to 1.0 based on bass
-                tilt_offset = tilt_factor * (tilt_range / 2) * speed * intensity_scale
+            if has_tilt:
+                # Subtle tilt - mostly pointing forward/down
+                tilt_positions = [0.2, 0.3, 0.15, 0.35, 0.25, 0.1, 0.3, 0.2]
+                tilt_factor = tilt_positions[bar_num % len(tilt_positions)]
+                tilt_offset = tilt_factor * (tilt_range / 2) * speed * 0.5
                 self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
-                self._beats_since_move = 0
+    
+    def _apply_standard_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """Standard club mode - moderate movement on beats and bars."""
+        # Pan moves on bar changes
+        if bar_triggered and has_pan:
+            bar_num = data.estimated_bar
+            pan_positions = [0.0, 0.5, 0.2, -0.4, 0.4, -0.5, -0.2, 0.0]
+            pan_factor = pan_positions[bar_num % len(pan_positions)]
+            pan_offset = pan_factor * (pan_range / 2) * speed * (0.5 + energy * 0.5)
+            self._target_pan[fixture.name] = int(pan_center + pan_offset)
+        
+        # Tilt moves on beats when there's energy
+        should_tilt = beat_triggered and (energy > 0.25 or self._beats_since_move >= 4)
+        if should_tilt and has_tilt:
+            beat_num = data.estimated_beat
+            tilt_positions = [0.4, -0.2, 0.2, -0.4, 0.3, -0.1, 0.25, -0.3]
+            tilt_factor = tilt_positions[beat_num % len(tilt_positions)]
+            intensity_scale = 0.5 + bass * 0.5
+            tilt_offset = tilt_factor * (tilt_range / 2) * speed * intensity_scale
+            self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+            self._beats_since_move = 0
+    
+    def _apply_dramatic_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """Full range dramatic movement - uses entire pan/tilt range."""
+        # Pan moves more frequently and to extremes
+        should_pan = bar_triggered or (beat_triggered and energy > 0.5)
+        if should_pan and has_pan:
+            bar_num = data.estimated_bar
+            beat_num = data.estimated_beat
+            # Full range positions
+            pan_positions = [0.0, 0.9, -0.7, 0.5, -0.9, 0.7, -0.5, 0.8]
+            idx = (bar_num * 4 + beat_num) % len(pan_positions)
+            pan_factor = pan_positions[idx]
+            pan_offset = pan_factor * (pan_range / 2) * speed
+            self._target_pan[fixture.name] = int(pan_center + pan_offset)
+        
+        # Tilt moves on every beat with high energy, or every 2 beats otherwise
+        should_tilt = beat_triggered and (energy > 0.3 or self._beats_since_move >= 2)
+        if should_tilt and has_tilt:
+            beat_num = data.estimated_beat
+            # Full range tilt positions - from up to far down
+            tilt_positions = [0.8, -0.6, 0.5, -0.8, 0.9, -0.4, 0.6, -0.7]
+            tilt_factor = tilt_positions[beat_num % len(tilt_positions)]
+            # Extra dramatic on bass hits
+            intensity_scale = 0.7 + bass * 0.3
+            tilt_offset = tilt_factor * (tilt_range / 2) * speed * intensity_scale
+            self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+            self._beats_since_move = 0
+    
+    def _apply_wall_wash_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """
+        Wall wash mode - targets walls and corners for a closed room setup.
+        Lights sweep across walls creating dramatic wash effects.
+        """
+        # Define corner/wall positions as (pan_factor, tilt_factor)
+        # These represent looking at different walls/corners
+        wall_positions = [
+            (-0.9, 0.7),   # Left wall, high
+            (-0.9, 0.3),   # Left wall, mid
+            (-0.5, 0.9),   # Left corner, low
+            (0.0, 0.8),    # Front wall, low
+            (0.0, 0.4),    # Front wall, mid
+            (0.5, 0.9),    # Right corner, low
+            (0.9, 0.3),    # Right wall, mid
+            (0.9, 0.7),    # Right wall, high
+        ]
+        
+        # Change wall target on bar changes or every 2 bars for variety
+        if bar_triggered:
+            # Move to next wall position
+            current_idx = self._wall_corner_index.get(fixture.name, 0)
+            # Add fixture position offset so fixtures don't all point same direction
+            fixture_offset = int(fixture.position * 2) % len(wall_positions)
+            new_idx = (current_idx + 1) % len(wall_positions)
+            self._wall_corner_index[fixture.name] = new_idx
             
-            # === Smoothly move toward targets ===
-            # Pan moves slower (it's usually a bigger movement)
-            current_pan = state.pan
-            target_pan = self._target_pan.get(fixture.name, 128)
-            pan_diff = target_pan - current_pan
-            state.pan = int(current_pan + pan_diff * 0.15)  # Smooth interpolation
+            # Get position with fixture offset
+            actual_idx = (new_idx + fixture_offset) % len(wall_positions)
+            pan_factor, tilt_factor = wall_positions[actual_idx]
             
-            # Tilt can move faster
-            current_tilt = state.tilt
-            target_tilt = self._target_tilt.get(fixture.name, 128)
-            tilt_diff = target_tilt - current_tilt
-            state.tilt = int(current_tilt + tilt_diff * 0.2)
+            if has_pan:
+                pan_offset = pan_factor * (pan_range / 2) * speed
+                self._target_pan[fixture.name] = int(pan_center + pan_offset)
             
-            # P/T speed: fast so fixture can keep up
-            # 0 = fastest for SPEED_PAN_TILT_FAST_SLOW
-            state.pt_speed = int(20 * (1.0 - speed))  # 0-20 range, very fast
+            if has_tilt:
+                # Tilt uses full range to hit walls
+                tilt_offset = tilt_factor * (tilt_range / 2) * speed
+                self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+        
+        # On strong beats, add small "kick" movement toward current wall
+        if beat_triggered and bass > 0.6:
+            if has_tilt:
+                current_tilt = self._target_tilt.get(fixture.name, int(tilt_center))
+                # Push slightly further toward wall on bass
+                kick = int((tilt_range / 2) * 0.1 * bass)
+                self._target_tilt[fixture.name] = min(fixture.tilt_max, current_tilt + kick)
+    
+    def _apply_sweep_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """
+        Slow continuous sweeping motion - theatrical, smooth movement.
+        The fixtures slowly sweep across the space continuously.
+        """
+        # Update sweep phase continuously based on time
+        dt = 0.025  # Approximate frame time at 40fps
+        sweep_rate = 0.03 * speed  # Base sweep rate, modified by speed setting
+        
+        current_phase = self._sweep_phase.get(fixture.name, 0.0)
+        direction = self._sweep_direction.get(fixture.name, 1)
+        
+        # Advance phase
+        current_phase += dt * sweep_rate * direction
+        
+        # Reverse direction at ends
+        if current_phase >= 1.0:
+            current_phase = 1.0
+            direction = -1
+        elif current_phase <= 0.0:
+            current_phase = 0.0
+            direction = 1
+        
+        self._sweep_phase[fixture.name] = current_phase
+        self._sweep_direction[fixture.name] = direction
+        
+        # Use sine wave for smooth motion (ease in/out)
+        smooth_phase = self._ease_in_out_sine(current_phase)
+        
+        # Add fixture position offset for visual interest (fixtures sweep at different phases)
+        fixture_offset = fixture.position * 0.25
+        
+        if has_pan:
+            # Pan sweeps side to side
+            pan_factor = (smooth_phase * 2.0 - 1.0)  # -1 to 1
+            pan_offset = pan_factor * (pan_range / 2) * 0.85  # Use 85% of range
+            self._target_pan[fixture.name] = int(pan_center + pan_offset)
+        
+        if has_tilt:
+            # Tilt follows a slower wave pattern, looking down at walls
+            tilt_phase = (current_phase + fixture_offset) % 1.0
+            tilt_smooth = self._ease_in_out_sine(tilt_phase)
+            # Bias toward tilted down (walls) rather than up
+            tilt_factor = 0.3 + tilt_smooth * 0.5  # Range from 0.3 to 0.8
+            tilt_offset = tilt_factor * (tilt_range / 2)
+            self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+        
+        # Energy can modulate the sweep rate slightly
+        if energy > 0.6:
+            self._sweep_phase[fixture.name] = current_phase + dt * sweep_rate * 0.3
+    
+    def _apply_random_movement(
+        self, fixture, state, data, beat_triggered, bar_triggered,
+        has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+        speed, energy, bass
+    ) -> None:
+        """Random unpredictable movement for variety."""
+        import random
+        
+        # Change position on beats with some randomness
+        should_move = beat_triggered and (random.random() < 0.4 + energy * 0.4)
+        
+        if should_move:
+            if has_pan:
+                # Random pan within configured range
+                pan_factor = random.uniform(-0.9, 0.9)
+                pan_offset = pan_factor * (pan_range / 2) * speed
+                self._target_pan[fixture.name] = int(pan_center + pan_offset)
+            
+            if has_tilt:
+                # Random tilt, biased toward lower positions (walls)
+                tilt_factor = random.uniform(-0.3, 0.9)
+                tilt_offset = tilt_factor * (tilt_range / 2) * speed
+                self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+            
+            self._beats_since_move = 0
+    
+    def _interpolate_position(self, fixture, state, mode: MovementMode, speed: float) -> None:
+        """
+        Smoothly interpolate fixture position toward target.
+        Interpolation speed varies by movement mode for appropriate feel.
+        """
+        # Define interpolation rates for each mode
+        # Lower = smoother/slower movement, higher = snappier/faster
+        interp_rates = {
+            MovementMode.SUBTLE: (0.06, 0.06),      # Very smooth
+            MovementMode.STANDARD: (0.12, 0.15),    # Moderate
+            MovementMode.DRAMATIC: (0.18, 0.22),    # Snappier
+            MovementMode.WALL_WASH: (0.08, 0.10),   # Smooth sweeps
+            MovementMode.SWEEP: (0.05, 0.05),       # Continuous smooth
+            MovementMode.RANDOM: (0.10, 0.12),      # Moderate
+        }
+        
+        pan_rate, tilt_rate = interp_rates.get(mode, (0.12, 0.15))
+        
+        # Apply speed modifier (higher speed = faster interpolation)
+        pan_rate *= (0.5 + speed * 0.5)
+        tilt_rate *= (0.5 + speed * 0.5)
+        
+        # Interpolate pan
+        current_pan = state.pan
+        target_pan = self._target_pan.get(fixture.name, 128)
+        pan_diff = target_pan - current_pan
+        state.pan = int(current_pan + pan_diff * pan_rate)
+        
+        # Interpolate tilt
+        current_tilt = state.tilt
+        target_tilt = self._target_tilt.get(fixture.name, 128)
+        tilt_diff = target_tilt - current_tilt
+        state.tilt = int(current_tilt + tilt_diff * tilt_rate)
+        
+        # Set P/T speed channel appropriately for mode
+        # For continuous modes, we want slower motor speed for smoothness
+        if mode in (MovementMode.SWEEP, MovementMode.SUBTLE):
+            state.pt_speed = int(60 * (1.0 - speed))  # Slower motor
+        elif mode == MovementMode.DRAMATIC:
+            state.pt_speed = int(10 * (1.0 - speed))  # Fast motor
+        else:
+            state.pt_speed = int(30 * (1.0 - speed))  # Moderate
     
     def _apply_smoothing(self) -> None:
         """Apply smoothing to fixture values for smooth transitions."""
@@ -744,7 +1062,14 @@ class EffectsEngine:
         return ch.default_value
     
     def _calculate_dimmer_value(self, state: FixtureState, ch: ChannelConfig) -> int:
-        """Handle combined dimmer/strobe channels (like Muvy WashQ ch6)."""
+        """Handle combined dimmer/strobe channels (like Muvy WashQ ch6).
+        
+        Channel 6 layout for Muvy WashQ:
+        - 0-7: No function (OFF)
+        - 8-134: Dimmer 0-100%
+        - 135-239: Strobe slow to fast
+        - 240-255: Open (100%, no strobe)
+        """
         if not ch.capabilities:
             return state.dimmer
         
@@ -752,6 +1077,7 @@ class EffectsEngine:
         dimmer_cap = None
         strobe_cap = None
         open_cap = None
+        off_cap = None
         
         for cap in ch.capabilities:
             name_lower = cap.name.lower()
@@ -761,20 +1087,31 @@ class EffectsEngine:
                 strobe_cap = cap
             elif "open" in name_lower:
                 open_cap = cap
+            elif "off" in name_lower or "no function" in name_lower:
+                off_cap = cap
         
-        # Strobe active - use strobe range
+        # If dimmer is essentially off (very low), use OFF range to prevent flicker
+        if state.dimmer < 5:
+            if off_cap:
+                return off_cap.min_value  # Return 0 (OFF)
+            return 0
+        
+        # Strobe active - use strobe range (only if explicitly enabled)
         if state.strobe > 0 and strobe_cap:
             strobe_span = strobe_cap.max_value - strobe_cap.min_value
             return strobe_cap.min_value + int((state.strobe / 255.0) * strobe_span)
         
-        # Full brightness - use open range
+        # Full brightness - use open range (100% without strobe)
         if state.dimmer >= 250 and open_cap:
             return open_cap.min_value
         
-        # Normal dimmer
+        # Normal dimmer range
         if dimmer_cap:
+            # Map 5-249 to dimmer range (8-134)
+            # Ensure we never output below 8 (which is where dimmer starts)
+            dimmer_normalized = (state.dimmer - 5) / (249 - 5)  # 0.0 to 1.0
             dimmer_span = dimmer_cap.max_value - dimmer_cap.min_value
-            return dimmer_cap.min_value + int((state.dimmer / 255.0) * dimmer_span)
+            return dimmer_cap.min_value + int(dimmer_normalized * dimmer_span)
         
         return state.dimmer
     

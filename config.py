@@ -121,6 +121,16 @@ class VisualizationMode(str, Enum):
     RANDOM_FLASH = "random_flash"
 
 
+class MovementMode(str, Enum):
+    """Movement modes for pan/tilt fixtures."""
+    SUBTLE = "subtle"  # Minimal movement, small subtle adjustments
+    STANDARD = "standard"  # Standard club/dance floor mode
+    DRAMATIC = "dramatic"  # Full range movement, uses entire pan/tilt range
+    WALL_WASH = "wall_wash"  # Targets walls and corners, sweeping patterns
+    SWEEP = "sweep"  # Slow continuous sweeping motion, theatrical
+    RANDOM = "random"  # Unpredictable movement for variety
+
+
 class FixtureProfile(BaseModel):
     """
     Profile defining a fixture type's channel layout.
@@ -215,6 +225,7 @@ class EffectsConfig(BaseModel):
     strobe_on_drop: bool = Field(default=False)
     movement_enabled: bool = Field(default=True)
     movement_speed: float = Field(default=0.5, ge=0.0, le=1.0)
+    movement_mode: MovementMode = Field(default=MovementMode.STANDARD)
 
 
 class ShowConfig(BaseModel):
@@ -287,36 +298,46 @@ def _create_muvy_washq_profile() -> FixtureProfile:
                 offset=11, 
                 name="Color Macro", 
                 channel_type=ChannelType.COLOR_MACRO, 
-                default_value=0,
+                default_value=0,  # MUST be 0-8 for manual RGB control
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=7, name="Color selection (manual)"),
-                    ChannelCapability(min_value=8, max_value=231, name="Macro color"),
-                    ChannelCapability(min_value=232, max_value=255, name="Color change jumpy"),
+                    ChannelCapability(min_value=0, max_value=8, name="No function (manual RGB)"),
+                    ChannelCapability(min_value=9, max_value=20, name="RGBW"),
+                    ChannelCapability(min_value=21, max_value=34, name="Red"),
+                    ChannelCapability(min_value=35, max_value=49, name="Green"),
+                    ChannelCapability(min_value=50, max_value=63, name="Blue"),
+                    ChannelCapability(min_value=64, max_value=77, name="White"),
+                    ChannelCapability(min_value=78, max_value=91, name="RGB"),
+                    ChannelCapability(min_value=92, max_value=105, name="RB"),
+                    ChannelCapability(min_value=106, max_value=119, name="RG"),
+                    ChannelCapability(min_value=120, max_value=133, name="RGBW"),
+                    ChannelCapability(min_value=134, max_value=147, name="RG"),
+                    ChannelCapability(min_value=148, max_value=161, name="RGB"),
+                    ChannelCapability(min_value=162, max_value=189, name="RGBW"),
+                    ChannelCapability(min_value=190, max_value=201, name="RBW"),
+                    ChannelCapability(min_value=202, max_value=217, name="Warm White (RGBW Mix)"),
+                    ChannelCapability(min_value=218, max_value=232, name="Cool White (RGBW Mix)"),
+                    ChannelCapability(min_value=233, max_value=255, name="Macro Color (speed via Ch12)"),
                 ]
             ),
             ChannelConfig(offset=12, name="Color Speed", channel_type=ChannelType.EFFECT_SPEED, default_value=0),
             ChannelConfig(
                 offset=13, 
-                name="Effect Mode", 
+                name="Macro P/T/M", 
                 channel_type=ChannelType.EFFECT, 
-                default_value=0,
+                default_value=0,  # 0 = manual control, no auto patterns
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=7, name="Manual operation"),
-                    ChannelCapability(min_value=8, max_value=63, name="Auto fast"),
-                    ChannelCapability(min_value=64, max_value=127, name="Auto slow"),
-                    ChannelCapability(min_value=128, max_value=191, name="Music control 1"),
-                    ChannelCapability(min_value=192, max_value=255, name="Music control 2"),
+                    ChannelCapability(min_value=0, max_value=0, name="Manual operation"),
+                    ChannelCapability(min_value=1, max_value=255, name="Movement patterns and color change"),
                 ]
             ),
             ChannelConfig(
                 offset=14, 
                 name="Reset", 
                 channel_type=ChannelType.MAINTENANCE, 
-                default_value=0,
+                default_value=0,  # MUST stay 0 to avoid accidental reset
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=149, name="No function"),
-                    ChannelCapability(min_value=150, max_value=200, name="Reset"),
-                    ChannelCapability(min_value=201, max_value=255, name="No function"),
+                    ChannelCapability(min_value=0, max_value=249, name="No function"),
+                    ChannelCapability(min_value=250, max_value=255, name="Reset (hold 3+ sec)"),
                 ]
             ),
         ],
