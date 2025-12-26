@@ -85,11 +85,22 @@ class SerialDMXInterface(DMXInterface):
     3. send_break() function (last resort - timing is platform-dependent)
     """
     
-    def __init__(self, port: str = ""):
+    def __init__(self, port: str = "", force_break_method: str = ""):
+        """
+        Initialize the DMX interface.
+        
+        Args:
+            port: Serial port name (e.g., "COM7" or "/dev/ttyUSB0")
+            force_break_method: Force a specific break method:
+                - "baudrate_switch": Use baudrate switching (most reliable)
+                - "break_condition": Use break_condition property
+                - "": Auto-detect (default)
+        """
         self.port = port
         self._serial: Optional[serial.Serial] = None
         self._lock = threading.Lock()
-        self._break_method = "baudrate_switch"  # Default to most reliable method
+        self._break_method = force_break_method or "baudrate_switch"
+        self._force_break_method = force_break_method
         self._send_count = 0
         self._error_count = 0
         self._last_error = None
@@ -227,26 +238,15 @@ class SerialDMXInterface(DMXInterface):
         if not self._serial:
             return
         
-        # On Windows, prefer baudrate switching as it's more reliable with FTDI VCP
-        if sys.platform == 'win32':
-            self._break_method = "baudrate_switch"
-            logger.info("Windows detected - using baudrate switching for DMX break")
+        # If a method was forced, use it
+        if self._force_break_method:
+            logger.info(f"Using forced break method: {self._force_break_method}")
             return
         
-        # On Linux/Mac, try break_condition first as it's more precise
-        try:
-            self._serial.break_condition = True
-            time.sleep(0.0001)
-            self._serial.break_condition = False
-            self._break_method = "break_condition"
-            logger.info("Using break_condition property for DMX break")
-            return
-        except (AttributeError, serial.SerialException, IOError, OSError) as e:
-            logger.debug(f"break_condition not supported: {e}")
-        
-        # Fallback to baudrate switching
+        # Default to baudrate_switch - most reliable across platforms
+        # The break_condition property often doesn't work on Windows FTDI VCP
         self._break_method = "baudrate_switch"
-        logger.info("Using baudrate switching for DMX break (fallback)")
+        logger.info("Using baudrate switching for DMX break (most reliable)")
     
     def _detect_port(self) -> str:
         """Auto-detect serial DMX device."""
@@ -318,30 +318,41 @@ class SerialDMXInterface(DMXInterface):
         all platforms. At a lower baudrate, sending a zero byte creates
         a longer "low" period that serves as the DMX break.
         
-        At 76800 baud (non-standard but divisible from FTDI's clock):
-        - Each bit is ~13μs
-        - A zero byte (start bit + 8 zero bits + stop bits) = ~130μs LOW
-        - This exceeds the 88μs minimum break requirement
+        DMX512 requires:
+        - Break: minimum 88μs (we target ~200μs for reliability)
+        - Mark After Break (MAB): minimum 8μs (we target 12μs)
         
-        At 57600 baud:
-        - Each bit is ~17.36μs
-        - A zero byte = ~173μs LOW
+        Method: Send 0x00 at a low baudrate
+        - The start bit + 8 zero data bits = 9 consecutive LOW bits
+        - At 50000 baud: each bit = 20μs, so 9 bits = 180μs break
+        - At 45450 baud: each bit = 22μs, so 9 bits = 198μs break
+        
+        We use a baudrate that FTDI chips can generate accurately.
+        Common FTDI divisors work well with 50000 baud.
         """
         try:
             # Flush any pending data first
             self._serial.reset_output_buffer()
             
             # Switch to lower baudrate for break signal
-            # Using 76800 gives us ~130μs break which meets DMX spec
-            self._serial.baudrate = 76800
+            # 50000 baud gives us ~180μs break (9 bits * 20μs)
+            self._serial.baudrate = 50000
             self._serial.write(b'\x00')
             self._serial.flush()
+            
+            # IMPORTANT: Wait for the byte to actually transmit through FTDI
+            # At 50000 baud, one byte (11 bits with 8N2) takes ~220μs
+            # Add extra margin for USB latency
+            time.sleep(0.001)  # 1ms to ensure complete transmission
             
             # Switch back to DMX baudrate
             self._serial.baudrate = 250000
             
-            # Small delay for Mark After Break
-            time.sleep(DMX_MAB_SECONDS)
+            # Mark After Break - need a brief HIGH period
+            # The stop bits from our break byte provide some of this
+            # But we add a small delay to ensure receivers sync properly
+            time.sleep(0.00002)  # 20μs MAB (spec minimum is 8μs)
+            
             return True
             
         except Exception as e:
