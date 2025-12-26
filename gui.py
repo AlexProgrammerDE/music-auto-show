@@ -68,6 +68,66 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
     
+    def _get_last_used_channel(self) -> int:
+        """Calculate the last DMX channel used by any fixture."""
+        if not self.config.fixtures:
+            return 0
+        
+        last_channel = 0
+        for fixture in self.config.fixtures:
+            profile = self.config.get_profile(fixture.profile_name) if fixture.profile_name else None
+            channels = fixture.get_channels(profile)
+            
+            if channels:
+                max_offset = max(ch.offset for ch in channels)
+                fixture_end = fixture.start_channel + max_offset - 1
+            else:
+                fixture_end = fixture.start_channel
+            
+            last_channel = max(last_channel, fixture_end)
+        
+        return last_channel
+    
+    def _refresh_dmx_universe_display(self) -> None:
+        """Refresh the DMX universe channel display based on configured fixtures."""
+        if not dpg.does_item_exist("dmx_universe_container"):
+            return
+        
+        dpg.delete_item("dmx_universe_container", children_only=True)
+        
+        last_channel = self._get_last_used_channel()
+        
+        if last_channel == 0:
+            dpg.add_text("Add fixtures to see DMX channels", 
+                        parent="dmx_universe_container", color=(100, 100, 120))
+            return
+        
+        # Build a map of which fixture uses which channel for coloring
+        channel_info: dict[int, tuple[str, str]] = {}  # channel -> (fixture_name, channel_name)
+        for fixture in self.config.fixtures:
+            profile = self.config.get_profile(fixture.profile_name) if fixture.profile_name else None
+            channels = fixture.get_channels(profile)
+            for ch in channels:
+                dmx_ch = fixture.start_channel + ch.offset - 1
+                channel_info[dmx_ch] = (fixture.name, ch.name)
+        
+        # Create channel display
+        with dpg.group(horizontal=True, parent="dmx_universe_container", tag="dmx_channels"):
+            for i in range(1, last_channel + 1):
+                with dpg.group():
+                    # Color the channel number based on whether it's used
+                    if i in channel_info:
+                        color = (100, 200, 100)  # Green for used channels
+                    else:
+                        color = (150, 150, 150)  # Gray for unused
+                    dpg.add_text(f"{i}", color=color)
+                    dpg.add_progress_bar(tag=f"dmx_ch_{i}", default_value=0.0, width=20)
+        
+        # Add legend
+        dpg.add_spacer(height=5, parent="dmx_universe_container")
+        dpg.add_text(f"Channels 1-{last_channel} ({last_channel} total)", 
+                    parent="dmx_universe_container", color=(120, 120, 150))
+    
     def run(self) -> None:
         if not DEARPYGUI_AVAILABLE:
             print("Dear PyGui not available. Install with: pip install dearpygui")
@@ -269,12 +329,8 @@ class MusicAutoShowGUI:
         dpg.add_spacer(height=10)
         
         with dpg.collapsing_header(label="DMX Universe", default_open=False):
-            with dpg.child_window(height=100, border=True, horizontal_scrollbar=True):
-                with dpg.group(horizontal=True, tag="dmx_channels"):
-                    for i in range(1, 33):
-                        with dpg.group():
-                            dpg.add_text(f"{i}", color=(150, 150, 150))
-                            dpg.add_progress_bar(tag=f"ch_{i}", default_value=0.0, width=20)
+            with dpg.child_window(height=120, border=True, horizontal_scrollbar=True, tag="dmx_universe_container"):
+                dpg.add_text("Add fixtures to see DMX channels", tag="dmx_no_fixtures_text", color=(100, 100, 120))
     
     def _refresh_fixture_list(self) -> None:
         if self._fixture_list_id:
@@ -289,6 +345,9 @@ class MusicAutoShowGUI:
                         callback=self._on_fixture_selected,
                         user_data=fixture
                     )
+        
+        # Also refresh DMX universe display when fixtures change
+        self._refresh_dmx_universe_display()
     
     def _add_fixture_dialog(self) -> None:
         """Show the add fixture dialog."""
@@ -537,9 +596,10 @@ class MusicAutoShowGUI:
         
         if self.dmx_controller:
             channels = self.dmx_controller.get_all_channels()
-            for i in range(min(32, len(channels))):
-                if dpg.does_item_exist(f"ch_{i+1}"):
-                    dpg.set_value(f"ch_{i+1}", channels[i] / 255.0)
+            last_channel = self._get_last_used_channel()
+            for i in range(min(last_channel, len(channels))):
+                if dpg.does_item_exist(f"dmx_ch_{i+1}"):
+                    dpg.set_value(f"dmx_ch_{i+1}", channels[i] / 255.0)
         
         # Draw the stage visualizer
         self._stage_visualizer.draw(
