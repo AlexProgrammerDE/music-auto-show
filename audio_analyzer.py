@@ -167,6 +167,11 @@ class AudioAnalyzer:
             except Exception:
                 pass
         
+        # Current track info (updated by analysis loop)
+        self._track_name = "System Audio"
+        self._artist_name = ""
+        self._is_playing = True
+        
         # Energy smoothing
         self._energy_history = deque(maxlen=10)
         self._bass_history = deque(maxlen=5)
@@ -603,6 +608,11 @@ class AudioAnalyzer:
                 except Exception:
                     pass
             
+            # Store track info for get_data() access
+            self._track_name = track_name
+            self._artist_name = artist_name
+            self._is_playing = media_is_playing
+            
             # Get current data
             with self._lock:
                 data = AnalysisData(
@@ -664,7 +674,10 @@ class AudioAnalyzer:
                 bar_position=self._data.bar_position,
                 section_intensity=self._data.section_intensity,
                 estimated_beat=self._data.estimated_beat,
-                estimated_bar=self._data.estimated_bar
+                estimated_bar=self._data.estimated_bar,
+                track_name=self._track_name,
+                artist_name=self._artist_name,
+                is_playing=self._is_playing
             )
 
 

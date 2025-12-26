@@ -144,15 +144,32 @@ class _WindowsMediaBackend(_MediaInfoBackend):
     
     def __init__(self):
         # Import here to avoid errors on other platforms
-        # Using winrt-Windows.Media.Control package (pre-built wheels)
-        from winrt.windows.media.control import (
-            GlobalSystemMediaTransportControlsSessionManager,
-            GlobalSystemMediaTransportControlsSessionPlaybackStatus,
-        )
-        self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
-        self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+        # Try different import patterns for winrt
+        self._SessionManager = None
+        self._PlaybackStatus = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_error: str = ""
+        
+        # Try the new winrt package structure first
+        try:
+            from winrt.windows.media.control import (
+                GlobalSystemMediaTransportControlsSessionManager,
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+            )
+            self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
+            self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+        except ImportError:
+            # Try alternative import for older winrt versions
+            try:
+                from winsdk.windows.media.control import (
+                    GlobalSystemMediaTransportControlsSessionManager,
+                    GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+                )
+                self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
+                self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+            except ImportError as e:
+                self._last_error = f"winrt import failed: {e}"
+                raise ImportError(f"Neither winrt nor winsdk available: {e}")
     
     def _get_or_create_loop(self) -> asyncio.AbstractEventLoop:
         """Get or create an event loop for this thread."""
@@ -169,6 +186,8 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             return loop
     
     def get_media_info(self) -> MediaInfo:
+        if not self._SessionManager:
+            return MediaInfo()
         try:
             loop = self._get_or_create_loop()
             return loop.run_until_complete(self._get_media_info_async())

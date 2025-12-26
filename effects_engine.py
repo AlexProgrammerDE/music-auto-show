@@ -556,21 +556,26 @@ class EffectsEngine:
                 pan_offset = pan_factor * (pan_range / 2) * speed * (0.5 + energy * 0.5)
                 self._target_pan[fixture.name] = int(pan_center + pan_offset)
             
-            # === TILT: Move on bass-heavy beats (every 2-4 beats) ===
-            # Only move if we have enough bass and enough beats have passed
-            should_tilt = beat_triggered and bass > 0.4 and self._beats_since_move >= 2
+            # === TILT: Move more frequently based on energy and beats ===
+            # Move on beats when there's decent energy, or every few beats regardless
+            should_tilt = beat_triggered and (
+                energy > 0.25 or  # Any decent energy
+                self._beats_since_move >= 4  # Or at least every 4 beats
+            )
             
             if should_tilt and has_tilt:
                 tilt_range = fixture.tilt_max - fixture.tilt_min
                 tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
                 
-                # Alternate between up and down positions
+                # Alternate between up and down positions with more variety
                 beat_num = data.estimated_beat
-                tilt_positions = [0.4, -0.3, 0.5, -0.4, 0.3, -0.5]
+                # More positions for variety, ranging from looking up to looking down
+                tilt_positions = [0.6, -0.4, 0.3, -0.6, 0.5, -0.2, 0.4, -0.5]
                 tilt_factor = tilt_positions[beat_num % len(tilt_positions)]
                 
-                # Scale by bass intensity
-                tilt_offset = tilt_factor * (tilt_range / 2) * speed * bass
+                # Scale by energy and bass (bass makes it more dramatic)
+                intensity_scale = 0.5 + bass * 0.5  # 0.5 to 1.0 based on bass
+                tilt_offset = tilt_factor * (tilt_range / 2) * speed * intensity_scale
                 self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
                 self._beats_since_move = 0
             
