@@ -18,6 +18,7 @@ Dynamic show modes (more visual impact):
 - FAN: Fixtures fan in/out from center point - dramatic reveals
 - CHASE: Sequential position chase - beams "chase" across fixtures
 - STROBE_POSITION: Fast snappy beat-synced position jumps - aggressive
+- CRAZY: Wild full-range movement - showcases entire 0-255 pan/tilt capability
 """
 import random
 from typing import TYPE_CHECKING
@@ -50,6 +51,7 @@ def apply_movement(engine: "EffectsEngine", data: "AnalysisData",
     - FAN: Fixtures fan in/out from center point
     - CHASE: Sequential position chase across fixtures
     - STROBE_POSITION: Fast snappy beat-synced position jumps
+    - CRAZY: Wild full-range movement showcasing entire pan/tilt capability
     """
     from config import ChannelType
     
@@ -146,6 +148,12 @@ def apply_movement(engine: "EffectsEngine", data: "AnalysisData",
             )
         elif mode == MovementMode.STROBE_POSITION:
             _apply_strobe_position_movement(
+                engine, fixture, state, data, beat_triggered, bar_triggered,
+                has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
+                speed, energy, bass
+            )
+        elif mode == MovementMode.CRAZY:
+            _apply_crazy_movement(
                 engine, fixture, state, data, beat_triggered, bar_triggered,
                 has_pan, has_tilt, pan_range, pan_center, tilt_range, tilt_center,
                 speed, energy, bass
@@ -705,6 +713,122 @@ def _apply_strobe_position_movement(
         engine._beats_since_move = 0
 
 
+def _apply_crazy_movement(
+    engine: "EffectsEngine", fixture: "FixtureConfig", state: "FixtureState",
+    data: "AnalysisData", beat_triggered: bool, bar_triggered: bool,
+    has_pan: bool, has_tilt: bool, pan_range: float, pan_center: float,
+    tilt_range: float, tilt_center: float, speed: float, energy: float, bass: float
+) -> None:
+    """
+    CRAZY mode - wild full-range movement showcasing the entire pan/tilt capability.
+    
+    This is the most extreme movement mode - rapid, large movements across
+    the full 0-255 range for both pan and tilt. Perfect for high-energy drops,
+    showcasing fixtures, or creating absolute chaos. Still synced to music
+    with beat-reactive direction changes and energy-modulated speed.
+    
+    Features:
+    - Full 0-255 range utilization for both pan and tilt
+    - Multiple overlapping oscillation patterns (Lissajous-like)
+    - Beat-synced direction reversals and position jumps
+    - Energy-driven speed modulation
+    - Per-fixture phase offset for varied patterns
+    - Random chaos injection on strong beats
+    """
+    import math
+    
+    dt = 0.025  # ~40fps frame time
+    
+    # Base oscillation rates - intentionally using non-harmonic ratios
+    # for complex Lissajous-like patterns
+    base_pan_rate = 0.18 * speed   # Fast pan oscillation
+    base_tilt_rate = 0.23 * speed  # Slightly different tilt rate for complexity
+    
+    # Energy dramatically increases speed - go wild!
+    energy_boost = 0.5 + energy * 1.5  # Up to 2x speed at full energy
+    pan_rate = base_pan_rate * energy_boost
+    tilt_rate = base_tilt_rate * energy_boost
+    
+    # Get/update phases for this fixture
+    # We use sweep_phase for pan, and a separate stored value for tilt
+    pan_phase = engine._sweep_phase.get(fixture.name, random.random() * math.pi * 2)
+    tilt_phase = engine._sweep_direction.get(fixture.name, random.random() * math.pi * 2)
+    
+    # Ensure tilt_phase is a float (not direction indicator)
+    if not isinstance(tilt_phase, float) or abs(tilt_phase) <= 1.0:
+        tilt_phase = random.random() * math.pi * 2
+    
+    # Advance phases
+    pan_phase += dt * pan_rate * math.pi * 2
+    tilt_phase += dt * tilt_rate * math.pi * 2
+    
+    # Wrap phases
+    if pan_phase > math.pi * 2:
+        pan_phase -= math.pi * 2
+    if tilt_phase > math.pi * 2:
+        tilt_phase -= math.pi * 2
+    
+    # Per-fixture offset creates varied patterns across fixtures
+    fixture_offset = fixture.position * (math.pi * 0.7)  # ~126 degrees offset
+    
+    # On beats, add chaos:
+    # - Reverse one or both directions
+    # - Jump to random phase
+    # - Add extra phase boost
+    if beat_triggered:
+        chaos_roll = random.random()
+        
+        if bass > 0.7 and chaos_roll < 0.4:
+            # Strong bass hit - reverse pan direction
+            pan_phase = math.pi * 2 - pan_phase
+        
+        if energy > 0.6 and chaos_roll < 0.5:
+            # High energy - big phase jump
+            pan_phase += random.uniform(0.5, 1.5)
+            tilt_phase += random.uniform(0.3, 1.0)
+        
+        if chaos_roll < 0.25:
+            # Random chaos - jump to completely new position
+            pan_phase = random.random() * math.pi * 2
+            tilt_phase = random.random() * math.pi * 2
+    
+    # On bar changes, potentially swap movement patterns
+    if bar_triggered:
+        if random.random() < 0.3:
+            # Sometimes reverse tilt direction on bars
+            tilt_phase = math.pi * 2 - tilt_phase
+    
+    # Store updated phases
+    engine._sweep_phase[fixture.name] = pan_phase
+    engine._sweep_direction[fixture.name] = tilt_phase
+    
+    # Calculate pan position using compound sine waves for complexity
+    # Main wave + harmonic for more interesting motion
+    pan_main = math.sin(pan_phase + fixture_offset)
+    pan_harmonic = math.sin(pan_phase * 2.7 + fixture_offset) * 0.3
+    pan_factor = (pan_main + pan_harmonic) / 1.3  # Normalize to roughly -1 to 1
+    
+    # Use FULL range - from fixture min to max (not centered)
+    if has_pan:
+        # Map -1..1 to 0..255 (or fixture.pan_min..pan_max)
+        pan_normalized = (pan_factor + 1.0) / 2.0  # 0 to 1
+        target_pan = int(fixture.pan_min + pan_normalized * pan_range)
+        engine._target_pan[fixture.name] = max(fixture.pan_min, min(fixture.pan_max, target_pan))
+    
+    # Calculate tilt with different compound pattern
+    tilt_main = math.sin(tilt_phase + fixture_offset * 0.5)
+    tilt_harmonic = math.cos(tilt_phase * 1.9) * 0.4  # Cosine for offset pattern
+    tilt_factor = (tilt_main + tilt_harmonic) / 1.4  # Normalize
+    
+    if has_tilt:
+        # Map -1..1 to 0..255 (full range)
+        tilt_normalized = (tilt_factor + 1.0) / 2.0  # 0 to 1
+        target_tilt = int(fixture.tilt_min + tilt_normalized * tilt_range)
+        engine._target_tilt[fixture.name] = max(fixture.tilt_min, min(fixture.tilt_max, target_tilt))
+    
+    engine._beats_since_move = 0
+
+
 def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig", 
                           state: "FixtureState", mode: MovementMode, speed: float) -> None:
     """
@@ -727,6 +851,7 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
         MovementMode.FAN: (0.10, 0.12),         # Smooth fan in/out
         MovementMode.CHASE: (0.20, 0.22),       # Snappy chase effect
         MovementMode.STROBE_POSITION: (0.45, 0.45),  # Very fast/snappy jumps
+        MovementMode.CRAZY: (0.55, 0.55),             # Maximum speed - wild movements
     }
     
     pan_rate, tilt_rate = interp_rates.get(mode, (0.12, 0.15))
@@ -751,7 +876,7 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     # For continuous modes, we want slower motor speed for smoothness
     if mode in (MovementMode.SWEEP, MovementMode.SUBTLE, MovementMode.FIGURE_8):
         state.pt_speed = int(60 * (1.0 - speed))  # Slower motor
-    elif mode in (MovementMode.DRAMATIC, MovementMode.STROBE_POSITION, MovementMode.BALLYHOO):
+    elif mode in (MovementMode.DRAMATIC, MovementMode.STROBE_POSITION, MovementMode.BALLYHOO, MovementMode.CRAZY):
         state.pt_speed = int(10 * (1.0 - speed))  # Fast motor
     elif mode in (MovementMode.CIRCLE, MovementMode.CHASE):
         state.pt_speed = int(20 * (1.0 - speed))  # Moderately fast motor

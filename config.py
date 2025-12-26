@@ -143,6 +143,7 @@ class MovementMode(str, Enum):
     FAN = "fan"  # Fixtures fan in/out from center point - dramatic reveals
     CHASE = "chase"  # Sequential position chase - beams "chase" across fixtures
     STROBE_POSITION = "strobe_position"  # Fast snappy beat-synced position jumps
+    CRAZY = "crazy"  # Wild full-range movement - showcases entire pan/tilt capability
 
 
 class FixtureProfile(BaseModel):
