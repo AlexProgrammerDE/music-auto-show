@@ -677,11 +677,39 @@ class MusicAutoShowGUI:
             self.effects_engine.blackout()
     
     def _update_loop(self) -> None:
+        frame_count = 0
+        last_debug_time = time.time()
+        
         while self._running:
             if self.effects_engine and self.audio_analyzer:
                 data = self.audio_analyzer.get_data()
                 self._current_analysis = data
                 self._fixture_states = self.effects_engine.process(data)
+                frame_count += 1
+                
+                # Debug logging every 5 seconds
+                now = time.time()
+                if now - last_debug_time >= 5.0:
+                    # Log audio analysis
+                    logger.info(f"Audio: energy={data.features.energy:.2f}, bass={data.features.bass:.2f}, "
+                               f"tempo={data.features.tempo:.0f} BPM")
+                    
+                    # Log fixture states
+                    for name, state in self._fixture_states.items():
+                        logger.info(f"  Fixture '{name}': R={state.red} G={state.green} B={state.blue} "
+                                   f"Dimmer={state.dimmer}")
+                    
+                    # Log actual DMX channel values
+                    if self.dmx_controller:
+                        channels = self.dmx_controller.get_all_channels()
+                        non_zero = [(i+1, v) for i, v in enumerate(channels[:32]) if v > 0]
+                        if non_zero:
+                            logger.info(f"  DMX channels (1-32): {non_zero}")
+                        else:
+                            logger.info(f"  DMX channels 1-32: ALL ZERO")
+                    
+                    last_debug_time = now
+                
                 try:
                     self._update_gui(data)
                 except Exception:
