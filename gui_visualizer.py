@@ -10,8 +10,10 @@ try:
 except ImportError:
     DEARPYGUI_AVAILABLE = False
 
+from config import FixtureType
+
 if TYPE_CHECKING:
-    from config import ShowConfig, FixtureConfig
+    from config import ShowConfig, FixtureConfig, FixtureProfile
     from effects_engine import FixtureState
     from audio_analyzer import AnalysisData
 
@@ -34,6 +36,24 @@ class StageVisualizer:
         self.visualizer_id = visualizer_id
         self.width = width
         self.height = height
+        self._profiles_cache: dict[str, 'FixtureProfile'] = {}
+    
+    def _get_fixture_type(self, fixture: 'FixtureConfig') -> FixtureType:
+        """Get the fixture type for a fixture."""
+        from config import get_preset, FIXTURE_PRESETS
+        
+        if fixture.profile_name:
+            # Check cache first
+            if fixture.profile_name in self._profiles_cache:
+                return self._profiles_cache[fixture.profile_name].fixture_type
+            
+            # Look up profile
+            profile = get_preset(fixture.profile_name)
+            if profile:
+                self._profiles_cache[fixture.profile_name] = profile
+                return profile.fixture_type
+        
+        return FixtureType.OTHER
     
     def draw(self, 
              fixtures: list['FixtureConfig'],
@@ -106,6 +126,7 @@ class StageVisualizer:
         # Draw beams first (so they're behind fixtures)
         for i, fixture in enumerate(sorted_fixtures):
             state = fixture_states.get(fixture.name, FixtureState())
+            fixture_type = self._get_fixture_type(fixture)
             
             if num_fixtures > 1:
                 fixture_x = margin + i * spacing
@@ -113,11 +134,16 @@ class StageVisualizer:
                 fixture_x = self.width / 2
             fixture_y = truss_y + truss_height + 5
             
-            self._draw_beam(fixture_x, fixture_y, state)
+            # Draw different effects based on fixture type
+            if fixture_type == FixtureType.EFFECT:
+                self._draw_effect_light_beams(fixture_x, fixture_y, state)
+            else:
+                self._draw_beam(fixture_x, fixture_y, state)
         
         # Draw fixtures on top of beams
         for i, fixture in enumerate(sorted_fixtures):
             state = fixture_states.get(fixture.name, FixtureState())
+            fixture_type = self._get_fixture_type(fixture)
             
             if num_fixtures > 1:
                 fixture_x = margin + i * spacing
@@ -125,7 +151,11 @@ class StageVisualizer:
                 fixture_x = self.width / 2
             fixture_y = truss_y + truss_height + 5
             
-            self._draw_fixture(fixture_x, fixture_y, fixture, state, truss_y, truss_height)
+            # Draw different fixture bodies based on type
+            if fixture_type == FixtureType.EFFECT:
+                self._draw_effect_light_fixture(fixture_x, fixture_y, fixture, state, truss_y, truss_height)
+            else:
+                self._draw_fixture(fixture_x, fixture_y, fixture, state, truss_y, truss_height)
         
         # Draw audio visualization bar at bottom
         if current_analysis:
@@ -245,6 +275,207 @@ class StageVisualizer:
             (fixture_x - 15, label_y + 14), f"Ch {fixture.start_channel}",
             size=10, color=(100, 100, 120), parent=self.visualizer_id
         )
+    
+    def _draw_effect_light_beams(self, fixture_x: float, fixture_y: float, state: 'FixtureState') -> None:
+        """Draw scattered beams from an effect light (Derby, Moonflower, etc.)."""
+        import math
+        import time
+        
+        # Effect lights create multiple scattered beams
+        # The color_macro and effect values control the pattern
+        
+        # Determine color from color_macro value (Techno Derby mapping)
+        color = self._color_macro_to_rgb(state.color_macro)
+        r, g, b = color
+        
+        # Check if there's any output
+        brightness = (r + g + b) / 3
+        if brightness < 10:
+            return
+        
+        # Calculate rotation based on effect value (Channel 3: rotation speed)
+        # state.effect: 0=off, 1-127=manual, 128-255=auto speed
+        rotation_offset = 0.0
+        if state.effect >= 128:
+            # Auto rotation - use time for animation
+            rotation_speed = (state.effect - 128) / 127.0  # 0 to 1
+            rotation_offset = (time.time() * rotation_speed * 2) % (2 * math.pi)
+        elif state.effect > 0:
+            # Manual rotation position
+            rotation_offset = (state.effect / 127.0) * 2 * math.pi
+        
+        # Draw 4-6 scattered beams (Derby style)
+        num_beams = 5
+        beam_length = 180
+        
+        for i in range(num_beams):
+            # Each beam at a different angle
+            base_angle = (i / num_beams) * 2 * math.pi
+            angle = base_angle + rotation_offset
+            
+            # Vary beam properties
+            beam_spread = 25 + (i % 3) * 10
+            length_var = beam_length + (i % 2) * 30
+            
+            # Calculate beam end position
+            # Beams go downward and outward
+            end_x = fixture_x + math.sin(angle) * 120
+            end_y = fixture_y + 50 + length_var + abs(math.cos(angle)) * 50
+            
+            # Alpha based on strobe (if strobe is active, flash the beams)
+            alpha = min(150, int(brightness * 0.6))
+            if state.strobe > 5:
+                # Strobe effect - blink based on time
+                strobe_freq = state.strobe / 50.0
+                if int(time.time() * strobe_freq * 10) % 2 == 0:
+                    alpha = min(200, alpha + 50)
+                else:
+                    alpha = alpha // 2
+            
+            beam_color = (r, g, b, alpha)
+            
+            # Draw beam as narrow cone
+            dpg.draw_quad(
+                (fixture_x - 5, fixture_y + 50),  # Top left
+                (fixture_x + 5, fixture_y + 50),  # Top right  
+                (end_x + beam_spread / 2, end_y),  # Bottom right
+                (end_x - beam_spread / 2, end_y),  # Bottom left
+                fill=beam_color, parent=self.visualizer_id
+            )
+        
+        # Draw floor spots where beams hit
+        for i in range(num_beams):
+            base_angle = (i / num_beams) * 2 * math.pi
+            angle = base_angle + rotation_offset
+            
+            spot_x = fixture_x + math.sin(angle) * 100
+            spot_y = self.height - 60 + abs(math.cos(angle)) * 30
+            spot_size = 20 + (i % 3) * 8
+            
+            spot_alpha = min(80, int(brightness * 0.3))
+            spot_color = (r, g, b, spot_alpha)
+            
+            dpg.draw_ellipse(
+                (spot_x - spot_size, spot_y - spot_size / 3),
+                (spot_x + spot_size, spot_y + spot_size / 3),
+                fill=spot_color, parent=self.visualizer_id
+            )
+    
+    def _draw_effect_light_fixture(self, fixture_x: float, fixture_y: float,
+                                    fixture: 'FixtureConfig', state: 'FixtureState',
+                                    truss_y: int, truss_height: int) -> None:
+        """Draw an effect light fixture body (Derby, Moonflower style)."""
+        # Draw fixture mount
+        dpg.draw_rectangle(
+            (fixture_x - 4, truss_y + truss_height - 2),
+            (fixture_x + 4, fixture_y + 10),
+            fill=(60, 60, 65), parent=self.visualizer_id
+        )
+        
+        # Effect light body - wider and shorter than moving head
+        body_color = (55, 55, 65)
+        dpg.draw_rectangle(
+            (fixture_x - 18, fixture_y + 8),
+            (fixture_x + 18, fixture_y + 48),
+            fill=body_color, color=(75, 75, 85), thickness=1, rounding=5, parent=self.visualizer_id
+        )
+        
+        # Dome/lens area - characteristic of derby lights
+        color = self._color_macro_to_rgb(state.color_macro)
+        r, g, b = color
+        brightness = (r + g + b) / 3
+        
+        # Glowing dome
+        if brightness > 10:
+            glow_color = (min(255, r + 30), min(255, g + 30), min(255, b + 30), 180)
+            dpg.draw_ellipse(
+                (fixture_x - 14, fixture_y + 18),
+                (fixture_x + 14, fixture_y + 44),
+                fill=glow_color, parent=self.visualizer_id
+            )
+        
+        # Inner lens/mirror
+        lens_color = (r, g, b, 255) if brightness > 0 else (25, 25, 30, 255)
+        dpg.draw_ellipse(
+            (fixture_x - 10, fixture_y + 22),
+            (fixture_x + 10, fixture_y + 40),
+            fill=lens_color, color=(90, 90, 100), thickness=1, parent=self.visualizer_id
+        )
+        
+        # Small indicator dots (like the multiple lenses on a derby)
+        dot_positions = [(-6, 26), (6, 26), (-6, 36), (6, 36), (0, 31)]
+        for dx, dy in dot_positions:
+            dot_brightness = brightness / 255.0
+            dot_color = (
+                int(r * dot_brightness * 0.8),
+                int(g * dot_brightness * 0.8), 
+                int(b * dot_brightness * 0.8),
+                200
+            )
+            dpg.draw_circle(
+                (fixture_x + dx, fixture_y + dy), 3,
+                fill=dot_color, parent=self.visualizer_id
+            )
+        
+        # Label
+        label_y = fixture_y + 52
+        name_short = fixture.name[:10] if len(fixture.name) > 10 else fixture.name
+        text_offset = len(name_short) * 3
+        dpg.draw_text(
+            (fixture_x - text_offset, label_y), name_short,
+            size=11, color=(160, 160, 180), parent=self.visualizer_id
+        )
+        
+        # Type indicator
+        dpg.draw_text(
+            (fixture_x - 20, label_y + 14), f"Effect Ch{fixture.start_channel}",
+            size=9, color=(120, 100, 140), parent=self.visualizer_id
+        )
+    
+    def _color_macro_to_rgb(self, color_macro: int) -> tuple[int, int, int]:
+        """Convert Techno Derby color macro value to RGB."""
+        # Techno Derby color ranges
+        if color_macro <= 5:
+            return (0, 0, 0)  # No function
+        elif color_macro <= 20:
+            return (255, 0, 0)  # Red
+        elif color_macro <= 35:
+            return (0, 255, 0)  # Green
+        elif color_macro <= 50:
+            return (0, 0, 255)  # Blue
+        elif color_macro <= 65:
+            return (255, 255, 255)  # White
+        elif color_macro <= 80:
+            return (255, 255, 0)  # Red + Green (Yellow)
+        elif color_macro <= 95:
+            return (255, 0, 255)  # Red + Blue (Magenta)
+        elif color_macro <= 110:
+            return (255, 200, 200)  # Red + White
+        elif color_macro <= 125:
+            return (0, 255, 255)  # Green + Blue (Cyan)
+        elif color_macro <= 140:
+            return (200, 255, 200)  # Green + White
+        elif color_macro <= 155:
+            return (200, 200, 255)  # Blue + White
+        elif color_macro <= 170:
+            return (255, 255, 255)  # RGB (White)
+        elif color_macro <= 185:
+            return (255, 255, 200)  # RGW
+        elif color_macro <= 200:
+            return (200, 255, 255)  # GBW
+        elif color_macro <= 215:
+            return (255, 255, 255)  # RGBW
+        elif color_macro <= 255:
+            # Color change modes - cycle through colors based on time
+            import time
+            cycle = int(time.time() * 2) % 7
+            colors = [
+                (255, 0, 0), (0, 255, 0), (0, 0, 255),
+                (255, 255, 0), (255, 0, 255), (0, 255, 255), (255, 255, 255)
+            ]
+            return colors[cycle]
+        
+        return (128, 128, 128)  # Default gray
     
     def _draw_audio_bar(self, data: 'AnalysisData') -> None:
         """Draw the audio visualization bar at the bottom of the stage."""

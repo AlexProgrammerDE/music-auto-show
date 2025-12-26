@@ -18,7 +18,7 @@ from typing import Optional, List, Tuple
 from dataclasses import dataclass
 
 from config import (
-    FixtureConfig, FixtureProfile, VisualizationMode,
+    FixtureConfig, FixtureProfile, VisualizationMode, FixtureType,
     ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS
 )
 from audio_analyzer import AnalysisData
@@ -190,6 +190,27 @@ class EffectsEngine:
             return self._profiles.get(fixture.profile_name)
         return None
     
+    def _get_fixture_type(self, fixture: FixtureConfig) -> FixtureType:
+        """Get the fixture type for a fixture."""
+        profile = self._get_profile(fixture)
+        if profile:
+            return profile.fixture_type
+        return FixtureType.OTHER
+    
+    def get_fixtures_by_type(self, fixture_type: FixtureType) -> list[FixtureConfig]:
+        """Get all fixtures of a specific type."""
+        return [f for f in self.config.fixtures if self._get_fixture_type(f) == fixture_type]
+    
+    def get_rgb_fixtures(self) -> list[FixtureConfig]:
+        """Get fixtures that support RGB color mixing (Moving Heads, PARs)."""
+        return [f for f in self.config.fixtures 
+                if self._get_fixture_type(f) in (FixtureType.MOVING_HEAD, FixtureType.PAR)]
+    
+    def get_effect_fixtures(self) -> list[FixtureConfig]:
+        """Get effect-type fixtures (Derby, Moonflower, etc.)."""
+        return [f for f in self.config.fixtures 
+                if self._get_fixture_type(f) == FixtureType.EFFECT]
+    
     def update_config(self, config: ShowConfig) -> None:
         self.config = config
         self._load_profiles()
@@ -253,6 +274,9 @@ class EffectsEngine:
         elif mode == VisualizationMode.RANDOM_FLASH:
             apply_random_flash_mode(self, data, beat_triggered)
         
+        # Process effect lights separately (Derby, Moonflower, etc.)
+        self._process_effect_lights(data, beat_triggered, bar_triggered)
+        
         # Apply movement if enabled - only on specific beats, not constantly
         if self.config.effects.movement_enabled:
             apply_movement(self, data, beat_triggered, bar_triggered)
@@ -262,6 +286,119 @@ class EffectsEngine:
         self._output_to_dmx()
         
         return self._smoothed_values.copy()
+    
+    def _process_effect_lights(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
+        """
+        Process effect lights (Derby, Moonflower, etc.) separately from RGB fixtures.
+        
+        Effect lights use:
+        - Color Macro channel: Select colors based on audio (maps RGB to nearest color macro value)
+        - Strobe channel: Beat-synced strobe effects
+        - Pattern/Rotation channel: Speed based on energy/tempo
+        - Effect channel: Different patterns based on mode
+        """
+        effect_fixtures = self.get_effect_fixtures()
+        if not effect_fixtures:
+            return
+        
+        for i, fixture in enumerate(effect_fixtures):
+            state = self._states[fixture.name]
+            
+            # Get current RGB from the visualization mode (already calculated)
+            r, g, b = state.red, state.green, state.blue
+            
+            # Map RGB to color macro value for Techno Derby
+            # Channel 1 color ranges:
+            # 0-5: No function, 6-20: Red, 21-35: Green, 36-50: Blue, 51-65: White
+            # 66-80: R+G, 81-95: R+B, 96-110: R+W, 111-125: G+B, 126-140: G+W, 141-155: B+W
+            # 156-170: RGB, 171-185: RGW, 186-200: GBW, 201-215: RGBW
+            # 216-229: Slow color change, 230-255: Fast color change
+            state.color_macro = self._rgb_to_color_macro(r, g, b, data.features.energy)
+            
+            # Strobe on beats - Channel 2 (0-5 off, 6-255 slow to fast)
+            if beat_triggered and data.features.bass > 0.6:
+                # Strong beat = faster strobe
+                strobe_speed = int(50 + data.features.bass * 150)  # 50-200 range
+                state.strobe = max(6, min(255, strobe_speed))
+            elif self._strobe_active:
+                # Drop strobe
+                state.strobe = 200
+            else:
+                # Gentle strobe on energy, or off
+                if data.features.energy > 0.5:
+                    state.strobe = int(6 + data.features.energy * 80)  # Slow strobe
+                else:
+                    state.strobe = 0  # Off
+            
+            # Pattern rotation - Channel 3 (0: off, 1-127: manual, 128-255: auto speed)
+            # Use tempo and energy to control rotation speed
+            if data.features.energy > 0.3:
+                # Auto rotation, speed based on tempo
+                base_rotation = 128  # Start of auto range
+                tempo_factor = min(1.0, data.features.tempo / 150.0)  # Normalize to ~150 BPM
+                rotation_speed = int(base_rotation + tempo_factor * 100 + data.features.energy * 27)
+                state.effect = max(128, min(255, rotation_speed))
+            else:
+                # Low energy = slow or no rotation
+                state.effect = 0
+            
+            # Effect speed channel (Channel 4) - select pattern based on bar/beat
+            # Effects 1-18, value ranges 10-179, with 180-255 being strobe always on
+            if self._is_drop:
+                # On drops, use strobe effect
+                state.effect_speed = 180  # Effect 18 - strobe always on
+            elif bar_triggered:
+                # Change effect on bar changes
+                effect_num = (data.estimated_bar % 8) + 1  # Cycle through effects 1-8
+                state.effect_speed = 10 + (effect_num - 1) * 10 + 5  # Middle of each range
+            elif beat_triggered and data.features.bass > 0.7:
+                # Strong bass = more intense effect
+                effect_num = min(18, int(9 + data.features.energy * 9))  # Effects 9-18
+                state.effect_speed = 10 + (effect_num - 1) * 10 + 5
+            # Otherwise keep current effect
+    
+    def _rgb_to_color_macro(self, r: int, g: int, b: int, energy: float) -> int:
+        """
+        Map RGB values to Techno Derby color macro values.
+        
+        Returns a value in the color macro range based on which colors are active.
+        """
+        # Thresholds for considering a color "on"
+        threshold = 80
+        
+        red_on = r > threshold
+        green_on = g > threshold
+        blue_on = b > threshold
+        
+        # Check for white (all high)
+        white_on = r > 180 and g > 180 and b > 180
+        
+        # High energy = use auto color change
+        if energy > 0.8:
+            return 230 + int((energy - 0.8) * 125)  # 230-255 fast color change
+        
+        # Map to color macros (use middle of each range for stability)
+        if white_on or (red_on and green_on and blue_on):
+            return 208  # RGBW middle of 201-215
+        elif red_on and green_on and blue_on:
+            return 163  # RGB middle of 156-170
+        elif green_on and blue_on:
+            return 118  # G+B middle of 111-125
+        elif red_on and blue_on:
+            return 88   # R+B middle of 81-95
+        elif red_on and green_on:
+            return 73   # R+G middle of 66-80
+        elif blue_on:
+            return 43   # Blue middle of 36-50
+        elif green_on:
+            return 28   # Green middle of 21-35
+        elif red_on:
+            return 13   # Red middle of 6-20
+        else:
+            # Low/no color - use slow color change for some visual interest
+            if energy > 0.3:
+                return 222  # Slow color change
+            return 0  # No function
     
     def _update_energy_tracking(self, data: AnalysisData) -> None:
         """Track energy for detecting drops and builds."""

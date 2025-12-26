@@ -128,6 +128,17 @@ class VisualizationMode(str, Enum):
     RANDOM_FLASH = "random_flash"
 
 
+class FixtureType(str, Enum):
+    """Classification of fixture types for different control algorithms."""
+    MOVING_HEAD = "moving_head"  # Pan/tilt with RGB/RGBW - full color mixing
+    PAR = "par"  # Static RGB/RGBW wash light
+    EFFECT = "effect"  # Derby, moonflower, etc. - color macros, patterns, strobes
+    LASER = "laser"  # Laser effects
+    STROBE = "strobe"  # Dedicated strobe light
+    DIMMER = "dimmer"  # Single channel dimmer
+    OTHER = "other"  # Generic/unknown
+
+
 class MovementMode(str, Enum):
     """Movement modes for pan/tilt fixtures."""
     SUBTLE = "subtle"  # Minimal movement, small subtle adjustments
@@ -154,7 +165,7 @@ class FixtureProfile(BaseModel):
     name: str = Field(..., description="Profile name")
     manufacturer: str = Field(default="", description="Manufacturer name")
     model: str = Field(default="", description="Model name")
-    fixture_type: str = Field(default="Generic", description="Fixture type (e.g., 'Moving Head', 'PAR')")
+    fixture_type: FixtureType = Field(default=FixtureType.OTHER, description="Fixture type classification")
     channel_count: int = Field(..., ge=1, le=512)
     channels: list[ChannelConfig] = Field(..., description="Channel definitions")
     
@@ -283,7 +294,7 @@ def _create_muvy_washq_profile() -> FixtureProfile:
         name="Purelight Muvy WashQ 14ch",
         manufacturer="Purelight",
         model="Muvy WashQ",
-        fixture_type="Moving Head",
+        fixture_type=FixtureType.MOVING_HEAD,
         channel_count=14,
         pan_max=545,
         tilt_max=184,
@@ -365,7 +376,7 @@ def _create_generic_rgb_par() -> FixtureProfile:
         name="Generic RGB PAR",
         manufacturer="Generic",
         model="RGB PAR",
-        fixture_type="PAR",
+        fixture_type=FixtureType.PAR,
         channel_count=3,
         channels=[
             ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
@@ -381,7 +392,7 @@ def _create_generic_rgbw_par() -> FixtureProfile:
         name="Generic RGBW PAR",
         manufacturer="Generic",
         model="RGBW PAR",
-        fixture_type="PAR",
+        fixture_type=FixtureType.PAR,
         channel_count=4,
         channels=[
             ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED, default_value=0),
@@ -398,7 +409,7 @@ def _create_generic_dimmer_rgbw() -> FixtureProfile:
         name="Generic Dimmer+RGBW",
         manufacturer="Generic",
         model="Dimmer+RGBW PAR",
-        fixture_type="PAR",
+        fixture_type=FixtureType.PAR,
         channel_count=5,
         channels=[
             ChannelConfig(offset=1, name="Dimmer", channel_type=ChannelType.INTENSITY_MASTER_DIMMER, default_value=255),
@@ -416,7 +427,7 @@ def _create_showtec_techno_derby() -> FixtureProfile:
         name="Showtec Techno Derby 4ch",
         manufacturer="Showtec",
         model="Techno Derby",
-        fixture_type="Effect",
+        fixture_type=FixtureType.EFFECT,
         channel_count=4,
         channels=[
             ChannelConfig(
