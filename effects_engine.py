@@ -92,6 +92,9 @@ class EffectsEngine:
         self._wave_phase = 0.0
         self._strobe_active = False
         self._last_energy = 0.5
+        
+        # Blackout state
+        self._blackout_active = False
     
     def _load_profiles(self) -> None:
         self._profiles.update(FIXTURE_PRESETS)
@@ -117,6 +120,11 @@ class EffectsEngine:
                 self._smoothed_values[fixture.name] = FixtureState()
     
     def process(self, data: AnalysisData) -> dict[str, FixtureState]:
+        # If blackout is active, keep all channels at zero
+        if self._blackout_active:
+            self._output_to_dmx()
+            return self._smoothed_values.copy()
+        
         self._time = time.time()
         
         beat_triggered = data.estimated_beat != self._last_beat
@@ -506,18 +514,49 @@ class EffectsEngine:
         return state.dimmer
     
     def blackout(self) -> None:
+        """Activate blackout - all fixtures to zero."""
+        self._blackout_active = True
+        
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             state.red = 0
             state.green = 0
             state.blue = 0
             state.white = 0
+            state.amber = 0
+            state.uv = 0
             state.dimmer = 0
             state.strobe = 0
+            
+            # Also zero the smoothed values immediately
+            smoothed = self._smoothed_values[fixture.name]
+            smoothed.red = 0
+            smoothed.green = 0
+            smoothed.blue = 0
+            smoothed.white = 0
+            smoothed.amber = 0
+            smoothed.uv = 0
+            smoothed.dimmer = 0
+            smoothed.strobe = 0
         
-        self._apply_smoothing()
         self._output_to_dmx()
         self.dmx.blackout()
+    
+    def unblackout(self) -> None:
+        """Deactivate blackout - resume normal operation."""
+        self._blackout_active = False
+    
+    def is_blackout(self) -> bool:
+        """Check if blackout is active."""
+        return self._blackout_active
+    
+    def toggle_blackout(self) -> bool:
+        """Toggle blackout state. Returns new state."""
+        if self._blackout_active:
+            self.unblackout()
+        else:
+            self.blackout()
+        return self._blackout_active
     
     def get_fixture_states(self) -> dict[str, FixtureState]:
         return self._smoothed_values.copy()

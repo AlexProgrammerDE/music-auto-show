@@ -783,7 +783,12 @@ class MusicAutoShowGUI:
     
     def _blackout(self) -> None:
         if self.effects_engine:
-            self.effects_engine.blackout()
+            is_blackout = self.effects_engine.toggle_blackout()
+            if self._status_text_id and dpg.does_item_exist(self._status_text_id):
+                if is_blackout:
+                    dpg.set_value(self._status_text_id, "Status: BLACKOUT")
+                else:
+                    dpg.set_value(self._status_text_id, "Status: Running")
     
     def _update_loop(self) -> None:
         frame_count = 0
