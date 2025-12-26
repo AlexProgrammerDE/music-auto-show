@@ -3,6 +3,7 @@ GUI for Music Auto Show using Dear PyGui.
 Provides fixture configuration, live visualization, and effect controls.
 """
 import json
+import logging
 import threading
 import time
 from typing import Optional
@@ -22,6 +23,8 @@ from config import (
 from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
 from audio_analyzer import AnalysisData, AudioAnalyzer, create_audio_analyzer
 from effects_engine import EffectsEngine, FixtureState
+
+logger = logging.getLogger(__name__)
 
 
 class MusicAutoShowGUI:
@@ -589,30 +592,54 @@ class MusicAutoShowGUI:
             self.effects_engine.update_config(self.config)
     
     def _start_show(self) -> None:
+        logger.info("=" * 50)
+        logger.info("STARTING SHOW")
+        logger.info("=" * 50)
+        
         simulate_dmx = dpg.get_value("simulate_dmx") if dpg.does_item_exist("simulate_dmx") else True
         simulate_audio = dpg.get_value("simulate_audio") if dpg.does_item_exist("simulate_audio") else False
+        
+        logger.info(f"Simulate DMX: {simulate_dmx}")
+        logger.info(f"Simulate Audio: {simulate_audio}")
+        logger.info(f"DMX Port: {self.config.dmx.port or '(auto-detect)'}")
+        logger.info(f"Fixtures configured: {len(self.config.fixtures)}")
+        for f in self.config.fixtures:
+            logger.info(f"  - {f.name}: start_channel={f.start_channel}, profile={f.profile_name or 'custom'}")
         
         self.dmx_controller, self.dmx_interface = create_dmx_controller(
             port=self.config.dmx.port, simulate=simulate_dmx, fps=self.config.dmx.fps
         )
         
+        logger.info("Opening DMX interface...")
         if not self.dmx_interface.open():
+            logger.error("DMX connection failed!")
             dpg.set_value(self._status_text_id, "Status: DMX connection failed!")
             return
         
+        logger.info("Starting DMX output...")
         if not self.dmx_controller.start():
+            logger.error("DMX start failed!")
             dpg.set_value(self._status_text_id, "Status: DMX start failed!")
             return
         
+        logger.info("Creating audio analyzer...")
         self.audio_analyzer = create_audio_analyzer(simulate=simulate_audio)
         
+        logger.info("Starting audio capture...")
         if not self.audio_analyzer.start():
+            logger.error("Audio capture failed!")
             dpg.set_value(self._status_text_id, "Status: Audio capture failed!")
             self.dmx_controller.stop()
             self.dmx_interface.close()
             return
         
+        logger.info("Creating effects engine...")
         self.effects_engine = EffectsEngine(self.dmx_controller, self.config)
+        
+        logger.info("=" * 50)
+        logger.info("SHOW RUNNING")
+        logger.info("=" * 50)
+        
         dpg.set_value(self._status_text_id, "Status: Running")
     
     def _stop_show(self) -> None:

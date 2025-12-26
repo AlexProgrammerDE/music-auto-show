@@ -19,7 +19,16 @@ Usage:
     python main.py --create-example example_config.json
 """
 import argparse
+import logging
 import sys
+
+# Configure logging early - before any other imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 
 def check_dependencies() -> dict:
