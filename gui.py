@@ -47,6 +47,7 @@ class MusicAutoShowGUI:
         self._status_text_id = None
         self._track_info_id = None
         self._editing_fixture: Optional[FixtureConfig] = None
+        self._adding_fixture: Optional[FixtureConfig] = None
     
     def run(self) -> None:
         if not DEARPYGUI_AVAILABLE:
@@ -246,32 +247,108 @@ class MusicAutoShowGUI:
         if dpg.does_item_exist("add_fixture_window"):
             dpg.delete_item("add_fixture_window")
         
+        # Reset the temporary fixture for the add dialog
+        self._adding_fixture = None
+        
         with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
-                       width=450, height=350, pos=(400, 150)):
-            dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=250)
+                       width=750, height=650, pos=(250, 30)):
             
-            preset_names = ["(Custom)"] + get_available_presets()
-            dpg.add_combo(label="Profile", items=preset_names, 
-                         default_value=preset_names[1] if len(preset_names) > 1 else "(Custom)",
-                         tag="new_fixture_profile", width=300)
+            # Basic settings
+            with dpg.collapsing_header(label="Basic Settings", default_open=True):
+                dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=250)
+                dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
+                                 min_value=1, max_value=512, width=100)
+                dpg.add_input_int(label="Position", tag="new_fixture_position", 
+                                 default_value=len(self.config.fixtures), width=100)
+                dpg.add_slider_float(label="Intensity Scale", tag="new_fixture_intensity",
+                                    default_value=1.0, min_value=0.0, max_value=1.0, width=200)
             
-            dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
-                             min_value=1, max_value=512, width=100)
-            dpg.add_input_int(label="Position", tag="new_fixture_position", default_value=len(self.config.fixtures), width=100)
+            # Profile selection
+            with dpg.collapsing_header(label="Profile", default_open=True):
+                preset_names = ["(Custom)"] + get_available_presets()
+                dpg.add_combo(label="Select Profile", items=preset_names, 
+                             default_value=preset_names[1] if len(preset_names) > 1 else "(Custom)",
+                             tag="new_fixture_profile", width=300,
+                             callback=self._on_add_profile_changed)
+                dpg.add_text("Select a profile to auto-configure channels for your fixture type.", 
+                            color=(150, 150, 150))
+            
+            # Movement limits
+            with dpg.collapsing_header(label="Movement Limits", default_open=False):
+                with dpg.group(horizontal=True):
+                    dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
+                    dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=80)
+                with dpg.group(horizontal=True):
+                    dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
+                    dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
+            
+            # Channels preview
+            with dpg.collapsing_header(label="Channels Preview", default_open=True):
+                dpg.add_text("Channels will be configured based on the selected profile.", 
+                            color=(150, 150, 150))
+                dpg.add_text("You can customize channels after adding the fixture.", 
+                            color=(150, 150, 150))
+                dpg.add_separator()
+                with dpg.child_window(height=200, border=True, tag="new_channel_preview"):
+                    self._refresh_add_channel_preview()
             
             dpg.add_separator()
-            dpg.add_text("Movement Limits:", color=(150, 150, 150))
             with dpg.group(horizontal=True):
-                dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
-                dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=80)
-            with dpg.group(horizontal=True):
-                dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
-                dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
-            
-            dpg.add_separator()
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Add", callback=self._add_fixture_confirm, width=100)
+                dpg.add_button(label="Add Fixture", callback=self._add_fixture_confirm, width=120)
                 dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_fixture_window"), width=100)
+    
+    def _on_add_profile_changed(self, sender, app_data) -> None:
+        """Update channel preview when profile is changed in add dialog."""
+        self._refresh_add_channel_preview()
+    
+    def _refresh_add_channel_preview(self) -> None:
+        """Refresh the channel preview in the add fixture dialog."""
+        if not dpg.does_item_exist("new_channel_preview"):
+            return
+        
+        dpg.delete_item("new_channel_preview", children_only=True)
+        
+        profile_value = dpg.get_value("new_fixture_profile") if dpg.does_item_exist("new_fixture_profile") else "(Custom)"
+        profile_name = "" if profile_value == "(Custom)" else profile_value
+        
+        if not profile_name:
+            dpg.add_text("No profile selected. Add fixture first, then configure channels manually.",
+                        parent="new_channel_preview", color=(200, 150, 150))
+            return
+        
+        profile = get_preset(profile_name)
+        if not profile:
+            dpg.add_text(f"Profile '{profile_name}' not found.",
+                        parent="new_channel_preview", color=(200, 150, 150))
+            return
+        
+        start_channel = dpg.get_value("new_fixture_start") if dpg.does_item_exist("new_fixture_start") else 1
+        
+        # Header
+        with dpg.group(horizontal=True, parent="new_channel_preview"):
+            dpg.add_text("DMX Ch", color=(150, 150, 150))
+            dpg.add_spacer(width=20)
+            dpg.add_text("Name", color=(150, 150, 150))
+            dpg.add_spacer(width=100)
+            dpg.add_text("Type", color=(150, 150, 150))
+            dpg.add_spacer(width=80)
+            dpg.add_text("Default", color=(150, 150, 150))
+        
+        dpg.add_separator(parent="new_channel_preview")
+        
+        # Channel rows
+        for ch in profile.channels:
+            dmx_ch = start_channel + ch.offset - 1
+            type_name = get_channel_type_display_name(ch.channel_type)
+            
+            with dpg.group(horizontal=True, parent="new_channel_preview"):
+                dpg.add_text(f"{dmx_ch:3d}", color=(100, 150, 200))
+                dpg.add_spacer(width=30)
+                dpg.add_text(f"{ch.name[:15]:<15}", color=(200, 200, 200))
+                dpg.add_spacer(width=20)
+                dpg.add_text(f"{type_name[:12]:<12}", color=(150, 200, 150))
+                dpg.add_spacer(width=20)
+                dpg.add_text(f"{ch.default_value:3d}", color=(150, 150, 150))
     
     def _add_fixture_confirm(self) -> None:
         name = dpg.get_value("new_fixture_name")
@@ -283,6 +360,7 @@ class MusicAutoShowGUI:
             profile_name=profile_name,
             start_channel=dpg.get_value("new_fixture_start"),
             position=dpg.get_value("new_fixture_position"),
+            intensity_scale=dpg.get_value("new_fixture_intensity"),
             pan_min=dpg.get_value("new_pan_min"),
             pan_max=dpg.get_value("new_pan_max"),
             tilt_min=dpg.get_value("new_tilt_min"),
@@ -301,6 +379,7 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
         
+        self._adding_fixture = None
         dpg.delete_item("add_fixture_window")
     
     def _on_fixture_selected(self, sender, app_data, user_data) -> None:
