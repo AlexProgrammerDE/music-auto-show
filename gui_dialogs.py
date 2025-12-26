@@ -40,6 +40,35 @@ class FixtureDialogs:
         self._editing_fixture: Optional[FixtureConfig] = None
         self._adding_fixture: Optional[FixtureConfig] = None
     
+    def _get_next_start_channel(self) -> int:
+        """Calculate the next available start channel based on existing fixtures."""
+        if not self.config.fixtures:
+            return 1
+        
+        highest_channel = 0
+        for fixture in self.config.fixtures:
+            # Get the profile to determine channel count
+            profile = self.config.get_profile(fixture.profile_name) if fixture.profile_name else None
+            channels = fixture.get_channels(profile)
+            
+            if channels:
+                # Find the highest channel offset
+                max_offset = max(ch.offset for ch in channels)
+                fixture_end = fixture.start_channel + max_offset - 1
+            else:
+                # No channels defined, assume at least 1 channel
+                fixture_end = fixture.start_channel
+            
+            highest_channel = max(highest_channel, fixture_end)
+        
+        return highest_channel + 1
+    
+    def _get_next_position(self) -> int:
+        """Calculate the next position based on existing fixtures."""
+        if not self.config.fixtures:
+            return 0
+        return max(f.position for f in self.config.fixtures) + 1
+    
     def show_add_fixture_dialog(self) -> None:
         """Show the add fixture dialog."""
         if not DEARPYGUI_AVAILABLE:
@@ -51,16 +80,20 @@ class FixtureDialogs:
         # Reset the temporary fixture for the add dialog
         self._adding_fixture = None
         
+        # Calculate smart defaults
+        next_start_channel = self._get_next_start_channel()
+        next_position = self._get_next_position()
+        
         with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
                        width=750, height=650, pos=(250, 30)):
             
             # Basic settings
             with dpg.collapsing_header(label="Basic Settings", default_open=True):
                 dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=250)
-                dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
+                dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=next_start_channel,
                                  min_value=1, max_value=512, width=100)
                 dpg.add_input_int(label="Position", tag="new_fixture_position", 
-                                 default_value=len(self.config.fixtures), width=100)
+                                 default_value=next_position, width=100)
                 dpg.add_slider_float(label="Intensity Scale", tag="new_fixture_intensity",
                                     default_value=1.0, min_value=0.0, max_value=1.0, width=200)
             

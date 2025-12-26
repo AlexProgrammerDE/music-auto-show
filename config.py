@@ -410,12 +410,99 @@ def _create_generic_dimmer_rgbw() -> FixtureProfile:
     )
 
 
+def _create_showtec_techno_derby() -> FixtureProfile:
+    """Create profile for Showtec Techno Derby (4 channel mode) - Article 43156."""
+    return FixtureProfile(
+        name="Showtec Techno Derby 4ch",
+        manufacturer="Showtec",
+        model="Techno Derby",
+        fixture_type="Effect",
+        channel_count=4,
+        channels=[
+            ChannelConfig(
+                offset=1,
+                name="Color",
+                channel_type=ChannelType.COLOR_MACRO,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=5, name="No function"),
+                    ChannelCapability(min_value=6, max_value=20, name="Red"),
+                    ChannelCapability(min_value=21, max_value=35, name="Green"),
+                    ChannelCapability(min_value=36, max_value=50, name="Blue"),
+                    ChannelCapability(min_value=51, max_value=65, name="White"),
+                    ChannelCapability(min_value=66, max_value=80, name="Red + Green"),
+                    ChannelCapability(min_value=81, max_value=95, name="Red + Blue"),
+                    ChannelCapability(min_value=96, max_value=110, name="Red + White"),
+                    ChannelCapability(min_value=111, max_value=125, name="Green + Blue"),
+                    ChannelCapability(min_value=126, max_value=140, name="Green + White"),
+                    ChannelCapability(min_value=141, max_value=155, name="Blue + White"),
+                    ChannelCapability(min_value=156, max_value=170, name="Red + Green + Blue"),
+                    ChannelCapability(min_value=171, max_value=185, name="Red + Green + White"),
+                    ChannelCapability(min_value=186, max_value=200, name="Green + Blue + White"),
+                    ChannelCapability(min_value=201, max_value=215, name="Red + Green + Blue + White"),
+                    ChannelCapability(min_value=216, max_value=229, name="Color change slow"),
+                    ChannelCapability(min_value=230, max_value=255, name="Color change fast"),
+                ]
+            ),
+            ChannelConfig(
+                offset=2,
+                name="Strobe",
+                channel_type=ChannelType.SHUTTER_STROBE_SLOW_FAST,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=5, name="Strobe off"),
+                    ChannelCapability(min_value=6, max_value=255, name="Strobe slow to fast"),
+                ]
+            ),
+            ChannelConfig(
+                offset=3,
+                name="Pattern Rotation",
+                channel_type=ChannelType.EFFECT,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="No function"),
+                    ChannelCapability(min_value=1, max_value=127, name="Manual rotation position"),
+                    ChannelCapability(min_value=128, max_value=255, name="Auto rotation slow to fast"),
+                ]
+            ),
+            ChannelConfig(
+                offset=4,
+                name="Strobe Effects",
+                channel_type=ChannelType.EFFECT,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=9, name="No function"),
+                    ChannelCapability(min_value=10, max_value=19, name="Effect 1"),
+                    ChannelCapability(min_value=20, max_value=29, name="Effect 2"),
+                    ChannelCapability(min_value=30, max_value=39, name="Effect 3"),
+                    ChannelCapability(min_value=40, max_value=49, name="Effect 4"),
+                    ChannelCapability(min_value=50, max_value=59, name="Effect 5"),
+                    ChannelCapability(min_value=60, max_value=69, name="Effect 6"),
+                    ChannelCapability(min_value=70, max_value=79, name="Effect 7"),
+                    ChannelCapability(min_value=80, max_value=89, name="Effect 8"),
+                    ChannelCapability(min_value=90, max_value=99, name="Effect 9"),
+                    ChannelCapability(min_value=100, max_value=109, name="Effect 10"),
+                    ChannelCapability(min_value=110, max_value=119, name="Effect 11"),
+                    ChannelCapability(min_value=120, max_value=129, name="Effect 12"),
+                    ChannelCapability(min_value=130, max_value=139, name="Effect 13"),
+                    ChannelCapability(min_value=140, max_value=149, name="Effect 14"),
+                    ChannelCapability(min_value=150, max_value=159, name="Effect 15"),
+                    ChannelCapability(min_value=160, max_value=169, name="Effect 16"),
+                    ChannelCapability(min_value=170, max_value=179, name="Effect 17"),
+                    ChannelCapability(min_value=180, max_value=255, name="Effect 18 (strobe always on)"),
+                ]
+            ),
+        ],
+    )
+
+
 # Built-in fixture presets
 FIXTURE_PRESETS: dict[str, FixtureProfile] = {
     "Purelight Muvy WashQ 14ch": _create_muvy_washq_profile(),
     "Generic RGB PAR": _create_generic_rgb_par(),
     "Generic RGBW PAR": _create_generic_rgbw_par(),
     "Generic Dimmer+RGBW": _create_generic_dimmer_rgbw(),
+    "Showtec Techno Derby 4ch": _create_showtec_techno_derby(),
 }
 
 
