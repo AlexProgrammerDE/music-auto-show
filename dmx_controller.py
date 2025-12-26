@@ -245,11 +245,21 @@ class SerialDMXInterface(DMXInterface):
                 write_timeout=1
             )
             
+            # Log serial port settings
+            logger.info(f"  Serial port opened:")
+            logger.info(f"    Baudrate: {self._serial.baudrate}")
+            logger.info(f"    Bytesize: {self._serial.bytesize}")
+            logger.info(f"    Parity: {self._serial.parity}")
+            logger.info(f"    Stopbits: {self._serial.stopbits}")
+            logger.info(f"    Port name: {self._serial.name}")
+            logger.info(f"    Is open: {self._serial.is_open}")
+            
             # Ensure RTS is set correctly for FTDI-based adapters
             # Some adapters use RTS to control the RS-485 driver direction
             try:
                 self._serial.rts = True
                 self._serial.dtr = True
+                logger.info(f"    RTS: {self._serial.rts}, DTR: {self._serial.dtr}")
             except Exception as e:
                 logger.debug(f"Could not set RTS/DTR (may not be supported): {e}")
             
@@ -437,9 +447,18 @@ class SerialDMXInterface(DMXInterface):
         """
         with self._lock:
             if not self._serial:
+                if self._send_count == 0:
+                    logger.error("Send called but serial port is None!")
                 return False
             
             try:
+                # Log first frame details
+                if self._send_count == 0:
+                    non_zero = [(i, v) for i, v in enumerate(data) if v != 0]
+                    logger.info(f"Sending first DMX frame: {len(data)} bytes, {len(non_zero)} non-zero channels")
+                    if non_zero[:10]:
+                        logger.info(f"  First non-zero values: {non_zero[:10]}")
+                
                 # Flush any pending output to ensure clean timing
                 self._serial.reset_output_buffer()
                 
@@ -472,6 +491,11 @@ class SerialDMXInterface(DMXInterface):
                 self._serial.flush()
                 
                 self._send_count += 1
+                
+                # Log after first successful frame
+                if self._send_count == 1:
+                    logger.info(f"First DMX frame sent successfully ({bytes_written} bytes written)")
+                
                 return bytes_written == len(data)
                 
             except serial.SerialTimeoutException:

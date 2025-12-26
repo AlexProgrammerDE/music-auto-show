@@ -88,6 +88,11 @@ class HeadlessRunner:
         mode_str = "SIMULATED" if self.simulate_dmx else "HARDWARE"
         logger.info(f"DMX output active [{mode_str}]")
         
+        # Log interface details
+        if hasattr(self.dmx_interface, 'get_stats'):
+            stats = self.dmx_interface.get_stats()
+            logger.info(f"  Interface stats: {stats}")
+        
         # Initialize audio analyzer
         logger.info("")
         logger.info("Initializing audio capture...")
@@ -137,6 +142,11 @@ class HeadlessRunner:
             self.effects_engine.process(data)
             frame_count += 1
             
+            # Log first frame with channel values
+            if frame_count == 1:
+                logger.info("First effects frame processed")
+                self._log_dmx_channels()
+            
             # Print status every 5 seconds
             now = time.time()
             if now - last_status >= 5.0:
@@ -153,9 +163,28 @@ class HeadlessRunner:
                 logger.info(f"Energy: {data.features.energy:.2f} | "
                            f"Bass: {data.features.bass:.2f} | "
                            f"Tempo: {data.features.tempo:.0f} BPM{dmx_info}")
+                
+                # Log DMX channel values periodically
+                self._log_dmx_channels()
+                
                 last_status = now
             
             time.sleep(0.025)  # 40 Hz
+    
+    def _log_dmx_channels(self) -> None:
+        """Log current DMX channel values for debugging."""
+        if not self.dmx_controller:
+            return
+        
+        channels = self.dmx_controller.get_all_channels()
+        non_zero = [(i + 1, v) for i, v in enumerate(channels) if v != 0]
+        
+        if non_zero:
+            logger.info(f"  DMX non-zero channels ({len(non_zero)}): {non_zero[:20]}")
+            if len(non_zero) > 20:
+                logger.info(f"    ... and {len(non_zero) - 20} more")
+        else:
+            logger.info("  DMX: All channels are zero (blackout)")
     
     def stop(self) -> None:
         """Stop the light show."""
