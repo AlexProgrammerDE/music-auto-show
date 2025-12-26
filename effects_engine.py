@@ -163,7 +163,10 @@ class EffectsEngine:
     def _apply_energy_mode(self, data: AnalysisData) -> None:
         energy = data.features.energy
         intensity = energy * self.config.effects.intensity
-        hue = 0.0 + data.features.valence * 0.3
+        # Use energy to shift through color spectrum (0.0-1.0 = full rainbow)
+        # Combined with time-based color phase for variety
+        hue = (self._color_phase + data.features.energy * 0.5) % 1.0
+        self._color_phase += 0.002 * self.config.effects.color_speed  # Slow drift
         
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
@@ -201,6 +204,10 @@ class EffectsEngine:
             state.dimmer = int(255 * intensity)
     
     def _apply_beat_pulse_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        # Shift color on each beat
+        if beat_triggered:
+            self._color_phase = (self._color_phase + 0.1) % 1.0
+        
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             scale = fixture.intensity_scale * self.config.effects.intensity
@@ -210,7 +217,8 @@ class EffectsEngine:
             else:
                 brightness = (1.0 - data.beat_position) * scale
             
-            hue = data.features.energy * 0.3
+            # Use color phase for full spectrum colors
+            hue = self._color_phase
             state.set_from_hsv(hue, 1.0, brightness)
             state.dimmer = int(255 * brightness)
     
@@ -318,7 +326,8 @@ class EffectsEngine:
             if has_tilt:
                 tilt_range = fixture.tilt_max - fixture.tilt_min
                 tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
-                tilt_offset = math.sin(beat_phase) * (tilt_range / 4) * speed
+                # Use full tilt range (/ 2) like pan for more dramatic movement
+                tilt_offset = math.sin(beat_phase) * (tilt_range / 2) * speed
                 state.tilt = int(tilt_center + tilt_offset)
             
             # For SPEED_PAN_TILT_FAST_SLOW: 0=fast, 255=slow
