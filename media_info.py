@@ -317,6 +317,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
         # Import here to avoid errors on other platforms
         self._SessionManager = None
         self._PlaybackStatus = None
+        self._DataReader = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_error: str = ""
         
@@ -328,6 +329,16 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             )
             self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
             self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+            
+            # Try to import DataReader for thumbnail reading
+            try:
+                from winrt.windows.storage.streams import DataReader
+                self._DataReader = DataReader
+                logger.info("winrt DataReader available for thumbnail extraction")
+            except ImportError:
+                self._DataReader = None
+                logger.warning("Album art extraction disabled - missing winrt-Windows.Storage.Streams")
+                print("Album art colors disabled. To enable: pip install winrt-Windows.Storage.Streams")
         except ImportError:
             # Try alternative import for winsdk
             try:
@@ -337,6 +348,16 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                 )
                 self._SessionManager = GlobalSystemMediaTransportControlsSessionManager
                 self._PlaybackStatus = GlobalSystemMediaTransportControlsSessionPlaybackStatus
+                
+                # Try to import DataReader for thumbnail reading
+                try:
+                    from winsdk.windows.storage.streams import DataReader
+                    self._DataReader = DataReader
+                    logger.info("winsdk DataReader available for thumbnail extraction")
+                except ImportError:
+                    self._DataReader = None
+                    logger.warning("Album art extraction disabled - missing winsdk storage module")
+                    print("Album art colors disabled. To enable: pip install winsdk")
             except ImportError as e:
                 self._last_error = f"winrt import failed: {e}"
                 raise ImportError(f"Neither winrt nor winsdk available: {e}")
@@ -406,38 +427,38 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                     source_app=source_app
                 )
             
-            # Try to get thumbnail
+            # Try to get thumbnail (only if DataReader is available)
             thumbnail_data = None
-            try:
-                thumbnail = properties.thumbnail
-                logger.debug(f"Thumbnail property: {thumbnail}")
-                if thumbnail:
-                    # Read the thumbnail stream
-                    logger.debug("Opening thumbnail stream...")
-                    stream = await thumbnail.open_read_async()
-                    if stream:
-                        size = stream.size
-                        logger.debug(f"Thumbnail stream size: {size} bytes")
-                        if size > 0 and size < 10_000_000:  # Max 10MB
-                            from winrt.windows.storage.streams import DataReader
-                            reader = DataReader(stream)
-                            await reader.load_async(size)
-                            buffer = reader.read_buffer(size)
-                            # Convert to bytes
-                            thumbnail_data = bytes(buffer)
-                            logger.info(f"Successfully read thumbnail: {len(thumbnail_data)} bytes")
-                            reader.close()
+            if self._DataReader is not None:
+                try:
+                    thumbnail = properties.thumbnail
+                    logger.debug(f"Thumbnail property: {thumbnail}")
+                    if thumbnail:
+                        # Read the thumbnail stream
+                        logger.debug("Opening thumbnail stream...")
+                        stream = await thumbnail.open_read_async()
+                        if stream:
+                            size = stream.size
+                            logger.debug(f"Thumbnail stream size: {size} bytes")
+                            if size > 0 and size < 10_000_000:  # Max 10MB
+                                reader = self._DataReader(stream)
+                                await reader.load_async(size)
+                                buffer = reader.read_buffer(size)
+                                # Convert to bytes
+                                thumbnail_data = bytes(buffer)
+                                logger.info(f"Successfully read thumbnail: {len(thumbnail_data)} bytes")
+                                reader.close()
+                            else:
+                                logger.warning(f"Thumbnail size invalid: {size}")
+                            stream.close()
                         else:
-                            logger.warning(f"Thumbnail size invalid: {size}")
-                        stream.close()
+                            logger.debug("Could not open thumbnail stream")
                     else:
-                        logger.debug("Could not open thumbnail stream")
-                else:
-                    logger.debug("No thumbnail property available")
-            except Exception as e:
-                # Thumbnail extraction failed, continue without it
-                self._last_error = f"Thumbnail error: {e}"
-                logger.warning(f"Failed to extract thumbnail: {e}")
+                        logger.debug("No thumbnail property available")
+                except Exception as e:
+                    # Thumbnail extraction failed, continue without it
+                    self._last_error = f"Thumbnail error: {e}"
+                    logger.warning(f"Failed to extract thumbnail: {e}")
             
             return MediaInfo(
                 title=properties.title or "",
