@@ -696,7 +696,10 @@ class AudioAnalyzer:
     
     def _analysis_loop(self) -> None:
         """Main analysis loop - notifies callbacks."""
+        loop_count = 0
         while self._running:
+            loop_count += 1
+            
             # Get media info if available
             track_name = "System Audio"
             artist_name = ""
@@ -712,8 +715,14 @@ class AudioAnalyzer:
                         artist_name = media_info.artist
                         media_is_playing = media_info.is_playing
                         album_colors = media_info.colors
-                except Exception:
-                    pass
+                    
+                    # Log media info periodically (every 200 loops = ~5 seconds)
+                    if loop_count % 200 == 1:
+                        logger.debug(f"Media info: title='{media_info.title}', artist='{media_info.artist}', "
+                                    f"colors={len(album_colors)}, playing={media_info.is_playing}")
+                except Exception as e:
+                    if loop_count % 200 == 1:
+                        logger.warning(f"Failed to get media info: {e}")
             
             # Store track info for get_data() access
             self._track_name = track_name

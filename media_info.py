@@ -8,9 +8,12 @@ import asyncio
 import threading
 import time
 import colorsys
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, Callable, List, Tuple
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 # Try to import PIL for image processing
 try:
@@ -18,6 +21,7 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+    logger.warning("PIL not available - album cover color extraction disabled")
 
 
 @dataclass
@@ -49,8 +53,15 @@ def extract_colors_from_image(image_data: bytes, num_colors: int = 5) -> List[Tu
     Returns:
         List of (R, G, B) tuples sorted by dominance
     """
-    if not PIL_AVAILABLE or not image_data:
+    if not PIL_AVAILABLE:
+        logger.debug("PIL not available, cannot extract colors")
         return []
+    
+    if not image_data:
+        logger.debug("No image data provided for color extraction")
+        return []
+    
+    logger.debug(f"Extracting colors from image data ({len(image_data)} bytes)")
     
     try:
         # Open image from bytes
@@ -122,9 +133,11 @@ def extract_colors_from_image(image_data: bytes, num_colors: int = 5) -> List[Tu
                 if len(result) >= num_colors:
                     break
         
+        logger.debug(f"Extracted {len(result)} colors: {result}")
         return result
         
     except Exception as e:
+        logger.warning(f"Failed to extract colors from image: {e}")
         return []
 
 
@@ -163,22 +176,29 @@ class MediaInfoProvider:
     
     def _init_backend(self) -> None:
         """Initialize the platform-specific backend."""
+        logger.info(f"Initializing media backend for platform: {sys.platform}")
         if sys.platform == 'win32':
             try:
                 self._backend = _WindowsMediaBackend()
+                logger.info("Windows media backend initialized successfully")
             except ImportError as e:
+                logger.error(f"Windows media backend not available: {e}")
                 print(f"Windows media backend not available: {e}")
                 print("Install with: pip install winrt-Windows.Media.Control")
                 self._backend = _DummyBackend()
         elif sys.platform == 'linux':
             try:
                 self._backend = _LinuxMediaBackend()
+                logger.info("Linux MPRIS backend initialized successfully")
             except ImportError:
+                logger.error("dbus-python not available")
                 print("dbus-python not available. Install with: pip install dbus-python")
                 self._backend = _DummyBackend()
         elif sys.platform == 'darwin':
             self._backend = _MacOSMediaBackend()
+            logger.info("macOS media backend initialized")
         else:
+            logger.warning(f"Unknown platform {sys.platform}, using dummy backend")
             self._backend = _DummyBackend()
     
     def add_callback(self, callback: Callable[[MediaInfo], None]) -> None:
@@ -225,18 +245,30 @@ class MediaInfoProvider:
     
     def _poll_loop(self) -> None:
         """Background polling loop."""
+        poll_count = 0
         while self._running:
+            poll_count += 1
             try:
                 if self._backend:
                     new_info = self._backend.get_media_info()
                     
+                    # Log media info periodically (every 10 polls = 20 seconds)
+                    if poll_count % 10 == 1:
+                        logger.info(f"Media poll: title='{new_info.title}', artist='{new_info.artist}', "
+                                   f"playing={new_info.is_playing}, source='{new_info.source_app}', "
+                                   f"thumbnail={len(new_info.thumbnail_data) if new_info.thumbnail_data else 0} bytes")
+                    
                     # Extract colors from thumbnail if available and track changed
                     track_key = f"{new_info.artist}|{new_info.title}|{new_info.album}"
                     if track_key != self._last_track_key:
+                        logger.info(f"Track changed: '{self._last_track_key}' -> '{track_key}'")
                         self._last_track_key = track_key
                         if new_info.thumbnail_data:
+                            logger.info(f"Extracting colors from thumbnail ({len(new_info.thumbnail_data)} bytes)")
                             self._cached_colors = extract_colors_from_image(new_info.thumbnail_data)
+                            logger.info(f"Extracted {len(self._cached_colors)} colors: {self._cached_colors}")
                         else:
+                            logger.info("No thumbnail data available for color extraction")
                             self._cached_colors = []
                     
                     new_info.colors = self._cached_colors
@@ -259,7 +291,7 @@ class MediaInfoProvider:
                             except Exception:
                                 pass
             except Exception as e:
-                pass  # Silently ignore errors
+                logger.error(f"Error in media poll loop: {e}")
             
             time.sleep(self._poll_interval)
 
@@ -335,15 +367,18 @@ class _WindowsMediaBackend(_MediaInfoBackend):
     
     async def _get_media_info_async(self) -> MediaInfo:
         try:
+            logger.debug("Requesting Windows media session manager...")
             manager = await self._SessionManager.request_async()
             if manager is None:
                 self._last_error = "Failed to get session manager"
+                logger.warning("Failed to get Windows session manager")
                 return MediaInfo()
             
             session = manager.get_current_session()
             
             if session is None:
                 # No active media session
+                logger.debug("No active media session found")
                 return MediaInfo()
             
             # Get source app first (for debugging)
@@ -375,11 +410,14 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             thumbnail_data = None
             try:
                 thumbnail = properties.thumbnail
+                logger.debug(f"Thumbnail property: {thumbnail}")
                 if thumbnail:
                     # Read the thumbnail stream
+                    logger.debug("Opening thumbnail stream...")
                     stream = await thumbnail.open_read_async()
                     if stream:
                         size = stream.size
+                        logger.debug(f"Thumbnail stream size: {size} bytes")
                         if size > 0 and size < 10_000_000:  # Max 10MB
                             from winrt.windows.storage.streams import DataReader
                             reader = DataReader(stream)
@@ -387,11 +425,19 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                             buffer = reader.read_buffer(size)
                             # Convert to bytes
                             thumbnail_data = bytes(buffer)
+                            logger.info(f"Successfully read thumbnail: {len(thumbnail_data)} bytes")
                             reader.close()
+                        else:
+                            logger.warning(f"Thumbnail size invalid: {size}")
                         stream.close()
+                    else:
+                        logger.debug("Could not open thumbnail stream")
+                else:
+                    logger.debug("No thumbnail property available")
             except Exception as e:
                 # Thumbnail extraction failed, continue without it
                 self._last_error = f"Thumbnail error: {e}"
+                logger.warning(f"Failed to extract thumbnail: {e}")
             
             return MediaInfo(
                 title=properties.title or "",
