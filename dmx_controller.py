@@ -535,51 +535,6 @@ class SerialDMXInterface(DMXInterface):
         }
 
 
-class SimulatedDMXInterface(DMXInterface):
-    """Simulated DMX interface for testing without hardware."""
-    
-    def __init__(self):
-        self._is_open = False
-        self._last_data = bytes(513)
-        self._send_count = 0
-    
-    def open(self) -> bool:
-        logger.info("=" * 60)
-        logger.info("SIMULATED DMX INTERFACE")
-        logger.info("=" * 60)
-        logger.info("No actual DMX output - for testing only")
-        logger.info("=" * 60)
-        self._is_open = True
-        return True
-    
-    def close(self) -> None:
-        logger.info("Simulated DMX interface closed")
-        self._is_open = False
-    
-    def send(self, data: bytes) -> bool:
-        if self._is_open:
-            self._last_data = data
-            self._send_count += 1
-            if self._send_count == 1:
-                logger.info("Simulated DMX: First frame received")
-            return True
-        return False
-    
-    def is_open(self) -> bool:
-        return self._is_open
-    
-    def get_last_data(self) -> bytes:
-        """Get the last sent data (for visualization)."""
-        return self._last_data
-    
-    def get_stats(self) -> dict:
-        return {
-            "type": "simulated",
-            "send_count": self._send_count,
-            "is_open": self._is_open
-        }
-
-
 class DMXController:
     """
     High-level DMX controller with continuous output.
@@ -776,6 +731,7 @@ def create_dmx_controller(port: str = "", simulate: bool = False, fps: int = 40)
     logger.info(f"pyserial available: {PYSERIAL_AVAILABLE}")
     
     if simulate:
+        from simulators import SimulatedDMXInterface
         interface = SimulatedDMXInterface()
     elif PYSERIAL_AVAILABLE:
         interface = SerialDMXInterface(port)
@@ -786,6 +742,7 @@ def create_dmx_controller(port: str = "", simulate: bool = False, fps: int = 40)
         logger.warning("Install pyserial with: pip install pyserial")
         logger.warning("Using simulation mode as fallback")
         logger.warning("=" * 60)
+        from simulators import SimulatedDMXInterface
         interface = SimulatedDMXInterface()
     
     controller = DMXController(interface=interface, fps=fps)

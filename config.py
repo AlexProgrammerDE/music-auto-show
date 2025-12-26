@@ -129,6 +129,13 @@ class MovementMode(str, Enum):
     WALL_WASH = "wall_wash"  # Targets walls and corners, sweeping patterns
     SWEEP = "sweep"  # Slow continuous sweeping motion, theatrical
     RANDOM = "random"  # Unpredictable movement for variety
+    # Dynamic show modes
+    CIRCLE = "circle"  # Circular motion - beams trace circles, phase-offset per fixture
+    FIGURE_8 = "figure_8"  # Figure-8/lemniscate pattern - elegant infinity loops
+    BALLYHOO = "ballyhoo"  # Fast sweeping wave motion across fixtures - classic show effect
+    FAN = "fan"  # Fixtures fan in/out from center point - dramatic reveals
+    CHASE = "chase"  # Sequential position chase - beams "chase" across fixtures
+    STROBE_POSITION = "strobe_position"  # Fast snappy beat-synced position jumps
 
 
 class FixtureProfile(BaseModel):

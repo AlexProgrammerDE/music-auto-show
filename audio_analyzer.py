@@ -692,104 +692,6 @@ class AudioAnalyzer:
             )
 
 
-class SimulatedAudioAnalyzer:
-    """Simulated audio analyzer for testing without audio hardware."""
-    
-    def __init__(self):
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._data = AnalysisData()
-        self._lock = threading.Lock()
-        self._callbacks: list[Callable[[AnalysisData], None]] = []
-        self._start_time = 0.0
-        self._beat_count = 0
-    
-    def add_callback(self, callback: Callable[[AnalysisData], None]) -> None:
-        self._callbacks.append(callback)
-    
-    def remove_callback(self, callback: Callable[[AnalysisData], None]) -> None:
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
-    
-    def start(self) -> bool:
-        if self._running:
-            return True
-        
-        self._running = True
-        self._start_time = time.time()
-        
-        # Set up simulated data
-        with self._lock:
-            self._data.features.tempo = 128.0
-            self._data.features.energy = 0.7
-            self._data.track_name = "Simulated Audio"
-        
-        self._thread = threading.Thread(target=self._simulation_loop, daemon=True)
-        self._thread.start()
-        return True
-    
-    def stop(self) -> None:
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-    
-    def get_data(self) -> AnalysisData:
-        with self._lock:
-            return self._data
-    
-    def _simulation_loop(self) -> None:
-        import math
-        
-        tempo = 128.0
-        beat_interval = 60.0 / tempo
-        last_beat_time = self._start_time
-        
-        while self._running:
-            current_time = time.time()
-            elapsed = current_time - self._start_time
-            
-            # Check for beat
-            time_since_beat = current_time - last_beat_time
-            beat_detected = False
-            if time_since_beat >= beat_interval:
-                beat_detected = True
-                last_beat_time = current_time
-                self._beat_count += 1
-                time_since_beat = 0
-            
-            with self._lock:
-                # Simulate varying energy
-                base_energy = 0.5 + 0.3 * math.sin(elapsed * 0.2)
-                beat_pulse = 0.2 * (1.0 - time_since_beat / beat_interval)
-                
-                self._data.features.energy = base_energy + beat_pulse
-                self._data.features.tempo = tempo
-                self._data.features.beat_detected = beat_detected
-                self._data.features.time_since_beat = time_since_beat
-                
-                # Simulate frequency bands
-                self._data.features.bass = 0.6 + 0.3 * math.sin(elapsed * 0.5)
-                self._data.features.mid = 0.5 + 0.2 * math.sin(elapsed * 0.7)
-                self._data.features.high = 0.4 + 0.2 * math.sin(elapsed * 1.1)
-                
-                # Beat position
-                self._data.beat_position = time_since_beat / beat_interval
-                self._data.bar_position = ((self._beat_count % 4) + self._data.beat_position) / 4
-                self._data.estimated_beat = self._beat_count
-                self._data.estimated_bar = self._beat_count // 4
-                self._data.section_intensity = base_energy + beat_pulse * 0.5
-            
-            # Notify callbacks
-            for callback in self._callbacks:
-                try:
-                    callback(self._data)
-                except Exception:
-                    pass
-            
-            time.sleep(0.025)  # 40 Hz
-
-
 def create_audio_analyzer(simulate: bool = False, device_index: Optional[int] = None):
     """
     Factory function to create an audio analyzer.
@@ -802,6 +704,7 @@ def create_audio_analyzer(simulate: bool = False, device_index: Optional[int] = 
         AudioAnalyzer or SimulatedAudioAnalyzer
     """
     if simulate:
+        from simulators import SimulatedAudioAnalyzer
         return SimulatedAudioAnalyzer()
     
     return AudioAnalyzer(device_index=device_index)
