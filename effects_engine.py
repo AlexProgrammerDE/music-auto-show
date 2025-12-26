@@ -106,6 +106,12 @@ class EffectsEngine:
         self._target_pan: dict[str, int] = {}
         self._target_tilt: dict[str, int] = {}
         
+        # Movement state for sweep/continuous modes
+        # (must be initialized before _init_fixture_states)
+        self._sweep_phase: dict[str, float] = {}
+        self._sweep_direction: dict[str, int] = {}
+        self._wall_corner_index: dict[str, int] = {}
+        
         self._init_fixture_states()
         
         # ===== Animation state =====
@@ -147,11 +153,8 @@ class EffectsEngine:
         # Blackout state
         self._blackout_active = False
         
-        # Movement state for sweep/continuous modes
-        self._sweep_phase: dict[str, float] = {}  # Current phase in sweep pattern (0-1)
-        self._sweep_direction: dict[str, int] = {}  # 1 or -1 for direction
-        self._last_position_update = 0.0  # Time of last position target update
-        self._wall_corner_index: dict[str, int] = {}  # Which corner/wall the fixture is targeting
+        # Time tracking for position updates
+        self._last_position_update = 0.0
     
     def _load_profiles(self) -> None:
         self._profiles.update(FIXTURE_PRESETS)
