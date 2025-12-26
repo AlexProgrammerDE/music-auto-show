@@ -603,6 +603,16 @@ class MusicAutoShowGUI:
         logger.info(f"Simulate Audio: {simulate_audio}")
         logger.info(f"DMX Port: {self.config.dmx.port or '(auto-detect)'}")
         logger.info(f"Fixtures configured: {len(self.config.fixtures)}")
+        
+        if not self.config.fixtures:
+            logger.warning("=" * 50)
+            logger.warning("WARNING: No fixtures configured!")
+            logger.warning("Add fixtures using the 'Add Fixture' button before starting.")
+            logger.warning("Without fixtures, no DMX output will be generated.")
+            logger.warning("=" * 50)
+            dpg.set_value(self._status_text_id, "Status: No fixtures configured!")
+            return
+        
         for f in self.config.fixtures:
             logger.info(f"  - {f.name}: start_channel={f.start_channel}, profile={f.profile_name or 'custom'}")
         
