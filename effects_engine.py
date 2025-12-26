@@ -100,6 +100,12 @@ class EffectsEngine:
         # State for each fixture
         self._states: dict[str, FixtureState] = {}
         self._smoothed_values: dict[str, FixtureState] = {}
+        
+        # Movement state - positions are set on beats, then fixture moves there
+        # (must be initialized before _init_fixture_states)
+        self._target_pan: dict[str, int] = {}
+        self._target_tilt: dict[str, int] = {}
+        
         self._init_fixture_states()
         
         # ===== Animation state =====
@@ -116,9 +122,6 @@ class EffectsEngine:
         self._target_hue = 0.0  # Target hue for smooth transitions
         self._current_hue = 0.0  # Actual displayed hue
         
-        # Movement state - positions are set on beats, then fixture moves there
-        self._target_pan: dict[str, int] = {}
-        self._target_tilt: dict[str, int] = {}
         self._movement_triggered = False
         
         # Intensity state
