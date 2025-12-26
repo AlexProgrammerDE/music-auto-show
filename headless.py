@@ -28,10 +28,12 @@ class HeadlessRunner:
     Headless runner for Music Auto Show.
     """
     
-    def __init__(self, config_path: str, simulate_dmx: bool = False, simulate_audio: bool = False):
+    def __init__(self, config_path: str, simulate_dmx: bool = False, 
+                 simulate_audio: bool = False, use_microphone: bool = False):
         self.config_path = config_path
         self.simulate_dmx = simulate_dmx
         self.simulate_audio = simulate_audio
+        self.use_microphone = use_microphone
         
         self.config = None
         self.dmx_controller = None
@@ -96,13 +98,23 @@ class HeadlessRunner:
         # Initialize audio analyzer
         logger.info("")
         logger.info("Initializing audio capture...")
-        self.audio_analyzer = create_audio_analyzer(simulate=self.simulate_audio)
+        from config import AudioInputMode
+        input_mode = AudioInputMode.MICROPHONE if self.use_microphone else AudioInputMode.AUTO
+        self.audio_analyzer = create_audio_analyzer(
+            simulate=self.simulate_audio,
+            input_mode=input_mode
+        )
         
         if not self.audio_analyzer.start():
             logger.error("Failed to start audio analyzer")
             return False
         
-        mode_str = "SIMULATED" if self.simulate_audio else "LIVE"
+        if self.simulate_audio:
+            mode_str = "SIMULATED"
+        elif self.use_microphone:
+            mode_str = "MICROPHONE"
+        else:
+            mode_str = "LOOPBACK"
         logger.info(f"Audio capture active [{mode_str}]")
         
         # Initialize effects engine
@@ -225,7 +237,7 @@ class HeadlessRunner:
 
 def create_example_config(output_path: str) -> None:
     """Create an example configuration file."""
-    from config import ChannelConfig, ChannelType, VisualizationMode
+    from config import FixtureConfig, ChannelConfig, ChannelType, VisualizationMode
     
     config = ShowConfig(
         name="Example Show",
@@ -235,10 +247,10 @@ def create_example_config(output_path: str) -> None:
                 start_channel=1,
                 position=0,
                 channels=[
-                    ChannelConfig(channel=1, channel_type=ChannelType.RED),
-                    ChannelConfig(channel=2, channel_type=ChannelType.GREEN),
-                    ChannelConfig(channel=3, channel_type=ChannelType.BLUE),
-                    ChannelConfig(channel=4, channel_type=ChannelType.DIMMER),
+                    ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED),
+                    ChannelConfig(offset=2, name="Green", channel_type=ChannelType.INTENSITY_GREEN),
+                    ChannelConfig(offset=3, name="Blue", channel_type=ChannelType.INTENSITY_BLUE),
+                    ChannelConfig(offset=4, name="Dimmer", channel_type=ChannelType.INTENSITY_DIMMER),
                 ]
             ),
             FixtureConfig(
@@ -246,10 +258,10 @@ def create_example_config(output_path: str) -> None:
                 start_channel=5,
                 position=1,
                 channels=[
-                    ChannelConfig(channel=5, channel_type=ChannelType.RED),
-                    ChannelConfig(channel=6, channel_type=ChannelType.GREEN),
-                    ChannelConfig(channel=7, channel_type=ChannelType.BLUE),
-                    ChannelConfig(channel=8, channel_type=ChannelType.DIMMER),
+                    ChannelConfig(offset=1, name="Red", channel_type=ChannelType.INTENSITY_RED),
+                    ChannelConfig(offset=2, name="Green", channel_type=ChannelType.INTENSITY_GREEN),
+                    ChannelConfig(offset=3, name="Blue", channel_type=ChannelType.INTENSITY_BLUE),
+                    ChannelConfig(offset=4, name="Dimmer", channel_type=ChannelType.INTENSITY_DIMMER),
                 ]
             ),
             FixtureConfig(
@@ -261,14 +273,14 @@ def create_example_config(output_path: str) -> None:
                 tilt_min=0,
                 tilt_max=180,
                 channels=[
-                    ChannelConfig(channel=9, channel_type=ChannelType.PAN),
-                    ChannelConfig(channel=10, channel_type=ChannelType.TILT),
-                    ChannelConfig(channel=11, channel_type=ChannelType.RED),
-                    ChannelConfig(channel=12, channel_type=ChannelType.GREEN),
-                    ChannelConfig(channel=13, channel_type=ChannelType.BLUE),
-                    ChannelConfig(channel=14, channel_type=ChannelType.DIMMER),
-                    ChannelConfig(channel=15, channel_type=ChannelType.SPEED),
-                    ChannelConfig(channel=16, channel_type=ChannelType.STROBE),
+                    ChannelConfig(offset=1, name="Pan", channel_type=ChannelType.POSITION_PAN),
+                    ChannelConfig(offset=2, name="Tilt", channel_type=ChannelType.POSITION_TILT),
+                    ChannelConfig(offset=3, name="Red", channel_type=ChannelType.INTENSITY_RED),
+                    ChannelConfig(offset=4, name="Green", channel_type=ChannelType.INTENSITY_GREEN),
+                    ChannelConfig(offset=5, name="Blue", channel_type=ChannelType.INTENSITY_BLUE),
+                    ChannelConfig(offset=6, name="Dimmer", channel_type=ChannelType.INTENSITY_DIMMER),
+                    ChannelConfig(offset=7, name="Speed", channel_type=ChannelType.SPEED_PAN_TILT_FAST_SLOW),
+                    ChannelConfig(offset=8, name="Strobe", channel_type=ChannelType.SHUTTER_STROBE),
                 ]
             ),
         ]
@@ -294,6 +306,8 @@ def main():
                        help="Simulate audio input (no capture required)")
     parser.add_argument("--simulate", action="store_true",
                        help="Simulate both DMX and audio")
+    parser.add_argument("--microphone", "--mic", action="store_true",
+                       help="Use microphone input instead of system audio loopback")
     
     args = parser.parse_args()
     
@@ -313,8 +327,9 @@ def main():
     
     simulate_dmx = args.simulate_dmx or args.simulate
     simulate_audio = args.simulate_audio or args.simulate
+    use_microphone = getattr(args, 'microphone', False)
     
-    runner = HeadlessRunner(args.config, simulate_dmx, simulate_audio)
+    runner = HeadlessRunner(args.config, simulate_dmx, simulate_audio, use_microphone)
     
     if runner.start():
         try:

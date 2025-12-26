@@ -1,7 +1,9 @@
 """
 Real-time audio analyzer that captures system audio and extracts audio features.
+Supports both WASAPI loopback (system audio) and microphone input.
 Uses PyAudioWPatch for WASAPI loopback capture and librosa for beat/tempo detection.
 """
+import logging
 import threading
 import time
 import numpy as np
@@ -10,10 +12,16 @@ from dataclasses import dataclass, field
 from collections import deque
 from typing import List, Tuple
 
+from config import AudioInputMode
+
+logger = logging.getLogger(__name__)
+
 try:
     import pyaudiowpatch as pyaudio
     PYAUDIO_AVAILABLE = True
+    PYAUDIO_WPATCH = True
 except ImportError:
+    PYAUDIO_WPATCH = False
     try:
         import pyaudio
         PYAUDIO_AVAILABLE = True
@@ -106,25 +114,29 @@ class AnalysisData:
 
 class AudioAnalyzer:
     """
-    Real-time audio analyzer that captures system audio via WASAPI loopback
-    and extracts audio features using librosa and FFT analysis.
+    Real-time audio analyzer that captures audio and extracts features.
+    Supports both system audio loopback (WASAPI) and microphone input.
     """
     
     def __init__(self, 
                  buffer_size: int = 1024,
                  sample_rate: int = 44100,
-                 device_index: Optional[int] = None):
+                 device_index: Optional[int] = None,
+                 input_mode: AudioInputMode = AudioInputMode.AUTO):
         """
         Initialize the audio analyzer.
         
         Args:
             buffer_size: Audio buffer size (smaller = lower latency, higher CPU)
             sample_rate: Sample rate for audio capture
-            device_index: Specific audio device index, or None for default loopback
+            device_index: Specific audio device index, or None for auto-detect
+            input_mode: Audio input source (loopback, microphone, or auto)
         """
         self.buffer_size = buffer_size
         self.sample_rate = sample_rate
         self.device_index = device_index
+        self.input_mode = input_mode
+        self._actual_input_mode: Optional[AudioInputMode] = None  # What we actually used
         
         self._pyaudio: Optional[pyaudio.PyAudio] = None
         self._stream = None
@@ -235,7 +247,7 @@ class AudioAnalyzer:
             print(f"Error finding loopback device: {e}")
             return None
     
-    def list_devices(self) -> list[dict]:
+    def list_devices(self, input_only: bool = True) -> list[dict]:
         """List available audio input devices."""
         devices = []
         if not PYAUDIO_AVAILABLE:
@@ -250,12 +262,52 @@ class AudioAnalyzer:
                         'index': i,
                         'name': dev.get('name', 'Unknown'),
                         'channels': dev.get('maxInputChannels', 0),
-                        'sample_rate': int(dev.get('defaultSampleRate', 44100))
+                        'sample_rate': int(dev.get('defaultSampleRate', 44100)),
+                        'is_loopback': 'loopback' in str(dev.get('name', '')).lower()
                     })
             p.terminate()
         except Exception as e:
-            print(f"Error listing devices: {e}")
+            logger.error(f"Error listing devices: {e}")
         return devices
+    
+    def list_microphones(self) -> list[dict]:
+        """List available microphone devices (excludes loopback devices)."""
+        all_devices = self.list_devices()
+        return [d for d in all_devices if not d.get('is_loopback', False)]
+    
+    def get_default_microphone(self) -> Optional[dict]:
+        """Get the default microphone device."""
+        if not PYAUDIO_AVAILABLE:
+            return None
+        
+        try:
+            p = pyaudio.PyAudio()
+            default_input = p.get_default_input_device_info()
+            p.terminate()
+            
+            # Check if it's a loopback device
+            name = str(default_input.get('name', ''))
+            if 'loopback' in name.lower():
+                # Try to find a non-loopback device
+                mics = self.list_microphones()
+                if mics:
+                    return mics[0]
+                return None
+            
+            return {
+                'index': default_input.get('index'),
+                'name': name,
+                'channels': default_input.get('maxInputChannels', 0),
+                'sample_rate': int(default_input.get('defaultSampleRate', 44100)),
+                'is_loopback': False
+            }
+        except Exception as e:
+            logger.error(f"Error getting default microphone: {e}")
+            return None
+    
+    def get_input_mode_used(self) -> Optional[AudioInputMode]:
+        """Get the actual input mode that was used after start()."""
+        return self._actual_input_mode
     
     def start(self) -> bool:
         """Start audio capture and analysis."""
@@ -273,26 +325,73 @@ class AudioAnalyzer:
         try:
             self._pyaudio = pyaudio.PyAudio()
             
-            # Find loopback device if not specified
+            # Select audio device based on input mode
             device = None
+            
             if self.device_index is not None:
+                # Explicit device index specified
                 device = self._pyaudio.get_device_info_by_index(self.device_index)
-            else:
-                # Try to get default WASAPI loopback
-                if hasattr(self._pyaudio, 'get_default_wasapi_loopback'):
+                device_name = device.get('name', 'Unknown')
+                is_loopback = 'loopback' in str(device_name).lower()
+                self._actual_input_mode = AudioInputMode.LOOPBACK if is_loopback else AudioInputMode.MICROPHONE
+                logger.info(f"Using specified device: {device_name}")
+            
+            elif self.input_mode == AudioInputMode.MICROPHONE:
+                # Microphone mode - use default input (not loopback)
+                device = self._pyaudio.get_default_input_device_info()
+                device_name = str(device.get('name', ''))
+                
+                # If default is a loopback, try to find a real microphone
+                if 'loopback' in device_name.lower():
+                    logger.info("Default input is loopback, searching for microphone...")
+                    for i in range(self._pyaudio.get_device_count()):
+                        dev = self._pyaudio.get_device_info_by_index(i)
+                        dev_name = str(dev.get('name', ''))
+                        if dev.get('maxInputChannels', 0) > 0 and 'loopback' not in dev_name.lower():
+                            device = dev
+                            logger.info(f"Found microphone: {dev_name}")
+                            break
+                
+                if device:
+                    logger.info(f"Using microphone: {device.get('name', 'Unknown')}")
+                    self._actual_input_mode = AudioInputMode.MICROPHONE
+                else:
+                    logger.warning("No microphone found, falling back to default input")
+                    device = self._pyaudio.get_default_input_device_info()
+                    self._actual_input_mode = AudioInputMode.MICROPHONE
+            
+            elif self.input_mode == AudioInputMode.LOOPBACK:
+                # Loopback mode - try WASAPI loopback first
+                if PYAUDIO_WPATCH and hasattr(self._pyaudio, 'get_default_wasapi_loopback'):
                     try:
                         device = self._pyaudio.get_default_wasapi_loopback()
-                        print(f"Using WASAPI loopback: {device.get('name', 'Unknown')}")
+                        logger.info(f"Using WASAPI loopback: {device.get('name', 'Unknown')}")
+                        self._actual_input_mode = AudioInputMode.LOOPBACK
+                    except Exception as e:
+                        logger.warning(f"WASAPI loopback not available: {e}")
+                
+                if not device:
+                    logger.warning("Loopback not available, falling back to default input")
+                    device = self._pyaudio.get_default_input_device_info()
+                    self._actual_input_mode = AudioInputMode.MICROPHONE
+            
+            else:  # AUTO mode
+                # Try loopback first, fall back to microphone
+                if PYAUDIO_WPATCH and hasattr(self._pyaudio, 'get_default_wasapi_loopback'):
+                    try:
+                        device = self._pyaudio.get_default_wasapi_loopback()
+                        logger.info(f"Using WASAPI loopback: {device.get('name', 'Unknown')}")
+                        self._actual_input_mode = AudioInputMode.LOOPBACK
                     except Exception:
                         pass
                 
                 if not device:
-                    # Fall back to default input
                     device = self._pyaudio.get_default_input_device_info()
-                    print(f"Using default input: {device.get('name', 'Unknown')}")
+                    logger.info(f"Using default input: {device.get('name', 'Unknown')}")
+                    self._actual_input_mode = AudioInputMode.MICROPHONE
             
             if not device:
-                print("No audio input device found")
+                logger.error("No audio input device found")
                 return False
             
             self.device_index = device.get('index')
@@ -692,13 +791,18 @@ class AudioAnalyzer:
             )
 
 
-def create_audio_analyzer(simulate: bool = False, device_index: Optional[int] = None):
+def create_audio_analyzer(
+    simulate: bool = False, 
+    device_index: Optional[int] = None,
+    input_mode: AudioInputMode = AudioInputMode.AUTO
+):
     """
     Factory function to create an audio analyzer.
     
     Args:
         simulate: Use simulated analyzer (for testing)
         device_index: Specific audio device index, or None for auto-detect
+        input_mode: Audio input source (loopback, microphone, or auto)
     
     Returns:
         AudioAnalyzer or SimulatedAudioAnalyzer
@@ -707,4 +811,4 @@ def create_audio_analyzer(simulate: bool = False, device_index: Optional[int] = 
         from simulators import SimulatedAudioAnalyzer
         return SimulatedAudioAnalyzer()
     
-    return AudioAnalyzer(device_index=device_index)
+    return AudioAnalyzer(device_index=device_index, input_mode=input_mode)

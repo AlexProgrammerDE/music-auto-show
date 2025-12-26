@@ -110,6 +110,13 @@ class ChannelConfig(BaseModel):
         return start_channel + self.offset - 1
 
 
+class AudioInputMode(str, Enum):
+    """Audio input source mode."""
+    LOOPBACK = "loopback"  # System audio loopback (WASAPI on Windows)
+    MICROPHONE = "microphone"  # Microphone/line-in input
+    AUTO = "auto"  # Auto-detect best available
+
+
 class VisualizationMode(str, Enum):
     """How audio is mapped to fixture output."""
     ENERGY = "energy"
