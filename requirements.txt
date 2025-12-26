@@ -4,7 +4,7 @@ numpy>=1.24.0
 
 # Real-time Audio Analysis (required)
 PyAudioWPatch>=0.2.12  # WASAPI loopback support on Windows
-librosa>=0.10.0        # Beat/tempo detection (replaces aubio)
+librosa>=0.10.0        # Beat/tempo detection
 
 # DMX Control
 pyftdi>=0.54.0         # FTDI-based DMX interfaces
@@ -19,7 +19,8 @@ dearpygui>=1.10.0
 # macOS: uses built-in osascript (no extra deps)
 winrt-Windows.Media.Control>=2.0.0; sys_platform == 'win32'
 winrt-Windows.Foundation>=2.0.0; sys_platform == 'win32'
+winrt-Windows.Storage.Streams>=2.0.0; sys_platform == 'win32'  # For album art extraction
 dbus-python>=1.3.2; sys_platform == 'linux'
 
-# Spotify API (optional - for track info display only)
-spotipy>=2.23.0
+# Image processing for album art colors (optional)
+Pillow>=10.0.0
