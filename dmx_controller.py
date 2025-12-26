@@ -1,6 +1,6 @@
 """
 DMX Controller for ENTTEC Open DMX USB and compatible FTDI-based interfaces.
-Cross-platform support using pyftdi.
+Cross-platform support using pyserial with proper break signal generation.
 
 DMX512 Protocol Notes:
 - Baud rate: 250000
@@ -9,6 +9,13 @@ DMX512 Protocol Notes:
 - Mark After Break (MAB): HIGH for 8-16 microseconds (minimum 8μs)
 - Start code: First byte after break, typically 0x00 for dimmer data
 - Up to 512 channels of data following the start code
+
+IMPORTANT: The Enttec Open DMX USB uses an FTDI FT232R chip which requires
+special handling for the DMX break signal. On Windows, pyserial's break_condition
+may not work reliably. This implementation uses multiple fallback methods:
+1. break_condition property (works on Linux)
+2. Baudrate switching (most reliable cross-platform method)
+3. send_break() function (platform-dependent behavior)
 """
 import logging
 import threading
@@ -19,13 +26,6 @@ from abc import ABC, abstractmethod
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-try:
-    from pyftdi.ftdi import Ftdi
-    from pyftdi.serialext import serial_for_url
-    PYFTDI_AVAILABLE = True
-except ImportError:
-    PYFTDI_AVAILABLE = False
 
 try:
     import serial
@@ -61,159 +61,47 @@ class DMXInterface(ABC):
     def is_open(self) -> bool:
         """Check if interface is open."""
         pass
-
-
-class FTDIDMXInterface(DMXInterface):
-    """
-    FTDI-based DMX interface using pyftdi library.
-    
-    This is the preferred interface for ENTTEC Open DMX USB on systems
-    where pyftdi is available and libusb is properly configured.
-    
-    Note: On Windows, this requires the Zadig driver to replace the
-    default FTDI driver with WinUSB/libusb.
-    """
-    
-    def __init__(self, port: str = ""):
-        self.port = port
-        self._serial = None
-        self._lock = threading.Lock()
-        self._send_count = 0
-        self._error_count = 0
-    
-    def open(self) -> bool:
-        """Open the FTDI DMX interface."""
-        if not PYFTDI_AVAILABLE:
-            logger.warning("pyftdi not available - install with: pip install pyftdi")
-            logger.warning("Note: pyftdi requires libusb. On Windows, use Zadig to install WinUSB driver.")
-            return False
-        
-        try:
-            # Auto-detect port if not specified
-            if not self.port:
-                self.port = self._detect_port()
-            
-            if not self.port:
-                logger.warning("No FTDI device found for pyftdi")
-                return False
-            
-            logger.info(f"Opening FTDI DMX interface: {self.port}")
-            
-            # Open serial connection with DMX settings
-            # DMX uses 250000 baud, 8N2
-            self._serial = serial_for_url(
-                self.port,
-                baudrate=250000,
-                bytesize=8,
-                parity='N',
-                stopbits=2,
-                timeout=1
-            )
-            
-            logger.info(f"FTDI DMX interface opened successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to open FTDI interface: {e}")
-            if "No backend" in str(e) or "libusb" in str(e).lower():
-                logger.error("libusb not found. Install it:")
-                logger.error("  Linux: sudo apt install libusb-1.0-0")
-                logger.error("  Windows: Use Zadig to install WinUSB driver")
-                logger.error("  macOS: brew install libusb")
-            return False
-    
-    def _detect_port(self) -> str:
-        """Auto-detect FTDI DMX device."""
-        try:
-            devices = Ftdi.list_devices()
-            for device in devices:
-                # ENTTEC Open DMX uses FT232R (VID:0403, PID:6001)
-                vid, pid = device[0].vid, device[0].pid
-                if vid == 0x0403:  # FTDI vendor ID
-                    sn = device[0].sn
-                    url = f"ftdi://ftdi:{pid:x}:{sn}/1"
-                    logger.info(f"Found FTDI device: VID=0x{vid:04x} PID=0x{pid:04x} SN={sn}")
-                    return url
-        except Exception as e:
-            logger.debug(f"FTDI device detection failed: {e}")
-        return ""
-    
-    def close(self) -> None:
-        """Close the interface."""
-        with self._lock:
-            if self._serial:
-                try:
-                    logger.debug(f"Closing FTDI interface. Sent {self._send_count} frames, {self._error_count} errors")
-                    self._serial.close()
-                except Exception as e:
-                    logger.debug(f"Error closing FTDI interface: {e}")
-                finally:
-                    self._serial = None
-    
-    def send(self, data: bytes) -> bool:
-        """Send DMX data with proper break signal."""
-        with self._lock:
-            if not self._serial:
-                return False
-            try:
-                # Send break (low for >88us)
-                self._serial.break_condition = True
-                time.sleep(DMX_BREAK_SECONDS)
-                self._serial.break_condition = False
-                time.sleep(DMX_MAB_SECONDS)
-                
-                # Send start code (0) + DMX data
-                self._serial.write(data)
-                self._serial.flush()
-                
-                self._send_count += 1
-                return True
-            except Exception as e:
-                self._error_count += 1
-                if self._error_count <= 5:
-                    logger.error(f"DMX send error: {e}")
-                return False
-    
-    def is_open(self) -> bool:
-        """Check if interface is open."""
-        return self._serial is not None
     
     def get_stats(self) -> dict:
-        """Get interface statistics."""
-        return {
-            "port": self.port,
-            "send_count": self._send_count,
-            "error_count": self._error_count,
-            "is_open": self.is_open()
-        }
+        """Get interface statistics. Override in subclasses."""
+        return {}
 
 
 class SerialDMXInterface(DMXInterface):
     """
-    Generic serial DMX interface for ENTTEC Open DMX USB and compatible devices.
+    Serial DMX interface for ENTTEC Open DMX USB and compatible devices.
     
-    This implementation uses multiple strategies to generate the DMX break signal:
-    1. break_condition property (most reliable on Linux)
-    2. send_break() with duration (platform-dependent behavior)
-    3. Baudrate switching fallback (works on most platforms)
+    This implementation uses the baudrate-switching method as the PRIMARY
+    method for generating DMX break signals, which is the most reliable
+    cross-platform approach for FTDI-based adapters.
     
-    The Enttec Open DMX USB uses an FTDI FT232R chip which requires proper
-    break signal timing for DMX512 protocol compliance.
+    The Enttec Open DMX USB uses an FTDI FT232R chip. Unlike the DMX USB Pro,
+    it does not have a microcontroller and requires the host to generate
+    proper DMX timing including the break signal.
+    
+    Break signal methods (in order of reliability):
+    1. Baudrate switching (PRIMARY - most reliable on Windows/Linux/Mac)
+    2. break_condition property (backup - works well on Linux)
+    3. send_break() function (last resort - timing is platform-dependent)
     """
     
     def __init__(self, port: str = ""):
         self.port = port
-        self._serial = None
+        self._serial: Optional[serial.Serial] = None
         self._lock = threading.Lock()
-        self._break_method = None  # Will be detected on first send
+        self._break_method = "baudrate_switch"  # Default to most reliable method
         self._send_count = 0
         self._error_count = 0
         self._last_error = None
+        self._consecutive_errors = 0
     
     def open(self) -> bool:
         """Open serial DMX interface."""
         if not PYSERIAL_AVAILABLE:
-            logger.error("pyserial not available - install with: pip install pyserial")
+            logger.error("=" * 60)
+            logger.error("pyserial not available!")
+            logger.error("Install with: pip install pyserial")
+            logger.error("=" * 60)
             return False
         
         try:
@@ -222,19 +110,41 @@ class SerialDMXInterface(DMXInterface):
             
             if not self.port:
                 # List available ports to help user
-                ports = serial.tools.list_ports.comports()
+                ports = list(serial.tools.list_ports.comports())
+                logger.error("=" * 60)
+                logger.error("NO DMX DEVICE DETECTED")
+                logger.error("=" * 60)
                 if ports:
-                    logger.warning("No FTDI/DMX device auto-detected. Available ports:")
+                    logger.error("Available serial ports:")
                     for p in ports:
                         vid_str = f"0x{p.vid:04x}" if p.vid else "N/A"
                         pid_str = f"0x{p.pid:04x}" if p.pid else "N/A"
-                        logger.warning(f"  {p.device}: {p.description} (VID:{vid_str}, PID:{pid_str})")
-                    logger.warning("Specify the port manually in your configuration if auto-detect fails.")
+                        logger.error(f"  {p.device}: {p.description}")
+                        logger.error(f"    VID: {vid_str}, PID: {pid_str}")
+                    logger.error("")
+                    logger.error("If your Enttec Open DMX USB is connected:")
+                    logger.error("  - Check that the USB cable is properly connected")
+                    logger.error("  - Try a different USB port")
+                    logger.error("  - On Windows: Check Device Manager for COM port")
+                    logger.error("  - Specify the port manually in configuration")
                 else:
-                    logger.error("No serial ports found. Check USB connection and drivers.")
+                    logger.error("No serial ports found!")
+                    logger.error("  - Check USB connection")
+                    logger.error("  - Install FTDI drivers if needed")
+                    if sys.platform == 'win32':
+                        logger.error("  - Windows: Download FTDI VCP drivers from ftdichip.com")
+                    elif sys.platform == 'linux':
+                        logger.error("  - Linux: sudo apt install libftdi1")
+                logger.error("=" * 60)
                 return False
             
-            logger.info(f"Opening DMX interface on {self.port}")
+            logger.info("=" * 60)
+            logger.info("OPENING DMX INTERFACE")
+            logger.info("=" * 60)
+            logger.info(f"Port: {self.port}")
+            logger.info(f"Device: {self._get_device_info()}")
+            
+            # Open with DMX settings: 250000 baud, 8N2
             self._serial = serial.Serial(
                 self.port,
                 baudrate=250000,
@@ -246,86 +156,103 @@ class SerialDMXInterface(DMXInterface):
             )
             
             # Log serial port settings
-            logger.info(f"  Serial port opened:")
-            logger.info(f"    Baudrate: {self._serial.baudrate}")
-            logger.info(f"    Bytesize: {self._serial.bytesize}")
-            logger.info(f"    Parity: {self._serial.parity}")
-            logger.info(f"    Stopbits: {self._serial.stopbits}")
-            logger.info(f"    Port name: {self._serial.name}")
-            logger.info(f"    Is open: {self._serial.is_open}")
+            logger.info(f"Serial settings:")
+            logger.info(f"  Baudrate: {self._serial.baudrate}")
+            logger.info(f"  Bytesize: {self._serial.bytesize}, Stopbits: {self._serial.stopbits}")
+            logger.info(f"  Parity: {self._serial.parity}")
+            logger.info(f"  Port open: {self._serial.is_open}")
             
-            # Ensure RTS is set correctly for FTDI-based adapters
-            # Some adapters use RTS to control the RS-485 driver direction
+            # Set RTS/DTR - some adapters need this
             try:
                 self._serial.rts = True
                 self._serial.dtr = True
-                logger.info(f"    RTS: {self._serial.rts}, DTR: {self._serial.dtr}")
+                logger.info(f"  RTS: {self._serial.rts}, DTR: {self._serial.dtr}")
             except Exception as e:
-                logger.debug(f"Could not set RTS/DTR (may not be supported): {e}")
+                logger.debug(f"Could not set RTS/DTR: {e}")
             
             # Detect the best break method for this platform/device
             self._detect_break_method()
             
-            logger.info(f"DMX interface opened successfully on {self.port}")
-            logger.info(f"  Break method: {self._break_method}")
-            logger.info(f"  Device: {self._get_device_info()}")
+            logger.info(f"Break method: {self._break_method}")
+            logger.info("=" * 60)
+            logger.info("DMX INTERFACE READY")
+            logger.info("=" * 60)
             
             return True
             
         except serial.SerialException as e:
-            logger.error(f"Serial port error on {self.port}: {e}")
+            logger.error("=" * 60)
+            logger.error("SERIAL PORT ERROR")
+            logger.error("=" * 60)
+            logger.error(f"Port: {self.port}")
+            logger.error(f"Error: {e}")
             if "Permission" in str(e) or "access" in str(e).lower():
-                logger.error("Permission denied. On Linux, add user to 'dialout' group:")
-                logger.error("  sudo usermod -a -G dialout $USER")
-                logger.error("  (logout and login again for changes to take effect)")
+                if sys.platform == 'linux':
+                    logger.error("")
+                    logger.error("Permission denied. Add user to 'dialout' group:")
+                    logger.error("  sudo usermod -a -G dialout $USER")
+                    logger.error("  (logout and login again for changes to take effect)")
+                elif sys.platform == 'win32':
+                    logger.error("")
+                    logger.error("Access denied. The port may be in use by another program.")
+                    logger.error("Close QLC+ or other DMX software and try again.")
+            logger.error("=" * 60)
             return False
         except Exception as e:
-            logger.error(f"Failed to open serial interface on {self.port}: {e}")
+            logger.error(f"Failed to open serial interface: {e}")
             return False
     
     def _get_device_info(self) -> str:
         """Get device description for logging."""
         try:
-            ports = serial.tools.list_ports.comports()
+            ports = list(serial.tools.list_ports.comports())
             for p in ports:
                 if p.device == self.port:
-                    return p.description or "Unknown device"
+                    info = p.description or "Unknown"
+                    if p.vid and p.pid:
+                        info += f" (VID:0x{p.vid:04x} PID:0x{p.pid:04x})"
+                    return info
         except Exception:
             pass
         return "Unknown"
     
     def _detect_break_method(self) -> None:
-        """Detect the best method for generating DMX break signals."""
+        """
+        Detect the best method for generating DMX break signals.
+        
+        On Windows with FTDI devices, break_condition often doesn't work
+        properly through the VCP driver. The baudrate switching method
+        is more reliable across platforms.
+        """
         if not self._serial:
             return
         
-        # Try break_condition property first (most precise on Linux)
+        # On Windows, prefer baudrate switching as it's more reliable with FTDI VCP
+        if sys.platform == 'win32':
+            self._break_method = "baudrate_switch"
+            logger.info("Windows detected - using baudrate switching for DMX break")
+            return
+        
+        # On Linux/Mac, try break_condition first as it's more precise
         try:
             self._serial.break_condition = True
             time.sleep(0.0001)
             self._serial.break_condition = False
             self._break_method = "break_condition"
-            logger.debug("Using break_condition property for DMX break")
+            logger.info("Using break_condition property for DMX break")
             return
         except (AttributeError, serial.SerialException, IOError, OSError) as e:
             logger.debug(f"break_condition not supported: {e}")
         
-        # Try send_break (platform-dependent timing)
-        try:
-            self._serial.send_break(duration=0.001)
-            self._break_method = "send_break"
-            logger.debug("Using send_break() for DMX break")
-            return
-        except (AttributeError, serial.SerialException, IOError, OSError) as e:
-            logger.debug(f"send_break not supported: {e}")
-        
-        # Fallback to baudrate switching (works on most platforms)
+        # Fallback to baudrate switching
         self._break_method = "baudrate_switch"
-        logger.debug("Using baudrate switching for DMX break (fallback)")
+        logger.info("Using baudrate switching for DMX break (fallback)")
     
     def _detect_port(self) -> str:
         """Auto-detect serial DMX device."""
-        ports = serial.tools.list_ports.comports()
+        ports = list(serial.tools.list_ports.comports())
+        
+        logger.info("Scanning for DMX devices...")
         
         # First pass: Look for known FTDI DMX devices
         for port in ports:
@@ -333,10 +260,10 @@ class SerialDMXInterface(DMXInterface):
             
             # ENTTEC Open DMX uses FTDI FT232R (VID:0403, PID:6001)
             if port.vid == 0x0403 and port.pid == 0x6001:
-                logger.info(f"Found FTDI FT232R (likely Enttec Open DMX): {port.device}")
+                logger.info(f"Found FTDI FT232R (Enttec Open DMX compatible): {port.device}")
                 return port.device
             
-            # Other FTDI devices
+            # Other FTDI devices that might be DMX adapters
             if port.vid == 0x0403:
                 logger.info(f"Found FTDI device: {port.device} - {desc}")
                 return port.device
@@ -344,10 +271,6 @@ class SerialDMXInterface(DMXInterface):
             # Devices with DMX in name
             if 'DMX' in desc:
                 logger.info(f"Found DMX device: {port.device} - {desc}")
-                return port.device
-            
-            if 'FTDI' in desc or 'FT232' in desc:
-                logger.info(f"Found FTDI device: {port.device} - {desc}")
                 return port.device
         
         # Second pass: Any USB serial device
@@ -371,13 +294,64 @@ class SerialDMXInterface(DMXInterface):
         with self._lock:
             if self._serial:
                 try:
-                    # Send a final blackout before closing
-                    logger.debug(f"Closing DMX interface. Sent {self._send_count} frames, {self._error_count} errors")
+                    logger.info("=" * 60)
+                    logger.info("CLOSING DMX INTERFACE")
+                    logger.info("=" * 60)
+                    logger.info(f"Frames sent: {self._send_count}")
+                    logger.info(f"Errors: {self._error_count}")
+                    if self._send_count > 0:
+                        success_rate = ((self._send_count - self._error_count) / self._send_count) * 100
+                        logger.info(f"Success rate: {success_rate:.1f}%")
                     self._serial.close()
+                    logger.info("DMX interface closed")
+                    logger.info("=" * 60)
                 except Exception as e:
                     logger.debug(f"Error closing serial port: {e}")
                 finally:
                     self._serial = None
+    
+    def _send_break_baudrate(self) -> bool:
+        """
+        Send break by temporarily switching to a lower baudrate.
+        
+        This is the most reliable method for FTDI-based adapters across
+        all platforms. At a lower baudrate, sending a zero byte creates
+        a longer "low" period that serves as the DMX break.
+        
+        At 76800 baud (non-standard but divisible from FTDI's clock):
+        - Each bit is ~13μs
+        - A zero byte (start bit + 8 zero bits + stop bits) = ~130μs LOW
+        - This exceeds the 88μs minimum break requirement
+        
+        At 57600 baud:
+        - Each bit is ~17.36μs
+        - A zero byte = ~173μs LOW
+        """
+        try:
+            # Flush any pending data first
+            self._serial.reset_output_buffer()
+            
+            # Switch to lower baudrate for break signal
+            # Using 76800 gives us ~130μs break which meets DMX spec
+            self._serial.baudrate = 76800
+            self._serial.write(b'\x00')
+            self._serial.flush()
+            
+            # Switch back to DMX baudrate
+            self._serial.baudrate = 250000
+            
+            # Small delay for Mark After Break
+            time.sleep(DMX_MAB_SECONDS)
+            return True
+            
+        except Exception as e:
+            self._last_error = f"baudrate switch failed: {e}"
+            # Try to restore baudrate
+            try:
+                self._serial.baudrate = 250000
+            except Exception:
+                pass
+            return False
     
     def _send_break_condition(self) -> bool:
         """Send break using break_condition property."""
@@ -394,46 +368,12 @@ class SerialDMXInterface(DMXInterface):
     def _send_break_function(self) -> bool:
         """Send break using send_break() function."""
         try:
-            # Note: send_break duration is platform-dependent
-            # On Linux, tcsendbreak with non-zero duration may not work as expected
-            # We use a longer duration to ensure the break is generated
-            self._serial.send_break(duration=0.001)  # 1ms - longer than needed but more reliable
+            # Note: send_break duration is platform-dependent and often ignored
+            self._serial.send_break(duration=0.001)
             time.sleep(DMX_MAB_SECONDS)
             return True
         except Exception as e:
             self._last_error = f"send_break failed: {e}"
-            return False
-    
-    def _send_break_baudrate(self) -> bool:
-        """
-        Send break by temporarily switching to a lower baudrate.
-        
-        At 250000 baud, each bit is 4μs. To generate a ~176μs break,
-        we send a 0x00 byte at a lower baudrate where the frame duration
-        equals our desired break time.
-        
-        At 57600 baud, sending 0x00 takes about 173μs (10 bits * 17.36μs/bit)
-        """
-        try:
-            # Flush any pending data first
-            self._serial.flush()
-            
-            # Switch to lower baudrate for break signal
-            self._serial.baudrate = 57600
-            self._serial.write(b'\x00')
-            self._serial.flush()
-            
-            # Switch back to DMX baudrate
-            self._serial.baudrate = 250000
-            time.sleep(DMX_MAB_SECONDS)
-            return True
-        except Exception as e:
-            self._last_error = f"baudrate switch failed: {e}"
-            # Try to restore baudrate
-            try:
-                self._serial.baudrate = 250000
-            except Exception:
-                pass
             return False
     
     def send(self, data: bytes) -> bool:
@@ -446,41 +386,45 @@ class SerialDMXInterface(DMXInterface):
         3. Start code + data: 8N2 serial data at 250kbaud
         """
         with self._lock:
-            if not self._serial:
+            if not self._serial or not self._serial.is_open:
                 if self._send_count == 0:
-                    logger.error("Send called but serial port is None!")
+                    logger.error("DMX send failed: serial port is not open!")
                 return False
             
             try:
                 # Log first frame details
                 if self._send_count == 0:
                     non_zero = [(i, v) for i, v in enumerate(data) if v != 0]
-                    logger.info(f"Sending first DMX frame: {len(data)} bytes, {len(non_zero)} non-zero channels")
+                    logger.info("=" * 60)
+                    logger.info("SENDING FIRST DMX FRAME")
+                    logger.info("=" * 60)
+                    logger.info(f"Frame size: {len(data)} bytes (start code + 512 channels)")
+                    logger.info(f"Non-zero channels: {len(non_zero)}")
                     if non_zero[:10]:
-                        logger.info(f"  First non-zero values: {non_zero[:10]}")
-                
-                # Flush any pending output to ensure clean timing
-                self._serial.reset_output_buffer()
+                        logger.info(f"First values: {non_zero[:10]}")
+                    logger.info(f"Break method: {self._break_method}")
                 
                 # Send break signal using detected method
                 break_sent = False
-                if self._break_method == "break_condition":
+                
+                if self._break_method == "baudrate_switch":
+                    break_sent = self._send_break_baudrate()
+                elif self._break_method == "break_condition":
                     break_sent = self._send_break_condition()
-                elif self._break_method == "send_break":
-                    break_sent = self._send_break_function()
                 else:
+                    break_sent = self._send_break_function()
+                
+                # If primary method fails, try baudrate switching as fallback
+                if not break_sent and self._break_method != "baudrate_switch":
+                    if self._consecutive_errors == 0:
+                        logger.warning(f"Break method '{self._break_method}' failed, trying baudrate switch")
+                    self._break_method = "baudrate_switch"
                     break_sent = self._send_break_baudrate()
                 
                 if not break_sent:
-                    # Try fallback to baudrate switching
-                    if self._break_method != "baudrate_switch":
-                        logger.warning(f"Break method '{self._break_method}' failed, trying baudrate switch")
-                        self._break_method = "baudrate_switch"
-                        break_sent = self._send_break_baudrate()
-                
-                if not break_sent:
                     self._error_count += 1
-                    if self._error_count <= 5:  # Only log first few errors
+                    self._consecutive_errors += 1
+                    if self._consecutive_errors <= 3:
                         logger.error(f"Failed to send DMX break: {self._last_error}")
                     return False
                 
@@ -491,26 +435,33 @@ class SerialDMXInterface(DMXInterface):
                 self._serial.flush()
                 
                 self._send_count += 1
+                self._consecutive_errors = 0
                 
                 # Log after first successful frame
                 if self._send_count == 1:
-                    logger.info(f"First DMX frame sent successfully ({bytes_written} bytes written)")
+                    logger.info(f"First frame sent successfully ({bytes_written} bytes)")
+                    logger.info("=" * 60)
+                    logger.info("DMX OUTPUT ACTIVE")
+                    logger.info("=" * 60)
                 
                 return bytes_written == len(data)
                 
             except serial.SerialTimeoutException:
                 self._error_count += 1
-                if self._error_count <= 5:
+                self._consecutive_errors += 1
+                if self._consecutive_errors <= 3:
                     logger.error("DMX send timeout - device may be disconnected")
                 return False
             except serial.SerialException as e:
                 self._error_count += 1
-                if self._error_count <= 5:
+                self._consecutive_errors += 1
+                if self._consecutive_errors <= 3:
                     logger.error(f"DMX serial error: {e}")
                 return False
             except Exception as e:
                 self._error_count += 1
-                if self._error_count <= 5:
+                self._consecutive_errors += 1
+                if self._consecutive_errors <= 3:
                     logger.error(f"DMX send error: {e}")
                 return False
     
@@ -525,6 +476,7 @@ class SerialDMXInterface(DMXInterface):
             "break_method": self._break_method,
             "send_count": self._send_count,
             "error_count": self._error_count,
+            "consecutive_errors": self._consecutive_errors,
             "last_error": self._last_error,
             "is_open": self.is_open()
         }
@@ -536,17 +488,27 @@ class SimulatedDMXInterface(DMXInterface):
     def __init__(self):
         self._is_open = False
         self._last_data = bytes(513)
+        self._send_count = 0
     
     def open(self) -> bool:
+        logger.info("=" * 60)
+        logger.info("SIMULATED DMX INTERFACE")
+        logger.info("=" * 60)
+        logger.info("No actual DMX output - for testing only")
+        logger.info("=" * 60)
         self._is_open = True
         return True
     
     def close(self) -> None:
+        logger.info("Simulated DMX interface closed")
         self._is_open = False
     
     def send(self, data: bytes) -> bool:
         if self._is_open:
             self._last_data = data
+            self._send_count += 1
+            if self._send_count == 1:
+                logger.info("Simulated DMX: First frame received")
             return True
         return False
     
@@ -556,6 +518,13 @@ class SimulatedDMXInterface(DMXInterface):
     def get_last_data(self) -> bytes:
         """Get the last sent data (for visualization)."""
         return self._last_data
+    
+    def get_stats(self) -> dict:
+        return {
+            "type": "simulated",
+            "send_count": self._send_count,
+            "is_open": self._is_open
+        }
 
 
 class DMXController:
@@ -637,7 +606,7 @@ class DMXController:
         self._thread = threading.Thread(target=self._output_loop, daemon=True)
         self._thread.start()
         
-        logger.info(f"DMX output started at {self.fps} FPS ({1000/self.fps:.1f}ms per frame)")
+        logger.info(f"DMX output thread started at {self.fps} FPS ({1000/self.fps:.1f}ms per frame)")
         return True
     
     def stop(self) -> None:
@@ -659,6 +628,7 @@ class DMXController:
         """Continuous output loop."""
         interval = 1.0 / self.fps
         consecutive_errors = 0
+        last_stats_time = time.time()
         
         while self._running:
             start = time.time()
@@ -674,9 +644,28 @@ class DMXController:
                 else:
                     consecutive_errors += 1
                     if consecutive_errors == 10:
-                        logger.error("Multiple consecutive DMX send failures - check connection")
+                        logger.error("=" * 60)
+                        logger.error("DMX OUTPUT FAILING")
+                        logger.error("=" * 60)
+                        logger.error("Multiple consecutive send failures detected!")
+                        logger.error("Check USB connection and try reconnecting the device.")
+                        try:
+                            stats = self._interface.get_stats()  # type: ignore
+                            if stats.get('last_error'):
+                                logger.error(f"Last error: {stats['last_error']}")
+                        except AttributeError:
+                            pass
+                        logger.error("=" * 60)
                     elif consecutive_errors >= 100 and consecutive_errors % 100 == 0:
                         logger.error(f"DMX send continues to fail ({consecutive_errors} consecutive errors)")
+            
+            # Log stats every 30 seconds
+            now = time.time()
+            if now - last_stats_time >= 30.0 and self._frame_count > 0:
+                elapsed = now - self._start_time
+                actual_fps = self._frame_count / elapsed
+                logger.debug(f"DMX stats: {self._frame_count} frames, {actual_fps:.1f} FPS, {consecutive_errors} recent errors")
+                last_stats_time = now
             
             # Maintain consistent timing
             elapsed = time.time() - start
@@ -703,8 +692,11 @@ class DMXController:
         }
         
         # Add interface stats if available
-        if self._interface and hasattr(self._interface, 'get_stats'):
-            stats["interface"] = self._interface.get_stats()
+        if self._interface:
+            try:
+                stats["interface"] = self._interface.get_stats()  # type: ignore
+            except AttributeError:
+                pass
         
         return stats
 
@@ -721,32 +713,30 @@ def create_dmx_controller(port: str = "", simulate: bool = False, fps: int = 40)
     Returns:
         Tuple of (DMXController, DMXInterface)
     """
-    logger.info("Creating DMX controller...")
-    logger.info(f"  Simulation mode: {simulate}")
-    logger.info(f"  Target FPS: {fps}")
-    logger.info(f"  Port: {port or '(auto-detect)'}")
-    logger.info(f"  pyserial available: {PYSERIAL_AVAILABLE}")
-    logger.info(f"  pyftdi available: {PYFTDI_AVAILABLE}")
+    logger.info("=" * 60)
+    logger.info("CREATING DMX CONTROLLER")
+    logger.info("=" * 60)
+    logger.info(f"Simulation mode: {simulate}")
+    logger.info(f"Target FPS: {fps}")
+    logger.info(f"Port: {port or '(auto-detect)'}")
+    logger.info(f"Platform: {sys.platform}")
+    logger.info(f"pyserial available: {PYSERIAL_AVAILABLE}")
     
     if simulate:
-        logger.info("Using simulated DMX interface (no hardware output)")
         interface = SimulatedDMXInterface()
     elif PYSERIAL_AVAILABLE:
-        # Try pyserial first - works better on Windows with standard FTDI drivers
-        # and on Linux without needing to configure libusb
-        logger.info("Using pyserial-based DMX interface")
         interface = SerialDMXInterface(port)
-    elif PYFTDI_AVAILABLE:
-        # pyftdi requires libusb/Zadig driver on Windows
-        logger.info("Using pyftdi-based DMX interface")
-        interface = FTDIDMXInterface(port)
     else:
-        logger.warning("No DMX library available!")
+        logger.warning("=" * 60)
+        logger.warning("NO DMX LIBRARY AVAILABLE")
+        logger.warning("=" * 60)
         logger.warning("Install pyserial with: pip install pyserial")
         logger.warning("Using simulation mode as fallback")
+        logger.warning("=" * 60)
         interface = SimulatedDMXInterface()
     
     controller = DMXController(interface=interface, fps=fps)
+    logger.info("=" * 60)
     return controller, interface
 
 
