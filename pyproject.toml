@@ -1,0 +1,41 @@
+[project]
+name = "music-auto-show"
+version = "0.1.0"
+description = "DMX Light Show Synchronized with Music"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "librosa>=0.10.0",
+    "pyftdi>=0.54.0",
+    "pyserial>=3.5",
+    "dearpygui>=1.10.0",
+    "spotipy>=2.23.0",
+]
+
+[project.optional-dependencies]
+windows = [
+    "PyAudioWPatch>=0.2.12",
+    "winrt-Windows.Media.Control>=2.0.0",
+    "winrt-Windows.Foundation>=2.0.0",
+]
+linux = [
+    "PyAudio>=0.2.13",
+    "dbus-python>=1.3.2",
+]
+
+[tool.pyright]
+include = ["."]
+exclude = ["**/__pycache__", ".venv", "venv", "build", "dist"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingTypeStubs = "none"
+reportOptionalMemberAccess = "none"
+reportOptionalSubscript = "none"
+reportOptionalCall = "none"
+reportUnboundVariable = "warning"
+reportPossiblyUnbound = "none"
