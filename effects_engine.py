@@ -39,7 +39,7 @@ class FixtureState:
     pan_fine: int = 0
     tilt: int = 128
     tilt_fine: int = 0
-    pt_speed: int = 0
+    pt_speed: int = 0  # 0 = fast for FAST_SLOW type
     
     # Effects
     color_macro: int = 0
@@ -321,7 +321,10 @@ class EffectsEngine:
                 tilt_offset = math.sin(beat_phase) * (tilt_range / 4) * speed
                 state.tilt = int(tilt_center + tilt_offset)
             
-            state.pt_speed = int(255 * (1.0 - speed))
+            # For SPEED_PAN_TILT_FAST_SLOW: 0=fast, 255=slow
+            # Use low values (fast movement) so fixture can keep up with position changes
+            # Scale: movement_speed 1.0 -> pt_speed 0 (fastest), movement_speed 0.0 -> pt_speed 64 (still fairly fast)
+            state.pt_speed = int(64 * (1.0 - speed))
     
     def _check_energy_drop(self, data: AnalysisData) -> None:
         current_energy = data.features.energy

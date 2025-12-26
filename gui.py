@@ -816,7 +816,7 @@ class MusicAutoShowGUI:
                     # Log fixture states
                     for name, state in self._fixture_states.items():
                         logger.info(f"  Fixture '{name}': R={state.red} G={state.green} B={state.blue} "
-                                   f"Dimmer={state.dimmer}")
+                                   f"Dimmer={state.dimmer} Pan={state.pan} Tilt={state.tilt} PTSpeed={state.pt_speed}")
                     
                     # Log actual DMX channel values
                     if self.dmx_controller:

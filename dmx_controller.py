@@ -178,7 +178,8 @@ class SerialDMXInterface(DMXInterface):
             # This is important for proper FTDI operation
             try:
                 self._serial.rts = False
-                self._serial.dtr = True
+                self._serial.dtr = False  # QLC+ also sets DTR=False for Open DMX
+                time.sleep(0.01)  # Give FTDI time to apply settings
                 logger.info(f"  RTS: {self._serial.rts}, DTR: {self._serial.dtr}")
             except Exception as e:
                 logger.debug(f"Could not set RTS/DTR: {e}")
@@ -252,21 +253,23 @@ class SerialDMXInterface(DMXInterface):
             logger.info(f"Using forced break method: {self._force_break_method}")
             return
         
-        # Try break_condition first - this is what QLC+ uses
-        try:
-            # Test if break_condition property works
-            self._serial.break_condition = True
-            time.sleep(0.0001)
-            self._serial.break_condition = False
-            self._break_method = "break_condition"
-            logger.info("Using break_condition for DMX break (like QLC+)")
-            return
-        except (AttributeError, serial.SerialException, IOError, OSError) as e:
-            logger.warning(f"break_condition not available: {e}")
+        # On Windows, try break_condition first - this is what QLC+ uses
+        # and is the most reliable when it works with FTDI drivers
+        if sys.platform == 'win32':
+            try:
+                # Test if break_condition property works
+                self._serial.break_condition = True
+                time.sleep(0.0001)
+                self._serial.break_condition = False
+                self._break_method = "break_condition"
+                logger.info("Using break_condition for DMX break (like QLC+)")
+                return
+            except (AttributeError, serial.SerialException, IOError, OSError) as e:
+                logger.warning(f"break_condition not available: {e}")
         
-        # Fallback to baudrate switching
+        # Fallback to baudrate switching - most reliable cross-platform method
         self._break_method = "baudrate_switch"
-        logger.info("Using baudrate switching for DMX break (fallback)")
+        logger.info("Using baudrate switching for DMX break (most reliable cross-platform)")
     
     def _detect_port(self) -> str:
         """Auto-detect serial DMX device."""
