@@ -3,15 +3,24 @@ Headless mode runner for Music Auto Show.
 Runs the light show from a JSON configuration file without GUI.
 """
 import argparse
+import logging
 import signal
 import sys
 import time
 from pathlib import Path
 
 from config import ShowConfig
-from dmx_controller import create_dmx_controller
+from dmx_controller import create_dmx_controller, configure_logging as configure_dmx_logging
 from audio_analyzer import create_audio_analyzer
 from effects_engine import EffectsEngine
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 
 class HeadlessRunner:
@@ -51,7 +60,12 @@ class HeadlessRunner:
                 return False
         
         # Initialize DMX
-        print("Initializing DMX...")
+        logger.info("=" * 50)
+        logger.info("STARTING MUSIC AUTO SHOW")
+        logger.info("=" * 50)
+        logger.info("")
+        logger.info("Initializing DMX interface...")
+        
         self.dmx_controller, self.dmx_interface = create_dmx_controller(
             port=self.config.dmx.port,
             simulate=self.simulate_dmx,
@@ -59,34 +73,50 @@ class HeadlessRunner:
         )
         
         if not self.dmx_interface.open():
-            print("Failed to open DMX interface")
+            logger.error("Failed to open DMX interface!")
+            logger.error("Check the following:")
+            logger.error("  1. Is the USB adapter connected?")
+            logger.error("  2. Do you have permission to access the serial port?")
+            logger.error("     (On Linux: sudo usermod -a -G dialout $USER)")
+            logger.error("  3. Is another application using the DMX adapter?")
             return False
         
         if not self.dmx_controller.start():
-            print("Failed to start DMX controller")
+            logger.error("Failed to start DMX controller output loop")
             return False
         
-        print("DMX initialized" + (" (simulated)" if self.simulate_dmx else ""))
+        mode_str = "SIMULATED" if self.simulate_dmx else "HARDWARE"
+        logger.info(f"DMX output active [{mode_str}]")
         
         # Initialize audio analyzer
-        print("Initializing audio capture...")
+        logger.info("")
+        logger.info("Initializing audio capture...")
         self.audio_analyzer = create_audio_analyzer(simulate=self.simulate_audio)
         
         if not self.audio_analyzer.start():
-            print("Failed to start audio analyzer")
+            logger.error("Failed to start audio analyzer")
             return False
         
-        print("Audio initialized" + (" (simulated)" if self.simulate_audio else ""))
+        mode_str = "SIMULATED" if self.simulate_audio else "LIVE"
+        logger.info(f"Audio capture active [{mode_str}]")
         
         # Initialize effects engine
         self.effects_engine = EffectsEngine(
             self.dmx_controller,
-            self.config.fixtures,
-            self.config.effects
+            self.config
         )
         
-        print("Effects engine initialized")
-        print(f"Running in {self.config.effects.mode.value} mode...")
+        logger.info("")
+        logger.info("Effects engine initialized")
+        logger.info(f"  Mode: {self.config.effects.mode.value}")
+        logger.info(f"  Fixtures: {len(self.config.fixtures)}")
+        for fixture in self.config.fixtures:
+            logger.info(f"    - {fixture.name} (ch {fixture.start_channel})")
+        
+        logger.info("")
+        logger.info("=" * 50)
+        logger.info("SHOW RUNNING - Press Ctrl+C to stop")
+        logger.info("=" * 50)
         
         return True
     
@@ -99,18 +129,30 @@ class HeadlessRunner:
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         last_status = time.time()
+        frame_count = 0
         
         while self._running:
             # Get analysis data and process
             data = self.audio_analyzer.get_data()
             self.effects_engine.process(data)
+            frame_count += 1
             
             # Print status every 5 seconds
             now = time.time()
             if now - last_status >= 5.0:
-                print(f"Audio: Energy: {data.features.energy:.2f} "
-                      f"| Bass: {data.features.bass:.2f} "
-                      f"| Tempo: {data.features.tempo:.0f} BPM")
+                # Get DMX stats if available
+                dmx_info = ""
+                if self.dmx_controller and hasattr(self.dmx_controller, 'get_stats'):
+                    stats = self.dmx_controller.get_stats()
+                    dmx_info = f" | DMX: {stats.get('actual_fps', 0):.0f} FPS"
+                    if 'interface' in stats:
+                        iface = stats['interface']
+                        if iface.get('error_count', 0) > 0:
+                            dmx_info += f" ({iface['error_count']} errors)"
+                
+                logger.info(f"Energy: {data.features.energy:.2f} | "
+                           f"Bass: {data.features.bass:.2f} | "
+                           f"Tempo: {data.features.tempo:.0f} BPM{dmx_info}")
                 last_status = now
             
             time.sleep(0.025)  # 40 Hz
@@ -119,19 +161,32 @@ class HeadlessRunner:
         """Stop the light show."""
         self._running = False
         
+        logger.info("")
+        logger.info("Stopping show...")
+        
         if self.effects_engine:
+            logger.info("  Sending blackout...")
             self.effects_engine.blackout()
         
         if self.audio_analyzer:
+            logger.info("  Stopping audio capture...")
             self.audio_analyzer.stop()
         
         if self.dmx_controller:
+            # Log final stats
+            if hasattr(self.dmx_controller, 'get_stats'):
+                stats = self.dmx_controller.get_stats()
+                logger.info(f"  DMX stats: {stats.get('frame_count', 0)} frames sent, "
+                           f"{stats.get('actual_fps', 0):.1f} FPS average")
+            logger.info("  Stopping DMX output...")
             self.dmx_controller.stop()
         
         if self.dmx_interface:
+            logger.info("  Closing DMX interface...")
             self.dmx_interface.close()
         
-        print("Show stopped")
+        logger.info("")
+        logger.info("Show stopped")
     
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals."""
