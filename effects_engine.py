@@ -1,6 +1,15 @@
 """
 Effects engine that converts audio analysis to DMX values.
-Supports multiple visualization modes and fixture configurations.
+Uses proper audio-reactive algorithms based on professional lighting design principles:
+
+- Bass (20-250Hz) → Intensity, movement triggers, pulse effects
+- Mids (250-4000Hz) → Color changes, smooth transitions  
+- Highs (4000Hz+) → Fast effects, strobes, sparkle
+- Beat detection → Synchronized movement and color changes
+- Energy levels → Overall brightness and effect intensity
+
+Movement happens on musical events (beats, drops), not constantly.
+Colors shift smoothly based on musical mood, not randomly.
 """
 import math
 import time
@@ -62,14 +71,23 @@ class FixtureState:
         self.blue = max(0, min(255, int(b)))
     
     def set_from_hsv(self, h: float, s: float, v: float) -> None:
-        r, g, b = colorsys.hsv_to_rgb(h % 1.0, s, v)
+        r, g, b = colorsys.hsv_to_rgb(h % 1.0, max(0, min(1, s)), max(0, min(1, v)))
         self.red = int(r * 255)
         self.green = int(g * 255)
         self.blue = int(b * 255)
 
 
 class EffectsEngine:
-    """Engine that processes audio analysis and generates DMX output."""
+    """
+    Engine that processes audio analysis and generates DMX output.
+    
+    Design principles:
+    - Bass drives intensity and triggers movement
+    - Mids drive color palette selection
+    - Highs drive fast accent effects
+    - Movement happens on beats, not constantly
+    - Smooth transitions with proper easing
+    """
     
     def __init__(self, dmx_controller: DMXController, config: ShowConfig):
         self.dmx = dmx_controller
@@ -84,14 +102,39 @@ class EffectsEngine:
         self._smoothed_values: dict[str, FixtureState] = {}
         self._init_fixture_states()
         
-        # Animation state
+        # ===== Animation state =====
         self._time = 0.0
+        self._start_time = time.time()
+        
+        # Beat tracking
         self._last_beat = 0
         self._last_bar = 0
-        self._color_phase = 0.0
-        self._wave_phase = 0.0
+        self._beats_since_move = 0  # Track beats to trigger movement
+        
+        # Color state - hue cycles slowly, shifts on musical events
+        self._base_hue = 0.0  # Base color that drifts slowly
+        self._target_hue = 0.0  # Target hue for smooth transitions
+        self._current_hue = 0.0  # Actual displayed hue
+        
+        # Movement state - positions are set on beats, then fixture moves there
+        self._target_pan: dict[str, int] = {}
+        self._target_tilt: dict[str, int] = {}
+        self._movement_triggered = False
+        
+        # Intensity state
+        self._base_intensity = 0.5
+        self._pulse_intensity = 0.0  # Decays after beats
+        
+        # Energy tracking for drop detection
+        self._energy_history: list[float] = []
+        self._avg_energy = 0.5
+        self._is_buildup = False
+        self._is_drop = False
+        self._drop_time = 0.0
+        
+        # Strobe state
         self._strobe_active = False
-        self._last_energy = 0.5
+        self._strobe_end_time = 0.0
         
         # Blackout state
         self._blackout_active = False
@@ -105,6 +148,9 @@ class EffectsEngine:
         for fixture in self.config.fixtures:
             self._states[fixture.name] = FixtureState()
             self._smoothed_values[fixture.name] = FixtureState()
+            # Initialize movement targets to center
+            self._target_pan[fixture.name] = 128
+            self._target_tilt[fixture.name] = 128
     
     def _get_profile(self, fixture: FixtureConfig) -> Optional[FixtureProfile]:
         if fixture.profile_name:
@@ -118,8 +164,11 @@ class EffectsEngine:
             if fixture.name not in self._states:
                 self._states[fixture.name] = FixtureState()
                 self._smoothed_values[fixture.name] = FixtureState()
+                self._target_pan[fixture.name] = 128
+                self._target_tilt[fixture.name] = 128
     
     def process(self, data: AnalysisData) -> dict[str, FixtureState]:
+        """Process audio data and update fixture states."""
         # If blackout is active, keep all channels at zero
         if self._blackout_active:
             self._output_to_dmx()
@@ -127,55 +176,160 @@ class EffectsEngine:
         
         self._time = time.time()
         
+        # Detect beat and bar changes
         beat_triggered = data.estimated_beat != self._last_beat
         bar_triggered = data.estimated_bar != self._last_bar
         self._last_beat = data.estimated_beat
         self._last_bar = data.estimated_bar
         
+        if beat_triggered:
+            self._beats_since_move += 1
+        
+        # Update energy tracking for drop detection
+        self._update_energy_tracking(data)
+        
+        # Process based on visualization mode
         mode = self.config.effects.mode
         
         if mode == VisualizationMode.ENERGY:
-            self._apply_energy_mode(data)
+            self._apply_energy_mode(data, beat_triggered, bar_triggered)
         elif mode == VisualizationMode.FREQUENCY_SPLIT:
-            self._apply_frequency_split_mode(data)
+            self._apply_frequency_split_mode(data, beat_triggered)
         elif mode == VisualizationMode.BEAT_PULSE:
             self._apply_beat_pulse_mode(data, beat_triggered)
         elif mode == VisualizationMode.COLOR_CYCLE:
-            self._apply_color_cycle_mode(data)
+            self._apply_color_cycle_mode(data, beat_triggered)
         elif mode == VisualizationMode.RAINBOW_WAVE:
-            self._apply_rainbow_wave_mode(data)
+            self._apply_rainbow_wave_mode(data, beat_triggered)
         elif mode == VisualizationMode.STROBE_BEAT:
             self._apply_strobe_beat_mode(data, beat_triggered)
         elif mode == VisualizationMode.RANDOM_FLASH:
             self._apply_random_flash_mode(data, beat_triggered)
         
+        # Apply movement if enabled - only on specific beats, not constantly
         if self.config.effects.movement_enabled:
-            self._apply_movement(data)
+            self._apply_movement(data, beat_triggered, bar_triggered)
         
-        if self.config.effects.strobe_on_drop:
-            self._check_energy_drop(data)
-        
+        # Apply smoothing and output
         self._apply_smoothing()
         self._output_to_dmx()
         
         return self._smoothed_values.copy()
     
-    def _apply_energy_mode(self, data: AnalysisData) -> None:
+    def _update_energy_tracking(self, data: AnalysisData) -> None:
+        """Track energy for detecting drops and builds."""
         energy = data.features.energy
-        intensity = energy * self.config.effects.intensity
-        # Use energy to shift through color spectrum (0.0-1.0 = full rainbow)
-        # Combined with time-based color phase for variety
-        hue = (self._color_phase + data.features.energy * 0.5) % 1.0
-        self._color_phase += 0.002 * self.config.effects.color_speed  # Slow drift
         
+        # Keep rolling history
+        self._energy_history.append(energy)
+        if len(self._energy_history) > 40:  # ~1 second at 40fps
+            self._energy_history.pop(0)
+        
+        # Calculate average energy
+        if self._energy_history:
+            self._avg_energy = sum(self._energy_history) / len(self._energy_history)
+        
+        # Detect drops: sudden increase in energy after low period
+        recent_avg = sum(self._energy_history[-10:]) / max(1, len(self._energy_history[-10:]))
+        older_avg = sum(self._energy_history[:-10]) / max(1, len(self._energy_history[:-10])) if len(self._energy_history) > 10 else recent_avg
+        
+        # Drop detection: energy jumps significantly
+        if recent_avg > older_avg + 0.3 and energy > 0.6:
+            if not self._is_drop:
+                self._is_drop = True
+                self._drop_time = self._time
+                self._strobe_active = True
+                self._strobe_end_time = self._time + 0.5  # Strobe for 0.5s on drops
+        elif self._time - self._drop_time > 2.0:
+            self._is_drop = False
+        
+        # Buildup detection: energy steadily increasing
+        if len(self._energy_history) >= 20:
+            first_half = sum(self._energy_history[:10]) / 10
+            second_half = sum(self._energy_history[10:20]) / 10
+            self._is_buildup = second_half > first_half + 0.1
+        
+        # End strobe after duration
+        if self._strobe_active and self._time > self._strobe_end_time:
+            self._strobe_active = False
+    
+    def _ease_out_cubic(self, t: float) -> float:
+        """Cubic ease-out function for smooth decay."""
+        return 1 - pow(1 - t, 3)
+    
+    def _ease_in_out_sine(self, t: float) -> float:
+        """Sine ease-in-out for smooth oscillation."""
+        return -(math.cos(math.pi * t) - 1) / 2
+    
+    def _apply_energy_mode(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
+        """
+        Energy mode: Bass drives intensity, mids drive color, movement on strong beats.
+        """
+        bass = data.features.bass
+        mid = data.features.mid
+        high = data.features.high
+        energy = data.features.energy
+        
+        # === COLOR: Based on mids and slow drift ===
+        # Base hue drifts slowly over time (full cycle every ~30 seconds)
+        time_offset = (self._time - self._start_time) * 0.03 * self.config.effects.color_speed
+        self._base_hue = time_offset % 1.0
+        
+        # Mids influence hue offset (higher mids = warmer colors)
+        mid_offset = mid * 0.2  # Up to 0.2 hue shift based on mids
+        
+        # On bar changes, shift color more dramatically
+        if bar_triggered:
+            self._target_hue = (self._base_hue + mid_offset + 0.25) % 1.0
+        else:
+            self._target_hue = (self._base_hue + mid_offset) % 1.0
+        
+        # Smooth transition to target hue
+        hue_diff = self._target_hue - self._current_hue
+        # Handle wrap-around
+        if hue_diff > 0.5:
+            hue_diff -= 1.0
+        elif hue_diff < -0.5:
+            hue_diff += 1.0
+        self._current_hue = (self._current_hue + hue_diff * 0.1) % 1.0
+        
+        # === INTENSITY: Based on bass and beat ===
+        # Base intensity from overall energy
+        self._base_intensity = 0.3 + energy * 0.5
+        
+        # Pulse on beats, stronger pulse on bass-heavy beats
+        if beat_triggered:
+            pulse_strength = 0.3 + bass * 0.4  # Stronger pulse with more bass
+            self._pulse_intensity = pulse_strength
+        else:
+            # Decay pulse based on beat position (smooth decay within beat)
+            decay = 1.0 - self._ease_out_cubic(data.beat_position)
+            self._pulse_intensity *= decay
+        
+        # Total brightness
+        brightness = min(1.0, self._base_intensity + self._pulse_intensity)
+        
+        # === SATURATION: Higher energy = more saturated ===
+        saturation = 0.6 + energy * 0.4
+        
+        # === Apply to fixtures ===
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
-            pulse = 1.0 - (data.beat_position * 0.3)
-            brightness = intensity * pulse * fixture.intensity_scale
-            state.set_from_hsv(hue, 1.0, brightness)
-            state.dimmer = int(255 * brightness)
+            intensity = brightness * fixture.intensity_scale * self.config.effects.intensity
+            
+            state.set_from_hsv(self._current_hue, saturation, intensity)
+            state.dimmer = int(255 * intensity)
+            
+            # High frequencies trigger subtle strobe on drops
+            if self._strobe_active and self.config.effects.strobe_on_drop:
+                state.strobe = 180
+            else:
+                state.strobe = 0
     
-    def _apply_frequency_split_mode(self, data: AnalysisData) -> None:
+    def _apply_frequency_split_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        """
+        Frequency split: Different fixtures respond to different frequency bands.
+        """
         num_fixtures = len(self.config.fixtures)
         if num_fixtures == 0:
             return
@@ -183,78 +337,129 @@ class EffectsEngine:
         sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
         third = max(1, num_fixtures // 3)
         
-        bass_intensity = data.features.bass
-        mid_intensity = data.features.mid
-        high_intensity = data.features.high
+        bass = data.features.bass
+        mid = data.features.mid
+        high = data.features.high
         
         for i, fixture in enumerate(sorted_fixtures):
             state = self._states[fixture.name]
             scale = fixture.intensity_scale * self.config.effects.intensity
             
             if i < third:
-                intensity = bass_intensity * scale
-                state.set_from_hsv(0.0, 1.0, intensity)
+                # Bass fixtures: Red/orange, pulse with bass
+                intensity = (0.3 + bass * 0.7) * scale
+                hue = 0.0 + bass * 0.1  # Red to orange
             elif i < third * 2:
-                intensity = mid_intensity * scale
-                state.set_from_hsv(0.33, 1.0, intensity)
+                # Mid fixtures: Green/cyan, respond to mids
+                intensity = (0.3 + mid * 0.7) * scale
+                hue = 0.25 + mid * 0.15  # Yellow-green to cyan
             else:
-                intensity = high_intensity * scale
-                state.set_from_hsv(0.66, 1.0, intensity)
+                # High fixtures: Blue/purple, respond to highs
+                intensity = (0.3 + high * 0.7) * scale
+                hue = 0.6 + high * 0.15  # Blue to purple
             
+            # Add pulse on beats
+            if beat_triggered:
+                intensity = min(1.0, intensity + 0.2)
+            
+            state.set_from_hsv(hue, 0.9, intensity)
             state.dimmer = int(255 * intensity)
     
     def _apply_beat_pulse_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
-        # Shift color on each beat
-        if beat_triggered:
-            self._color_phase = (self._color_phase + 0.1) % 1.0
+        """
+        Beat pulse: Flash on beats with color shifts on bars.
+        """
+        # Shift color palette every 4 beats (on bar)
+        bar_num = data.estimated_bar
+        palette_hues = [0.0, 0.15, 0.55, 0.75, 0.9]  # Red, orange, cyan, purple, magenta
+        base_hue = palette_hues[bar_num % len(palette_hues)]
         
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             scale = fixture.intensity_scale * self.config.effects.intensity
             
             if beat_triggered:
+                # Flash to full on beat
                 brightness = scale
+                # Slight hue variation per fixture
+                hue = (base_hue + fixture.position * 0.05) % 1.0
             else:
-                brightness = (1.0 - data.beat_position) * scale
+                # Smooth decay based on beat position
+                decay = 1.0 - self._ease_out_cubic(data.beat_position)
+                brightness = scale * decay * 0.8  # Don't go fully dark
+                hue = base_hue
             
-            # Use color phase for full spectrum colors
-            hue = self._color_phase
-            state.set_from_hsv(hue, 1.0, brightness)
+            state.set_from_hsv(hue, 0.85, brightness)
             state.dimmer = int(255 * brightness)
     
-    def _apply_color_cycle_mode(self, data: AnalysisData) -> None:
-        beat_interval = data.beat_interval_ms / 1000.0
-        if beat_interval > 0:
-            self._color_phase += (1.0 / beat_interval) * 0.05 * self.config.effects.color_speed
-        self._color_phase %= 1.0
+    def _apply_color_cycle_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        """
+        Color cycle: Smooth rainbow progression synced to tempo.
+        """
+        # Color cycles through spectrum, one full cycle per 8 bars
+        beats_per_cycle = 32  # 8 bars * 4 beats
+        cycle_position = (data.estimated_beat % beats_per_cycle) / beats_per_cycle
+        cycle_position += data.beat_position / beats_per_cycle
+        
+        base_hue = cycle_position
+        
+        # Brightness based on energy with beat pulse
+        energy = data.features.energy
+        base_brightness = 0.4 + energy * 0.4
+        
+        if beat_triggered:
+            pulse = 0.2
+        else:
+            pulse = 0.2 * (1.0 - data.beat_position)
         
         num_fixtures = max(1, len(self.config.fixtures))
         
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
-            position_offset = fixture.position / num_fixtures
-            hue = (self._color_phase + position_offset) % 1.0
-            brightness = data.features.energy * fixture.intensity_scale * self.config.effects.intensity
-            state.set_from_hsv(hue, 1.0, brightness)
+            # Each fixture offset slightly in the cycle
+            position_offset = fixture.position / num_fixtures * 0.3
+            hue = (base_hue + position_offset) % 1.0
+            
+            brightness = (base_brightness + pulse) * fixture.intensity_scale * self.config.effects.intensity
+            state.set_from_hsv(hue, 0.9, brightness)
             state.dimmer = int(255 * brightness)
     
-    def _apply_rainbow_wave_mode(self, data: AnalysisData) -> None:
-        self._wave_phase += 0.02 * self.config.effects.color_speed
-        self._wave_phase %= 1.0
+    def _apply_rainbow_wave_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        """
+        Rainbow wave: Colors flow across fixtures in a wave pattern.
+        """
+        # Wave position advances with time and tempo
+        wave_speed = 0.5 * self.config.effects.color_speed
+        wave_position = ((self._time - self._start_time) * wave_speed) % 1.0
+        
+        energy = data.features.energy
+        base_brightness = 0.3 + energy * 0.5
         
         num_fixtures = max(1, len(self.config.fixtures))
         sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
         
         for i, fixture in enumerate(sorted_fixtures):
             state = self._states[fixture.name]
-            position = i / num_fixtures
-            hue = (self._wave_phase + position) % 1.0
-            pulse = 1.0 - (data.beat_position * 0.2)
-            brightness = data.features.energy * fixture.intensity_scale * self.config.effects.intensity * pulse
-            state.set_from_hsv(hue, 1.0, brightness)
+            
+            # Each fixture is at a different point in the wave
+            fixture_phase = i / num_fixtures
+            hue = (wave_position + fixture_phase) % 1.0
+            
+            # Brightness varies with wave too
+            wave_brightness = 0.5 + 0.5 * math.sin((wave_position + fixture_phase) * math.pi * 2)
+            brightness = base_brightness * wave_brightness * fixture.intensity_scale * self.config.effects.intensity
+            
+            # Beat pulse
+            if beat_triggered:
+                brightness = min(1.0, brightness + 0.15)
+            
+            state.set_from_hsv(hue, 0.85, max(0.1, brightness))
             state.dimmer = int(255 * brightness)
     
     def _apply_strobe_beat_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        """
+        Strobe beat: Strobe effect on every beat.
+        """
         for fixture in self.config.fixtures:
             state = self._states[fixture.name]
             scale = fixture.intensity_scale * self.config.effects.intensity
@@ -264,17 +469,21 @@ class EffectsEngine:
                 state.green = 255
                 state.blue = 255
                 state.dimmer = int(255 * scale)
-                state.strobe = 200
+                state.strobe = 200  # Fast strobe
             else:
-                decay = max(0, 1.0 - data.beat_position * 4)
+                # Quick decay
+                decay = max(0, 1.0 - data.beat_position * 3)
                 brightness = int(255 * decay * scale)
                 state.red = brightness
                 state.green = brightness
                 state.blue = brightness
                 state.dimmer = brightness
-                state.strobe = 0 if data.beat_position > 0.25 else 200
+                state.strobe = 200 if data.beat_position < 0.3 else 0
     
     def _apply_random_flash_mode(self, data: AnalysisData, beat_triggered: bool) -> None:
+        """
+        Random flash: Random fixtures flash on beats.
+        """
         import random
         
         fixtures = self.config.fixtures
@@ -282,26 +491,40 @@ class EffectsEngine:
             num_to_flash = max(1, len(fixtures) // 3)
             flashing = random.sample(list(fixtures), min(num_to_flash, len(fixtures)))
             flash_names = {f.name for f in flashing}
+            # Random color for this beat
+            flash_hue = random.random()
         else:
             flash_names = set()
+            flash_hue = 0
         
         for fixture in fixtures:
             state = self._states[fixture.name]
             scale = fixture.intensity_scale * self.config.effects.intensity
             
             if fixture.name in flash_names:
-                hue = random.random()
-                state.set_from_hsv(hue, 1.0, scale)
+                state.set_from_hsv(flash_hue, 1.0, scale)
                 state.dimmer = int(255 * scale)
             else:
-                decay = max(0, 1.0 - data.beat_position * 3)
+                # Decay
+                decay = max(0, 1.0 - data.beat_position * 2.5)
                 state.dimmer = int(state.dimmer * decay)
                 state.red = int(state.red * decay)
                 state.green = int(state.green * decay)
                 state.blue = int(state.blue * decay)
     
-    def _apply_movement(self, data: AnalysisData) -> None:
+    def _apply_movement(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
+        """
+        Apply movement to fixtures - but only on musical events, not constantly.
+        
+        Movement principles:
+        - Pan moves on bar changes (slower, sweeping motion)
+        - Tilt moves on strong beats (bass-driven)
+        - Movement amount based on energy level
+        - P/T speed is fast so fixture can reach position before next move
+        """
         speed = self.config.effects.movement_speed
+        bass = data.features.bass
+        energy = data.features.energy
         
         for fixture in self.config.fixtures:
             profile = self._get_profile(fixture)
@@ -314,42 +537,59 @@ class EffectsEngine:
                 continue
             
             state = self._states[fixture.name]
-            bar_phase = data.bar_position * math.pi * 2
-            beat_phase = data.beat_position * math.pi * 2
             
-            if has_pan:
+            # === PAN: Move on bar changes ===
+            if bar_triggered and has_pan:
                 pan_range = fixture.pan_max - fixture.pan_min
                 pan_center = (fixture.pan_max + fixture.pan_min) / 2
-                pan_offset = math.sin(bar_phase) * (pan_range / 2) * speed
-                state.pan = int(pan_center + pan_offset)
+                
+                # Choose a new pan position based on bar number
+                # Creates a pattern that feels intentional
+                bar_num = data.estimated_bar
+                pan_positions = [0.0, 0.7, 0.3, -0.5, 0.5, -0.7, -0.3, 0.0]
+                pan_factor = pan_positions[bar_num % len(pan_positions)]
+                
+                # Scale by movement speed and energy
+                pan_offset = pan_factor * (pan_range / 2) * speed * (0.5 + energy * 0.5)
+                self._target_pan[fixture.name] = int(pan_center + pan_offset)
             
-            if has_tilt:
+            # === TILT: Move on bass-heavy beats (every 2-4 beats) ===
+            # Only move if we have enough bass and enough beats have passed
+            should_tilt = beat_triggered and bass > 0.4 and self._beats_since_move >= 2
+            
+            if should_tilt and has_tilt:
                 tilt_range = fixture.tilt_max - fixture.tilt_min
                 tilt_center = (fixture.tilt_max + fixture.tilt_min) / 2
-                # Use full tilt range (/ 2) like pan for more dramatic movement
-                tilt_offset = math.sin(beat_phase) * (tilt_range / 2) * speed
-                state.tilt = int(tilt_center + tilt_offset)
+                
+                # Alternate between up and down positions
+                beat_num = data.estimated_beat
+                tilt_positions = [0.4, -0.3, 0.5, -0.4, 0.3, -0.5]
+                tilt_factor = tilt_positions[beat_num % len(tilt_positions)]
+                
+                # Scale by bass intensity
+                tilt_offset = tilt_factor * (tilt_range / 2) * speed * bass
+                self._target_tilt[fixture.name] = int(tilt_center + tilt_offset)
+                self._beats_since_move = 0
             
-            # For SPEED_PAN_TILT_FAST_SLOW: 0=fast, 255=slow
-            # Use low values (fast movement) so fixture can keep up with position changes
-            # Scale: movement_speed 1.0 -> pt_speed 0 (fastest), movement_speed 0.0 -> pt_speed 64 (still fairly fast)
-            state.pt_speed = int(64 * (1.0 - speed))
-    
-    def _check_energy_drop(self, data: AnalysisData) -> None:
-        current_energy = data.features.energy
-        
-        if current_energy - self._last_energy > 0.3:
-            self._strobe_active = True
-        elif current_energy < self._last_energy - 0.1:
-            self._strobe_active = False
-        
-        self._last_energy = current_energy
-        
-        if self._strobe_active:
-            for fixture in self.config.fixtures:
-                self._states[fixture.name].strobe = 200
+            # === Smoothly move toward targets ===
+            # Pan moves slower (it's usually a bigger movement)
+            current_pan = state.pan
+            target_pan = self._target_pan.get(fixture.name, 128)
+            pan_diff = target_pan - current_pan
+            state.pan = int(current_pan + pan_diff * 0.15)  # Smooth interpolation
+            
+            # Tilt can move faster
+            current_tilt = state.tilt
+            target_tilt = self._target_tilt.get(fixture.name, 128)
+            tilt_diff = target_tilt - current_tilt
+            state.tilt = int(current_tilt + tilt_diff * 0.2)
+            
+            # P/T speed: fast so fixture can keep up
+            # 0 = fastest for SPEED_PAN_TILT_FAST_SLOW
+            state.pt_speed = int(20 * (1.0 - speed))  # 0-20 range, very fast
     
     def _apply_smoothing(self) -> None:
+        """Apply smoothing to fixture values for smooth transitions."""
         factor = self.config.effects.smooth_factor
         inverse = 1.0 - factor
         
@@ -357,6 +597,7 @@ class EffectsEngine:
             current = self._states[fixture.name]
             smoothed = self._smoothed_values[fixture.name]
             
+            # Smooth color values
             smoothed.red = int(smoothed.red * factor + current.red * inverse)
             smoothed.green = int(smoothed.green * factor + current.green * inverse)
             smoothed.blue = int(smoothed.blue * factor + current.blue * inverse)
@@ -367,11 +608,15 @@ class EffectsEngine:
             smoothed.magenta = int(smoothed.magenta * factor + current.magenta * inverse)
             smoothed.yellow = int(smoothed.yellow * factor + current.yellow * inverse)
             smoothed.dimmer = int(smoothed.dimmer * factor + current.dimmer * inverse)
-            smoothed.pan = int(smoothed.pan * factor + current.pan * inverse)
+            
+            # Position values smooth separately (handled in _apply_movement)
+            smoothed.pan = current.pan
             smoothed.pan_fine = current.pan_fine
-            smoothed.tilt = int(smoothed.tilt * factor + current.tilt * inverse)
+            smoothed.tilt = current.tilt
             smoothed.tilt_fine = current.tilt_fine
             smoothed.pt_speed = current.pt_speed
+            
+            # Instant values (no smoothing)
             smoothed.strobe = current.strobe
             smoothed.color_macro = current.color_macro
             smoothed.effect = current.effect
@@ -383,6 +628,7 @@ class EffectsEngine:
             smoothed.iris = current.iris
     
     def _output_to_dmx(self) -> None:
+        """Output current fixture states to DMX."""
         for fixture in self.config.fixtures:
             profile = self._get_profile(fixture)
             state = self._smoothed_values[fixture.name]
@@ -408,6 +654,7 @@ class EffectsEngine:
                     self.dmx.set_channel(dmx_channel, value)
     
     def _get_channel_value(self, state: FixtureState, ch: ChannelConfig, profile: Optional[FixtureProfile]) -> int:
+        """Get the DMX value for a channel based on fixture state."""
         ct = ch.channel_type
         
         # Intensity channels
@@ -446,10 +693,8 @@ class EffectsEngine:
         
         # Speed channels
         elif ct == ChannelType.SPEED_PAN_TILT_FAST_SLOW:
-            # 0=fast, 255=slow - invert pt_speed (which is 0=fast internally)
             return state.pt_speed
         elif ct == ChannelType.SPEED_PAN_TILT_SLOW_FAST:
-            # 0=slow, 255=fast - invert for this type
             return 255 - state.pt_speed
         
         # Shutter/strobe
@@ -571,4 +816,5 @@ class EffectsEngine:
         return self._blackout_active
     
     def get_fixture_states(self) -> dict[str, FixtureState]:
+        """Get current fixture states."""
         return self._smoothed_values.copy()
