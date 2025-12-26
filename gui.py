@@ -18,7 +18,8 @@ except ImportError:
 from config import (
     ShowConfig, FixtureConfig, FixtureProfile, ChannelConfig,
     VisualizationMode, MovementMode, DMXConfig, EffectsConfig, ChannelType,
-    get_available_presets, get_preset, FIXTURE_PRESETS, get_channel_type_display_name
+    AudioInputMode, get_available_presets, get_preset, FIXTURE_PRESETS, 
+    get_channel_type_display_name
 )
 from dmx_controller import DMXController, create_dmx_controller
 from simulators import SimulatedDMXInterface
@@ -146,7 +147,18 @@ class MusicAutoShowGUI:
         dpg.add_spacer(height=10)
         
         with dpg.collapsing_header(label="Audio Input", default_open=True):
-            dpg.add_text("Captures system audio (WASAPI loopback)")
+            # Audio input mode selector
+            audio_modes = [
+                ("System Audio (Loopback)", AudioInputMode.LOOPBACK),
+                ("Microphone", AudioInputMode.MICROPHONE),
+                ("Auto-detect", AudioInputMode.AUTO),
+            ]
+            audio_mode_names = [m[0] for m in audio_modes]
+            dpg.add_combo(label="Input Source", items=audio_mode_names, 
+                         default_value=audio_mode_names[2],  # Auto-detect
+                         tag="audio_input_mode", width=200)
+            dpg.add_text("Loopback captures what you hear, Microphone captures live audio",
+                        color=(150, 150, 150))
             dpg.add_checkbox(label="Simulate Audio (no capture)", tag="simulate_audio")
         
         dpg.add_spacer(height=10)
@@ -328,8 +340,18 @@ class MusicAutoShowGUI:
         simulate_dmx = dpg.get_value("simulate_dmx") if dpg.does_item_exist("simulate_dmx") else True
         simulate_audio = dpg.get_value("simulate_audio") if dpg.does_item_exist("simulate_audio") else False
         
+        # Get audio input mode from combo
+        audio_mode_map = {
+            "System Audio (Loopback)": AudioInputMode.LOOPBACK,
+            "Microphone": AudioInputMode.MICROPHONE,
+            "Auto-detect": AudioInputMode.AUTO,
+        }
+        audio_mode_str = dpg.get_value("audio_input_mode") if dpg.does_item_exist("audio_input_mode") else "Auto-detect"
+        audio_input_mode = audio_mode_map.get(audio_mode_str, AudioInputMode.AUTO)
+        
         logger.info(f"Simulate DMX: {simulate_dmx}")
         logger.info(f"Simulate Audio: {simulate_audio}")
+        logger.info(f"Audio Input Mode: {audio_input_mode.value}")
         logger.info(f"DMX Port: {self.config.dmx.port or '(auto-detect)'}")
         logger.info(f"Fixtures configured: {len(self.config.fixtures)}")
         
@@ -362,7 +384,10 @@ class MusicAutoShowGUI:
             return
         
         logger.info("Creating audio analyzer...")
-        self.audio_analyzer = create_audio_analyzer(simulate=simulate_audio)
+        self.audio_analyzer = create_audio_analyzer(
+            simulate=simulate_audio,
+            input_mode=audio_input_mode
+        )
         
         logger.info("Starting audio capture...")
         if not self.audio_analyzer.start():
