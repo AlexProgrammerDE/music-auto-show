@@ -501,29 +501,34 @@ class MusicAutoShowGUI:
                     
                     # Name input
                     dpg.add_input_text(default_value=ch.name, width=-1, tag=f"ch_name_{i}",
-                                      callback=lambda s, a, idx=i: self._update_channel_name(idx, a))
+                                      callback=lambda s, a, u: self._update_channel_name(u, a),
+                                      user_data=i)
                     
                     # Channel type dropdown
                     type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
                     current_type_name = get_channel_type_display_name(ch.channel_type)
                     dpg.add_combo(items=type_names, default_value=current_type_name, width=-1,
                                  tag=f"ch_type_{i}",
-                                 callback=lambda s, a, idx=i: self._update_channel_type(idx, a))
+                                 callback=lambda s, a, u: self._update_channel_type(u, a),
+                                 user_data=i)
                     
                     # Fixed value checkbox
                     is_fixed = ch.fixed_value is not None
                     dpg.add_checkbox(default_value=is_fixed, tag=f"ch_fixed_{i}",
-                                    callback=lambda s, a, idx=i: self._toggle_fixed_value(idx, a))
+                                    callback=lambda s, a, u: self._toggle_fixed_value(u, a),
+                                    user_data=i)
                     
                     # Fixed value input
                     fixed_val = ch.fixed_value if ch.fixed_value is not None else ch.default_value
                     dpg.add_input_int(default_value=fixed_val, width=-1, min_value=0, max_value=255,
                                      tag=f"ch_fixed_val_{i}",
-                                     callback=lambda s, a, idx=i: self._update_fixed_value(idx, a))
+                                     callback=lambda s, a, u: self._update_fixed_value(u, a),
+                                     user_data=i)
                     
                     # Enabled checkbox
                     dpg.add_checkbox(default_value=ch.enabled, tag=f"ch_enabled_{i}",
-                                    callback=lambda s, a, idx=i: self._update_channel_enabled(idx, a))
+                                    callback=lambda s, a, u: self._update_channel_enabled(u, a),
+                                    user_data=i)
         
         dpg.add_spacer(height=5, parent="channel_list_container")
         dpg.add_button(label="Add Channel", callback=self._add_channel_dialog, parent="channel_list_container")
