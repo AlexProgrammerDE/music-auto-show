@@ -20,9 +20,12 @@ from config import (
     VisualizationMode, MovementMode, DMXConfig, EffectsConfig, ChannelType,
     get_available_presets, get_preset, FIXTURE_PRESETS, get_channel_type_display_name
 )
-from dmx_controller import DMXController, create_dmx_controller, SimulatedDMXInterface
+from dmx_controller import DMXController, create_dmx_controller
+from simulators import SimulatedDMXInterface
 from audio_analyzer import AnalysisData, AudioAnalyzer, create_audio_analyzer
 from effects_engine import EffectsEngine, FixtureState
+from gui_dialogs import FixtureDialogs
+from gui_visualizer import StageVisualizer
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +49,23 @@ class MusicAutoShowGUI:
         self._visualizer_id = None
         self._status_text_id = None
         self._track_info_id = None
-        self._editing_fixture: Optional[FixtureConfig] = None
-        self._adding_fixture: Optional[FixtureConfig] = None
+        
+        # Initialize helper classes
+        self._fixture_dialogs = FixtureDialogs(
+            self.config,
+            on_fixture_changed=self._refresh_fixture_list,
+            on_config_updated=self._update_effects_config
+        )
+        self._stage_visualizer = StageVisualizer(
+            visualizer_id="visualizer",
+            width=940,
+            height=400
+        )
+    
+    def _update_effects_config(self) -> None:
+        """Update effects engine with current config."""
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
     
     def run(self) -> None:
         if not DEARPYGUI_AVAILABLE:
@@ -261,453 +279,13 @@ class MusicAutoShowGUI:
                     )
     
     def _add_fixture_dialog(self) -> None:
-        if dpg.does_item_exist("add_fixture_window"):
-            dpg.delete_item("add_fixture_window")
-        
-        # Reset the temporary fixture for the add dialog
-        self._adding_fixture = None
-        
-        with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
-                       width=750, height=650, pos=(250, 30)):
-            
-            # Basic settings
-            with dpg.collapsing_header(label="Basic Settings", default_open=True):
-                dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=250)
-                dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=1,
-                                 min_value=1, max_value=512, width=100)
-                dpg.add_input_int(label="Position", tag="new_fixture_position", 
-                                 default_value=len(self.config.fixtures), width=100)
-                dpg.add_slider_float(label="Intensity Scale", tag="new_fixture_intensity",
-                                    default_value=1.0, min_value=0.0, max_value=1.0, width=200)
-            
-            # Profile selection
-            with dpg.collapsing_header(label="Profile", default_open=True):
-                preset_names = ["(Custom)"] + get_available_presets()
-                dpg.add_combo(label="Select Profile", items=preset_names, 
-                             default_value=preset_names[1] if len(preset_names) > 1 else "(Custom)",
-                             tag="new_fixture_profile", width=300,
-                             callback=self._on_add_profile_changed)
-                dpg.add_text("Select a profile to auto-configure channels for your fixture type.", 
-                            color=(150, 150, 150))
-            
-            # Movement limits
-            with dpg.collapsing_header(label="Movement Limits", default_open=False):
-                with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
-                    dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=80)
-                with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
-                    dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
-            
-            # Channels preview
-            with dpg.collapsing_header(label="Channels Preview", default_open=True):
-                dpg.add_text("Channels will be configured based on the selected profile.", 
-                            color=(150, 150, 150))
-                dpg.add_text("You can customize channels after adding the fixture.", 
-                            color=(150, 150, 150))
-                dpg.add_separator()
-                with dpg.child_window(height=200, border=True, tag="new_channel_preview"):
-                    self._refresh_add_channel_preview()
-            
-            dpg.add_separator()
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Add Fixture", callback=self._add_fixture_confirm, width=120)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_fixture_window"), width=100)
-    
-    def _on_add_profile_changed(self, sender, app_data) -> None:
-        """Update channel preview when profile is changed in add dialog."""
-        self._refresh_add_channel_preview()
-    
-    def _refresh_add_channel_preview(self) -> None:
-        """Refresh the channel preview in the add fixture dialog."""
-        if not dpg.does_item_exist("new_channel_preview"):
-            return
-        
-        dpg.delete_item("new_channel_preview", children_only=True)
-        
-        profile_value = dpg.get_value("new_fixture_profile") if dpg.does_item_exist("new_fixture_profile") else "(Custom)"
-        profile_name = "" if profile_value == "(Custom)" else profile_value
-        
-        if not profile_name:
-            dpg.add_text("No profile selected. Add fixture first, then configure channels manually.",
-                        parent="new_channel_preview", color=(200, 150, 150))
-            return
-        
-        profile = get_preset(profile_name)
-        if not profile:
-            dpg.add_text(f"Profile '{profile_name}' not found.",
-                        parent="new_channel_preview", color=(200, 150, 150))
-            return
-        
-        start_channel = dpg.get_value("new_fixture_start") if dpg.does_item_exist("new_fixture_start") else 1
-        
-        # Header
-        with dpg.group(horizontal=True, parent="new_channel_preview"):
-            dpg.add_text("DMX Ch", color=(150, 150, 150))
-            dpg.add_spacer(width=20)
-            dpg.add_text("Name", color=(150, 150, 150))
-            dpg.add_spacer(width=100)
-            dpg.add_text("Type", color=(150, 150, 150))
-            dpg.add_spacer(width=80)
-            dpg.add_text("Default", color=(150, 150, 150))
-        
-        dpg.add_separator(parent="new_channel_preview")
-        
-        # Channel rows
-        for ch in profile.channels:
-            dmx_ch = start_channel + ch.offset - 1
-            type_name = get_channel_type_display_name(ch.channel_type)
-            
-            with dpg.group(horizontal=True, parent="new_channel_preview"):
-                dpg.add_text(f"{dmx_ch:3d}", color=(100, 150, 200))
-                dpg.add_spacer(width=30)
-                dpg.add_text(f"{ch.name[:15]:<15}", color=(200, 200, 200))
-                dpg.add_spacer(width=20)
-                dpg.add_text(f"{type_name[:12]:<12}", color=(150, 200, 150))
-                dpg.add_spacer(width=20)
-                dpg.add_text(f"{ch.default_value:3d}", color=(150, 150, 150))
-    
-    def _add_fixture_confirm(self) -> None:
-        name = dpg.get_value("new_fixture_name")
-        profile_value = dpg.get_value("new_fixture_profile")
-        profile_name = "" if profile_value == "(Custom)" else profile_value
-        
-        fixture = FixtureConfig(
-            name=name,
-            profile_name=profile_name,
-            start_channel=dpg.get_value("new_fixture_start"),
-            position=dpg.get_value("new_fixture_position"),
-            intensity_scale=dpg.get_value("new_fixture_intensity"),
-            pan_min=dpg.get_value("new_pan_min"),
-            pan_max=dpg.get_value("new_pan_max"),
-            tilt_min=dpg.get_value("new_tilt_min"),
-            tilt_max=dpg.get_value("new_tilt_max"),
-        )
-        
-        # Copy channels from profile for customization
-        if profile_name:
-            profile = get_preset(profile_name)
-            if profile:
-                fixture.copy_channels_from_profile(profile)
-        
-        self.config.fixtures.append(fixture)
-        self._refresh_fixture_list()
-        
-        if self.effects_engine:
-            self.effects_engine.update_config(self.config)
-        
-        self._adding_fixture = None
-        dpg.delete_item("add_fixture_window")
+        """Show the add fixture dialog."""
+        self._fixture_dialogs.show_add_fixture_dialog()
     
     def _on_fixture_selected(self, sender, app_data, user_data) -> None:
+        """Handle fixture selection - open edit dialog."""
         if user_data is not None:
-            self._edit_fixture(user_data)
-    
-    def _edit_fixture(self, fixture: FixtureConfig) -> None:
-        if fixture is None:
-            return
-        
-        self._editing_fixture = fixture
-        
-        if dpg.does_item_exist("edit_fixture_window"):
-            dpg.delete_item("edit_fixture_window")
-        
-        with dpg.window(label=f"Edit Fixture: {fixture.name}", modal=True, 
-                       tag="edit_fixture_window", width=750, height=650, pos=(250, 30)):
-            
-            # Basic settings
-            with dpg.collapsing_header(label="Basic Settings", default_open=True):
-                dpg.add_input_text(label="Name", default_value=fixture.name, 
-                                  tag="edit_fixture_name", width=250)
-                dpg.add_input_int(label="Start Channel", default_value=fixture.start_channel,
-                                 tag="edit_fixture_start", min_value=1, max_value=512, width=100)
-                dpg.add_input_int(label="Position", default_value=fixture.position,
-                                 tag="edit_fixture_position", width=100)
-                dpg.add_slider_float(label="Intensity Scale", default_value=fixture.intensity_scale,
-                                    tag="edit_fixture_intensity", min_value=0.0, max_value=1.0, width=200)
-            
-            # Profile info
-            with dpg.collapsing_header(label="Profile", default_open=True):
-                profile_text = fixture.profile_name if fixture.profile_name else "(Custom)"
-                dpg.add_text(f"Profile: {profile_text}", color=(150, 200, 255))
-                
-                preset_names = ["(Custom)"] + get_available_presets()
-                dpg.add_combo(label="Change Profile", items=preset_names, default_value=profile_text,
-                             tag="edit_fixture_profile", width=300,
-                             callback=self._on_edit_profile_changed)
-                dpg.add_text("Changing profile will reset channel settings!", color=(255, 200, 100))
-            
-            # Movement limits
-            with dpg.collapsing_header(label="Movement Limits", default_open=False):
-                with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Pan Min", default_value=fixture.pan_min, tag="edit_pan_min", width=80)
-                    dpg.add_input_int(label="Pan Max", default_value=fixture.pan_max, tag="edit_pan_max", width=80)
-                with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Tilt Min", default_value=fixture.tilt_min, tag="edit_tilt_min", width=80)
-                    dpg.add_input_int(label="Tilt Max", default_value=fixture.tilt_max, tag="edit_tilt_max", width=80)
-            
-            # Channels - show all from profile/fixture
-            with dpg.collapsing_header(label="Channels", default_open=True):
-                dpg.add_text("Configure each channel. Set 'Fixed Value' to force a specific DMX value.", color=(150, 150, 150))
-                dpg.add_separator()
-                
-                with dpg.child_window(height=280, border=True, tag="channel_list_container"):
-                    self._refresh_channel_list(fixture)
-            
-            dpg.add_separator()
-            
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Save", callback=self._save_fixture_edit, width=100)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("edit_fixture_window"), width=100)
-    
-    def _on_edit_profile_changed(self, sender, app_data) -> None:
-        """Handle profile change - reload channels from new profile."""
-        if not self._editing_fixture:
-            return
-        
-        profile_name = "" if app_data == "(Custom)" else app_data
-        
-        if profile_name:
-            profile = get_preset(profile_name)
-            if profile:
-                self._editing_fixture.profile_name = profile_name
-                self._editing_fixture.copy_channels_from_profile(profile)
-                self._refresh_channel_list(self._editing_fixture)
-        else:
-            self._editing_fixture.profile_name = ""
-            self._editing_fixture.channels = []
-            self._refresh_channel_list(self._editing_fixture)
-    
-    def _refresh_channel_list(self, fixture: FixtureConfig) -> None:
-        """Refresh the channel list in the edit dialog."""
-        if not dpg.does_item_exist("channel_list_container"):
-            return
-        
-        dpg.delete_item("channel_list_container", children_only=True)
-        
-        # Get channels
-        profile = self.config.get_profile(fixture.profile_name) if fixture.profile_name else None
-        channels = fixture.get_channels(profile)
-        
-        if not channels:
-            dpg.add_text("No channels defined. Add channels or select a profile.", 
-                        parent="channel_list_container", color=(200, 150, 150))
-            dpg.add_button(label="Add Channel", callback=self._add_channel_dialog,
-                          parent="channel_list_container")
-            return
-        
-        # Use a table for proper column alignment
-        with dpg.table(header_row=True, borders_innerH=True, borders_outerH=True,
-                       borders_innerV=True, borders_outerV=True, row_background=True,
-                       parent="channel_list_container", resizable=True):
-            
-            dpg.add_table_column(label="DMX", width_fixed=True, init_width_or_weight=40)
-            dpg.add_table_column(label="Name", width_fixed=True, init_width_or_weight=100)
-            dpg.add_table_column(label="Type", width_fixed=True, init_width_or_weight=140)
-            dpg.add_table_column(label="Fixed", width_fixed=True, init_width_or_weight=40)
-            dpg.add_table_column(label="Value", width_fixed=True, init_width_or_weight=60)
-            dpg.add_table_column(label="On", width_fixed=True, init_width_or_weight=40)
-            
-            # Channel rows
-            for i, ch in enumerate(channels):
-                dmx_ch = ch.get_dmx_channel(fixture.start_channel)
-                
-                with dpg.table_row():
-                    # DMX Channel number
-                    dpg.add_text(f"{dmx_ch}")
-                    
-                    # Name input
-                    dpg.add_input_text(default_value=ch.name, width=-1, tag=f"ch_name_{i}",
-                                      callback=lambda s, a, u: self._update_channel_name(u, a),
-                                      user_data=i)
-                    
-                    # Channel type dropdown
-                    type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
-                    current_type_name = get_channel_type_display_name(ch.channel_type)
-                    dpg.add_combo(items=type_names, default_value=current_type_name, width=-1,
-                                 tag=f"ch_type_{i}",
-                                 callback=lambda s, a, u: self._update_channel_type(u, a),
-                                 user_data=i)
-                    
-                    # Fixed value checkbox
-                    is_fixed = ch.fixed_value is not None
-                    dpg.add_checkbox(default_value=is_fixed, tag=f"ch_fixed_{i}",
-                                    callback=lambda s, a, u: self._toggle_fixed_value(u, a),
-                                    user_data=i)
-                    
-                    # Fixed value input
-                    fixed_val = ch.fixed_value if ch.fixed_value is not None else ch.default_value
-                    dpg.add_input_int(default_value=fixed_val, width=-1, min_value=0, max_value=255,
-                                     tag=f"ch_fixed_val_{i}",
-                                     callback=lambda s, a, u: self._update_fixed_value(u, a),
-                                     user_data=i)
-                    
-                    # Enabled checkbox
-                    dpg.add_checkbox(default_value=ch.enabled, tag=f"ch_enabled_{i}",
-                                    callback=lambda s, a, u: self._update_channel_enabled(u, a),
-                                    user_data=i)
-        
-        dpg.add_spacer(height=5, parent="channel_list_container")
-        dpg.add_button(label="Add Channel", callback=self._add_channel_dialog, parent="channel_list_container")
-    
-    def _update_channel_name(self, idx: int, name: str) -> None:
-        if self._editing_fixture and idx < len(self._editing_fixture.channels):
-            self._editing_fixture.channels[idx].name = name
-    
-    def _update_channel_type(self, idx: int, type_display_name: str) -> None:
-        if not self._editing_fixture or idx >= len(self._editing_fixture.channels):
-            return
-        
-        # Find channel type by display name
-        for ct in ChannelType:
-            if get_channel_type_display_name(ct) == type_display_name:
-                self._editing_fixture.channels[idx].channel_type = ct
-                break
-    
-    def _toggle_fixed_value(self, idx: int, is_fixed: bool) -> None:
-        if not self._editing_fixture or idx >= len(self._editing_fixture.channels):
-            return
-        
-        ch = self._editing_fixture.channels[idx]
-        if is_fixed:
-            # Set fixed value to current default or 0
-            val_tag = f"ch_fixed_val_{idx}"
-            if dpg.does_item_exist(val_tag):
-                ch.fixed_value = dpg.get_value(val_tag)
-            else:
-                ch.fixed_value = ch.default_value
-        else:
-            ch.fixed_value = None
-    
-    def _update_fixed_value(self, idx: int, value: int) -> None:
-        if not self._editing_fixture or idx >= len(self._editing_fixture.channels):
-            return
-        
-        ch = self._editing_fixture.channels[idx]
-        fixed_tag = f"ch_fixed_{idx}"
-        if dpg.does_item_exist(fixed_tag) and dpg.get_value(fixed_tag):
-            ch.fixed_value = value
-    
-    def _update_channel_enabled(self, idx: int, enabled: bool) -> None:
-        if self._editing_fixture and idx < len(self._editing_fixture.channels):
-            self._editing_fixture.channels[idx].enabled = enabled
-    
-    def _add_channel_dialog(self) -> None:
-        if dpg.does_item_exist("add_channel_window"):
-            dpg.delete_item("add_channel_window")
-        
-        # Determine next offset
-        next_offset = 1
-        if self._editing_fixture and self._editing_fixture.channels:
-            next_offset = max(ch.offset for ch in self._editing_fixture.channels) + 1
-        
-        with dpg.window(label="Add Channel", modal=True, tag="add_channel_window",
-                       width=400, height=250, pos=(450, 200)):
-            dpg.add_input_int(label="Channel Offset", tag="new_ch_offset", default_value=next_offset,
-                             min_value=1, max_value=512, width=100)
-            dpg.add_input_text(label="Name", tag="new_ch_name", default_value="New Channel", width=200)
-            
-            type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
-            dpg.add_combo(label="Type", items=type_names, default_value=type_names[0],
-                         tag="new_ch_type", width=200)
-            
-            dpg.add_input_int(label="Default Value", tag="new_ch_default", default_value=0,
-                             min_value=0, max_value=255, width=100)
-            
-            dpg.add_separator()
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Add", callback=self._confirm_add_channel, width=80)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_channel_window"), width=80)
-    
-    def _confirm_add_channel(self) -> None:
-        if not self._editing_fixture:
-            return
-        
-        offset = dpg.get_value("new_ch_offset")
-        name = dpg.get_value("new_ch_name")
-        type_name = dpg.get_value("new_ch_type")
-        default_val = dpg.get_value("new_ch_default")
-        
-        # Find channel type
-        channel_type = ChannelType.INTENSITY
-        for ct in ChannelType:
-            if get_channel_type_display_name(ct) == type_name:
-                channel_type = ct
-                break
-        
-        # Remove existing channel with same offset
-        self._editing_fixture.channels = [c for c in self._editing_fixture.channels if c.offset != offset]
-        
-        # Add new channel
-        self._editing_fixture.channels.append(ChannelConfig(
-            offset=offset,
-            name=name,
-            channel_type=channel_type,
-            default_value=default_val
-        ))
-        
-        # Sort by offset
-        self._editing_fixture.channels.sort(key=lambda c: c.offset)
-        
-        self._refresh_channel_list(self._editing_fixture)
-        dpg.delete_item("add_channel_window")
-    
-    def _save_fixture_edit(self) -> None:
-        if not self._editing_fixture:
-            return
-        
-        fixture = self._editing_fixture
-        
-        fixture.name = dpg.get_value("edit_fixture_name")
-        fixture.start_channel = dpg.get_value("edit_fixture_start")
-        fixture.position = dpg.get_value("edit_fixture_position")
-        fixture.intensity_scale = dpg.get_value("edit_fixture_intensity")
-        fixture.pan_min = dpg.get_value("edit_pan_min")
-        fixture.pan_max = dpg.get_value("edit_pan_max")
-        fixture.tilt_min = dpg.get_value("edit_tilt_min")
-        fixture.tilt_max = dpg.get_value("edit_tilt_max")
-        
-        profile_value = dpg.get_value("edit_fixture_profile")
-        fixture.profile_name = "" if profile_value == "(Custom)" else profile_value
-        
-        # Capture all channel settings from GUI
-        for i, ch in enumerate(fixture.channels):
-            # Get name
-            name_tag = f"ch_name_{i}"
-            if dpg.does_item_exist(name_tag):
-                ch.name = dpg.get_value(name_tag)
-            
-            # Get type
-            type_tag = f"ch_type_{i}"
-            if dpg.does_item_exist(type_tag):
-                type_display_name = dpg.get_value(type_tag)
-                for ct in ChannelType:
-                    if get_channel_type_display_name(ct) == type_display_name:
-                        ch.channel_type = ct
-                        break
-            
-            # Get fixed checkbox and value
-            fixed_tag = f"ch_fixed_{i}"
-            fixed_val_tag = f"ch_fixed_val_{i}"
-            if dpg.does_item_exist(fixed_tag):
-                is_fixed = dpg.get_value(fixed_tag)
-                if is_fixed and dpg.does_item_exist(fixed_val_tag):
-                    ch.fixed_value = dpg.get_value(fixed_val_tag)
-                else:
-                    ch.fixed_value = None
-            
-            # Get enabled
-            enabled_tag = f"ch_enabled_{i}"
-            if dpg.does_item_exist(enabled_tag):
-                ch.enabled = dpg.get_value(enabled_tag)
-        
-        self._refresh_fixture_list()
-        
-        if self.effects_engine:
-            self.effects_engine.update_config(self.config)
-        
-        dpg.delete_item("edit_fixture_window")
-        self._editing_fixture = None
+            self._fixture_dialogs.show_edit_fixture_dialog(user_data)
     
     def _remove_fixture(self) -> None:
         for i, fixture in enumerate(self.config.fixtures):
@@ -938,231 +516,16 @@ class MusicAutoShowGUI:
                 if dpg.does_item_exist(f"ch_{i+1}"):
                     dpg.set_value(f"ch_{i+1}", channels[i] / 255.0)
         
-        self._draw_visualizer()
-    
-    def _draw_visualizer(self) -> None:
-        """Draw a realistic stage view with fixture beams and effects."""
-        if not self._visualizer_id or not dpg.does_item_exist(self._visualizer_id):
-            return
-        
-        width, height = 940, 400
-        dpg.delete_item(self._visualizer_id, children_only=True)
-        
-        # Stage background - dark with subtle gradient effect
-        dpg.draw_rectangle((0, 0), (width, height), fill=(8, 8, 12), parent=self._visualizer_id)
-        
-        # Draw stage floor with perspective
-        floor_top = 320
-        floor_color = (25, 25, 35)
-        dpg.draw_quad(
-            (0, floor_top), (width, floor_top), (width, height), (0, height),
-            fill=floor_color, parent=self._visualizer_id
+        # Draw the stage visualizer
+        self._stage_visualizer.draw(
+            self.config.fixtures,
+            self._fixture_states,
+            self._current_analysis
         )
-        
-        # Draw floor grid lines for perspective
-        for i in range(0, width + 1, 80):
-            alpha = 30
-            dpg.draw_line((i, floor_top), (i, height), color=(50, 50, 60, alpha), thickness=1, parent=self._visualizer_id)
-        for i in range(floor_top, height + 1, 20):
-            alpha = 20
-            dpg.draw_line((0, i), (width, i), color=(50, 50, 60, alpha), thickness=1, parent=self._visualizer_id)
-        
-        # Draw truss at top
-        truss_y = 25
-        truss_height = 12
-        dpg.draw_rectangle((20, truss_y), (width - 20, truss_y + truss_height), 
-                          fill=(50, 50, 55), color=(70, 70, 80), thickness=2, parent=self._visualizer_id)
-        # Truss detail lines
-        for i in range(40, width - 20, 30):
-            dpg.draw_line((i, truss_y), (i + 15, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self._visualizer_id)
-            dpg.draw_line((i + 15, truss_y), (i, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self._visualizer_id)
-        
-        if not self.config.fixtures:
-            dpg.draw_text((width // 2 - 100, height // 2 - 10), "No fixtures configured", 
-                         size=18, color=(80, 80, 100), parent=self._visualizer_id)
-            return
-        
-        num_fixtures = len(self.config.fixtures)
-        sorted_fixtures = sorted(self.config.fixtures, key=lambda f: f.position)
-        
-        # Calculate fixture positions along the truss
-        margin = 80
-        available_width = width - 2 * margin
-        if num_fixtures > 1:
-            spacing = available_width / (num_fixtures - 1)
-        else:
-            spacing = 0
-        
-        # Draw beams first (so they're behind fixtures)
-        for i, fixture in enumerate(sorted_fixtures):
-            state = self._fixture_states.get(fixture.name, FixtureState())
-            
-            if num_fixtures > 1:
-                fixture_x = margin + i * spacing
-            else:
-                fixture_x = width / 2
-            fixture_y = truss_y + truss_height + 5
-            
-            # Calculate beam direction from pan/tilt
-            # Pan: 0-255, 128 = center, affects X direction
-            # Tilt: 0-255, 0 = up, 255 = down
-            pan_normalized = (state.pan - 128) / 128  # -1 to 1
-            tilt_normalized = state.tilt / 255  # 0 to 1 (0=up, 1=down)
-            
-            # Beam end position
-            beam_length = 250 + tilt_normalized * 80  # Longer beam when pointing down
-            beam_spread = 60 + tilt_normalized * 40  # Wider spread when pointing down
-            
-            beam_end_x = fixture_x + pan_normalized * 200
-            beam_end_y = fixture_y + 40 + beam_length * tilt_normalized
-            
-            # Only draw beam if there's some brightness
-            brightness = (state.red + state.green + state.blue) / 3
-            if brightness > 5:
-                # Beam color with intensity-based alpha
-                alpha = min(180, int(brightness * 0.7))
-                beam_color = (state.red, state.green, state.blue, alpha)
-                
-                # Draw multiple beam layers for glow effect
-                for layer in range(3):
-                    layer_alpha = alpha // (layer + 1)
-                    layer_spread = beam_spread + layer * 15
-                    layer_color = (state.red, state.green, state.blue, layer_alpha)
-                    
-                    # Draw beam as a quad (trapezoid shape)
-                    dpg.draw_quad(
-                        (fixture_x - 8 - layer * 3, fixture_y + 45),  # Top left
-                        (fixture_x + 8 + layer * 3, fixture_y + 45),  # Top right
-                        (beam_end_x + layer_spread / 2, beam_end_y),  # Bottom right
-                        (beam_end_x - layer_spread / 2, beam_end_y),  # Bottom left
-                        fill=layer_color, parent=self._visualizer_id
-                    )
-                
-                # Draw floor spot (where beam hits)
-                if tilt_normalized > 0.3:
-                    spot_size = 30 + tilt_normalized * 40
-                    spot_alpha = min(100, int(brightness * 0.4))
-                    spot_color = (state.red, state.green, state.blue, spot_alpha)
-                    spot_y = min(beam_end_y, height - 20)
-                    dpg.draw_ellipse(
-                        (beam_end_x - spot_size, spot_y - spot_size / 3),
-                        (beam_end_x + spot_size, spot_y + spot_size / 3),
-                        fill=spot_color, parent=self._visualizer_id
-                    )
-        
-        # Draw fixtures on top of beams
-        for i, fixture in enumerate(sorted_fixtures):
-            state = self._fixture_states.get(fixture.name, FixtureState())
-            
-            if num_fixtures > 1:
-                fixture_x = margin + i * spacing
-            else:
-                fixture_x = width / 2
-            fixture_y = truss_y + truss_height + 5
-            
-            # Draw fixture mount (connection to truss)
-            dpg.draw_rectangle(
-                (fixture_x - 4, truss_y + truss_height - 2), 
-                (fixture_x + 4, fixture_y + 10),
-                fill=(60, 60, 65), parent=self._visualizer_id
-            )
-            
-            # Draw fixture body (yoke)
-            yoke_color = (70, 70, 80)
-            dpg.draw_rectangle(
-                (fixture_x - 12, fixture_y + 8),
-                (fixture_x + 12, fixture_y + 45),
-                fill=yoke_color, color=(90, 90, 100), thickness=1, rounding=3, parent=self._visualizer_id
-            )
-            
-            # Draw fixture head (rotated based on tilt)
-            head_color = (50, 50, 60)
-            tilt_offset = (state.tilt - 128) / 255 * 15  # Visual tilt indication
-            dpg.draw_ellipse(
-                (fixture_x - 10, fixture_y + 25 + tilt_offset - 8),
-                (fixture_x + 10, fixture_y + 25 + tilt_offset + 8),
-                fill=head_color, color=(80, 80, 90), thickness=1, parent=self._visualizer_id
-            )
-            
-            # Draw lens (LED) - this shows the color
-            brightness = (state.red + state.green + state.blue) / 3
-            if brightness > 10:
-                # Glowing lens
-                glow_size = 8 + (brightness / 255) * 4
-                glow_color = (
-                    min(255, state.red + 50),
-                    min(255, state.green + 50),
-                    min(255, state.blue + 50),
-                    200
-                )
-                dpg.draw_circle(
-                    (fixture_x, fixture_y + 25 + tilt_offset), glow_size,
-                    fill=glow_color, parent=self._visualizer_id
-                )
-            
-            # Lens center
-            lens_color = (state.red, state.green, state.blue, 255) if brightness > 0 else (30, 30, 35, 255)
-            dpg.draw_circle(
-                (fixture_x, fixture_y + 25 + tilt_offset), 6,
-                fill=lens_color, color=(100, 100, 110), thickness=1, parent=self._visualizer_id
-            )
-            
-            # Draw fixture label
-            label_y = fixture_y + 52
-            name_short = fixture.name[:10] if len(fixture.name) > 10 else fixture.name
-            # Center the text approximately
-            text_offset = len(name_short) * 3
-            dpg.draw_text(
-                (fixture_x - text_offset, label_y), name_short,
-                size=11, color=(160, 160, 180), parent=self._visualizer_id
-            )
-            
-            # Draw channel info below
-            dpg.draw_text(
-                (fixture_x - 15, label_y + 14), f"Ch {fixture.start_channel}",
-                size=10, color=(100, 100, 120), parent=self._visualizer_id
-            )
-        
-        # Draw audio visualization bar at bottom
-        if self._current_analysis:
-            data = self._current_analysis
-            bar_y = height - 25
-            bar_height = 15
-            bar_width = width - 40
-            
-            # Background bar
-            dpg.draw_rectangle(
-                (20, bar_y), (20 + bar_width, bar_y + bar_height),
-                fill=(30, 30, 40), color=(50, 50, 60), thickness=1, parent=self._visualizer_id
-            )
-            
-            # Energy bar
-            energy_width = int(data.features.energy * bar_width)
-            if energy_width > 0:
-                # Color based on frequency content
-                r = int(150 + data.features.bass * 105)
-                g = int(100 + data.features.mid * 100)
-                b = int(100 + data.features.high * 155)
-                dpg.draw_rectangle(
-                    (20, bar_y), (20 + energy_width, bar_y + bar_height),
-                    fill=(r, g, b, 180), parent=self._visualizer_id
-                )
-            
-            # Beat indicator
-            beat_x = 20 + int(data.beat_position * bar_width)
-            dpg.draw_line(
-                (beat_x, bar_y - 3), (beat_x, bar_y + bar_height + 3),
-                color=(255, 255, 255, 150), thickness=2, parent=self._visualizer_id
-            )
-            
-            # BPM text
-            dpg.draw_text(
-                (width - 80, bar_y + 1), f"{data.features.tempo:.0f} BPM",
-                size=12, color=(180, 180, 200), parent=self._visualizer_id
-            )
     
     def _new_config(self) -> None:
         self.config = ShowConfig()
+        self._fixture_dialogs.config = self.config
         self._refresh_fixture_list()
         if dpg.does_item_exist("show_name_input"):
             dpg.set_value("show_name_input", self.config.name)
@@ -1175,6 +538,7 @@ class MusicAutoShowGUI:
         if app_data and 'file_path_name' in app_data:
             try:
                 self.config = ShowConfig.load(app_data['file_path_name'])
+                self._fixture_dialogs.config = self.config
                 self._refresh_fixture_list()
                 if dpg.does_item_exist("show_name_input"):
                     dpg.set_value("show_name_input", self.config.name)
