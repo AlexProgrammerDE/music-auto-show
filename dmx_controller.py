@@ -35,8 +35,9 @@ except ImportError:
     PYSERIAL_AVAILABLE = False
 
 # DMX512 timing constants (in seconds)
-DMX_BREAK_SECONDS = 0.000176  # 176μs break (spec minimum is 88μs)
-DMX_MAB_SECONDS = 0.000012    # 12μs Mark After Break (spec minimum is 8μs)
+# These match QLC+ timing for Open DMX USB
+DMX_BREAK_SECONDS = 0.000110  # 110μs break (QLC+ uses 110μs)
+DMX_MAB_SECONDS = 0.000016    # 16μs Mark After Break (QLC+ uses 16μs)
 
 
 class DMXInterface(ABC):
@@ -173,13 +174,22 @@ class SerialDMXInterface(DMXInterface):
             logger.info(f"  Parity: {self._serial.parity}")
             logger.info(f"  Port open: {self._serial.is_open}")
             
-            # Set RTS/DTR - some adapters need this
+            # Clear RTS - QLC+ does this for Open DMX USB
+            # This is important for proper FTDI operation
             try:
-                self._serial.rts = True
+                self._serial.rts = False
                 self._serial.dtr = True
                 logger.info(f"  RTS: {self._serial.rts}, DTR: {self._serial.dtr}")
             except Exception as e:
                 logger.debug(f"Could not set RTS/DTR: {e}")
+            
+            # Purge buffers - QLC+ does this before starting
+            try:
+                self._serial.reset_input_buffer()
+                self._serial.reset_output_buffer()
+                logger.info("  Buffers purged")
+            except Exception as e:
+                logger.debug(f"Could not purge buffers: {e}")
             
             # Detect the best break method for this platform/device
             self._detect_break_method()
@@ -231,9 +241,8 @@ class SerialDMXInterface(DMXInterface):
         """
         Detect the best method for generating DMX break signals.
         
-        On Windows with FTDI devices, break_condition often doesn't work
-        properly through the VCP driver. The baudrate switching method
-        is more reliable across platforms.
+        QLC+ uses setBreakEnabled() which maps to break_condition in pyserial.
+        We try this first as it's the most precise method when it works.
         """
         if not self._serial:
             return
@@ -243,10 +252,21 @@ class SerialDMXInterface(DMXInterface):
             logger.info(f"Using forced break method: {self._force_break_method}")
             return
         
-        # Default to baudrate_switch - most reliable across platforms
-        # The break_condition property often doesn't work on Windows FTDI VCP
+        # Try break_condition first - this is what QLC+ uses
+        try:
+            # Test if break_condition property works
+            self._serial.break_condition = True
+            time.sleep(0.0001)
+            self._serial.break_condition = False
+            self._break_method = "break_condition"
+            logger.info("Using break_condition for DMX break (like QLC+)")
+            return
+        except (AttributeError, serial.SerialException, IOError, OSError) as e:
+            logger.warning(f"break_condition not available: {e}")
+        
+        # Fallback to baudrate switching
         self._break_method = "baudrate_switch"
-        logger.info("Using baudrate switching for DMX break (most reliable)")
+        logger.info("Using baudrate switching for DMX break (fallback)")
     
     def _detect_port(self) -> str:
         """Auto-detect serial DMX device."""
@@ -365,12 +385,24 @@ class SerialDMXInterface(DMXInterface):
             return False
     
     def _send_break_condition(self) -> bool:
-        """Send break using break_condition property."""
+        """
+        Send break using break_condition property.
+        This matches QLC+'s setBreakEnabled() approach.
+        """
         try:
+            # Set break condition (line goes LOW)
             self._serial.break_condition = True
+            
+            # Hold break for 110μs (QLC+ timing)
+            # On systems with good timer granularity this works well
             time.sleep(DMX_BREAK_SECONDS)
+            
+            # Clear break condition (line goes HIGH for MAB)
             self._serial.break_condition = False
+            
+            # Mark After Break - 16μs (QLC+ timing)
             time.sleep(DMX_MAB_SECONDS)
+            
             return True
         except Exception as e:
             self._last_error = f"break_condition failed: {e}"
@@ -443,7 +475,14 @@ class SerialDMXInterface(DMXInterface):
                 bytes_written = self._serial.write(data)
                 
                 # Ensure data is fully transmitted before next frame
+                # This is critical - QLC+ uses waitForBytesWritten(10)
                 self._serial.flush()
+                
+                # Wait for transmission to complete
+                # At 250kbaud with 8N2, 513 bytes takes about 22.5ms
+                # We don't need to wait the full time since flush() should block,
+                # but a small delay helps ensure the FTDI buffer is emptied
+                # time.sleep(0.001)  # 1ms safety margin
                 
                 self._send_count += 1
                 self._consecutive_errors = 0
