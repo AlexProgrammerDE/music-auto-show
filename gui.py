@@ -702,37 +702,34 @@ class MusicAutoShowGUI:
             )
             
             # Layout: [Spectrum 150px] [Beat/Onset 150px] [Frequency Bands 100px] [Beat Pulse 100px]
+            import math
             
             # === Section 1: Frequency Spectrum (shows FFT - how bass/mid/high are calculated) ===
             spectrum_x = 2
             spectrum_width = 145
             spectrum_height = viz_height - 4
             
-            if data.spectrum and len(data.spectrum) > 0:
-                num_bands = len(data.spectrum)
-                bar_width = max(1, spectrum_width / num_bands)
+            # Use spectrum data if available, otherwise generate from bass/mid/high
+            spectrum_data = data.spectrum if (hasattr(data, 'spectrum') and data.spectrum and len(data.spectrum) > 0) else None
+            
+            if spectrum_data:
+                num_bands = len(spectrum_data)
+                bar_width = max(2, spectrum_width / num_bands)
                 
-                for i, value in enumerate(data.spectrum):
+                for i, value in enumerate(spectrum_data):
                     x = spectrum_x + i * bar_width
                     bar_h = value * (spectrum_height - 2)
                     
                     # Color gradient: blue (low) -> cyan -> green -> yellow -> red (high)
                     pos = i / max(1, num_bands - 1)
                     if pos < 0.33:
-                        # Blue to cyan (bass)
                         r, g, b = 50, int(100 + pos * 3 * 155), 255
                     elif pos < 0.66:
-                        # Cyan to green to yellow (mids)
                         p = (pos - 0.33) * 3
-                        r = int(p * 255)
-                        g = 255
-                        b = int(255 * (1 - p))
+                        r, g, b = int(p * 255), 255, int(255 * (1 - p))
                     else:
-                        # Yellow to red (highs)
                         p = (pos - 0.66) * 3
-                        r = 255
-                        g = int(255 * (1 - p))
-                        b = 50
+                        r, g, b = 255, int(255 * (1 - p)), 50
                     
                     if bar_h > 0.5:
                         dpg.draw_rectangle(
@@ -740,6 +737,42 @@ class MusicAutoShowGUI:
                             fill=(r, g, b, 220),
                             parent=parent
                         )
+            else:
+                # Fallback: generate spectrum-like display from bass/mid/high
+                num_bands = 24
+                bar_width = spectrum_width / num_bands
+                bass, mid, high = data.features.bass, data.features.mid, data.features.high
+                
+                for i in range(num_bands):
+                    pos = i / (num_bands - 1)
+                    # Blend values based on position
+                    if pos < 0.33:
+                        value = bass * (1 - pos * 3) + mid * (pos * 3)
+                    elif pos < 0.66:
+                        value = mid * (1 - (pos - 0.33) * 3) + high * ((pos - 0.33) * 3)
+                    else:
+                        value = high * (1 - (pos - 0.66) * 2)
+                    
+                    # Add some variation
+                    value *= 0.7 + 0.3 * math.sin(i * 0.8 + data.beat_position * 6.28)
+                    
+                    x = spectrum_x + i * bar_width
+                    bar_h = max(2, value * (spectrum_height - 4))
+                    
+                    if pos < 0.33:
+                        r, g, b = 50, int(100 + pos * 3 * 155), 255
+                    elif pos < 0.66:
+                        p = (pos - 0.33) * 3
+                        r, g, b = int(p * 255), 255, int(255 * (1 - p))
+                    else:
+                        p = (pos - 0.66) * 3
+                        r, g, b = 255, int(255 * (1 - p * 0.8)), 50
+                    
+                    dpg.draw_rectangle(
+                        (x, spectrum_height - bar_h + 2), (x + bar_width - 1, spectrum_height),
+                        fill=(r, g, b, 200),
+                        parent=parent
+                    )
             
             # Spectrum separator line
             dpg.draw_line((150, 0), (150, viz_height), color=(50, 50, 70), thickness=1, parent=parent)
@@ -749,40 +782,64 @@ class MusicAutoShowGUI:
             onset_width = 145
             onset_height = viz_height - 4
             
-            if data.onset_history and len(data.onset_history) > 0:
-                num_points = len(data.onset_history)
+            onset_data = data.onset_history if (hasattr(data, 'onset_history') and data.onset_history and len(data.onset_history) > 0) else None
+            
+            if onset_data:
+                num_points = len(onset_data)
                 point_width = onset_width / num_points
                 
                 # Draw onset strength as a line graph
                 points = []
-                for i, value in enumerate(data.onset_history):
+                for i, value in enumerate(onset_data):
                     x = onset_x + i * point_width
-                    y = onset_height - value * (onset_height - 4) + 2
+                    y = onset_height - value * (onset_height - 8) + 2
                     points.append((x, y))
                 
                 # Draw filled area under the curve
                 if len(points) >= 2:
-                    # Draw as connected lines (polyline)
                     for i in range(len(points) - 1):
                         x1, y1 = points[i]
                         x2, y2 = points[i + 1]
-                        # Draw vertical fill
                         dpg.draw_line(
                             (x1, y1), (x1, onset_height),
-                            color=(100, 180, 255, 80),
-                            thickness=max(1, int(point_width)),
+                            color=(100, 180, 255, 60),
+                            thickness=max(1, int(point_width) + 1),
                             parent=parent
                         )
-                        # Draw the line
                         dpg.draw_line(
                             (x1, y1), (x2, y2),
                             color=(100, 200, 255, 255),
                             thickness=2,
                             parent=parent
                         )
+            else:
+                # Fallback: show energy-based wave with beat pulses
+                num_points = 32
+                point_width = onset_width / num_points
+                energy = data.features.energy
+                beat_pos = data.beat_position
                 
-                # Draw beat threshold line (where onset detection triggers)
-                threshold_y = onset_height - 0.3 * (onset_height - 4) + 2
+                for i in range(num_points):
+                    # Simulate onset history - peaks at regular intervals
+                    pos = i / num_points
+                    # Create wave with beat-synced peaks
+                    wave = 0.3 + 0.4 * math.sin(pos * 12.56 + beat_pos * 6.28)
+                    wave *= energy
+                    # Add decay from recent "beat"
+                    if pos > 0.8:
+                        wave += (1 - beat_pos) * 0.5 * ((pos - 0.8) / 0.2)
+                    
+                    x = onset_x + i * point_width
+                    bar_h = max(2, wave * (onset_height - 8))
+                    
+                    dpg.draw_rectangle(
+                        (x, onset_height - bar_h), (x + point_width - 1, onset_height),
+                        fill=(100, 180, 255, 150),
+                        parent=parent
+                    )
+                
+                # Draw threshold line
+                threshold_y = onset_height - 0.3 * (onset_height - 8)
                 dpg.draw_line(
                     (onset_x, threshold_y), (onset_x + onset_width, threshold_y),
                     color=(255, 100, 100, 150),
@@ -863,20 +920,25 @@ class MusicAutoShowGUI:
             )
             
             # Draw beat position arc (shows progress through beat)
-            arc_radius = max_radius + 2
+            arc_radius = max_radius + 4
             arc_angle = beat_pos * 360
             if arc_angle > 5:
-                # Draw arc as small line segments
-                import math
-                prev_x = pulse_center_x + arc_radius
-                prev_y = pulse_center_y
-                for angle in range(0, int(arc_angle), 15):
-                    rad = math.radians(angle - 90)  # Start from top
+                # Draw arc as small line segments, starting from top (12 o'clock)
+                start_angle = -90  # Start from top
+                prev_rad = math.radians(start_angle)
+                prev_x = pulse_center_x + arc_radius * math.cos(prev_rad)
+                prev_y = pulse_center_y + arc_radius * math.sin(prev_rad)
+                
+                # Draw arc segments
+                step = 10  # Degrees per segment
+                for angle in range(step, int(arc_angle) + step, step):
+                    actual_angle = min(angle, arc_angle)
+                    rad = math.radians(start_angle + actual_angle)
                     x = pulse_center_x + arc_radius * math.cos(rad)
                     y = pulse_center_y + arc_radius * math.sin(rad)
                     dpg.draw_line(
                         (prev_x, prev_y), (x, y),
-                        color=(255, 200, 100, 200),
+                        color=(255, 200, 100, 220),
                         thickness=3,
                         parent=parent
                     )
