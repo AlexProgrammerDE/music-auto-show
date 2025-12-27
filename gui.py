@@ -43,9 +43,10 @@ class MusicAutoShowGUI:
         self.effects_engine: Optional[EffectsEngine] = None
         
         self._running = False
-        self._update_thread: Optional[threading.Thread] = None
+        self._effects_thread: Optional[threading.Thread] = None  # Dedicated effects processing thread
         self._fixture_states: dict[str, FixtureState] = {}
         self._current_analysis: Optional[AnalysisData] = None
+        self._state_lock = threading.Lock()  # Protects shared state between threads
         
         self._fixture_list_id = None
         self._visualizer_id = None
@@ -68,6 +69,22 @@ class MusicAutoShowGUI:
         """Update effects engine with current config."""
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
+    
+    def _update_gui_from_state(self) -> None:
+        """
+        Update GUI elements from shared state.
+        Called from main thread during render loop.
+        """
+        # Get current state (thread-safe read)
+        with self._state_lock:
+            data = self._current_analysis
+            fixture_states = self._fixture_states.copy() if self._fixture_states else {}
+        
+        if data is not None:
+            try:
+                self._update_gui(data)
+            except Exception:
+                pass
     
     def _get_last_used_channel(self) -> int:
         """Calculate the last DMX channel used by any fixture."""
@@ -144,10 +161,12 @@ class MusicAutoShowGUI:
         dpg.show_viewport()
         
         self._running = True
-        self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
-        self._update_thread.start()
         
-        dpg.start_dearpygui()
+        # Use manual render loop to update GUI from main thread
+        while dpg.is_dearpygui_running():
+            # Update GUI with latest state (main thread only)
+            self._update_gui_from_state()
+            dpg.render_dearpygui_frame()
         
         self._running = False
         self._stop_show()
@@ -549,6 +568,10 @@ class MusicAutoShowGUI:
         logger.info("Creating effects engine...")
         self.effects_engine = EffectsEngine(self.dmx_controller, self.config)
         
+        # Start effects processing thread (runs independently of GUI)
+        self._effects_thread = threading.Thread(target=self._effects_loop, daemon=True)
+        self._effects_thread.start()
+        
         logger.info("=" * 50)
         logger.info("SHOW RUNNING")
         logger.info("=" * 50)
@@ -556,6 +579,11 @@ class MusicAutoShowGUI:
         dpg.set_value(self._status_text_id, "Status: Running")
     
     def _stop_show(self) -> None:
+        # Stop effects thread first
+        if self._effects_thread:
+            self._effects_thread.join(timeout=1.0)
+            self._effects_thread = None
+        
         if self.effects_engine:
             self.effects_engine.blackout()
             self.effects_engine = None
@@ -584,15 +612,28 @@ class MusicAutoShowGUI:
                 else:
                     dpg.set_value(self._status_text_id, "Status: Running")
     
-    def _update_loop(self) -> None:
+    def _effects_loop(self) -> None:
+        """
+        Dedicated effects processing loop - runs in its own thread.
+        Processes audio data and updates fixture states at ~30 FPS.
+        Does NOT touch the GUI directly.
+        """
         frame_count = 0
         last_debug_time = time.time()
         
         while self._running:
             if self.effects_engine and self.audio_analyzer:
+                # Get audio analysis (thread-safe read)
                 data = self.audio_analyzer.get_data()
-                self._current_analysis = data
-                self._fixture_states = self.effects_engine.process(data)
+                
+                # Process effects (heavy computation)
+                fixture_states = self.effects_engine.process(data)
+                
+                # Update shared state (thread-safe write)
+                with self._state_lock:
+                    self._current_analysis = data
+                    self._fixture_states = fixture_states
+                
                 frame_count += 1
                 
                 # Debug logging every 5 seconds
@@ -610,7 +651,7 @@ class MusicAutoShowGUI:
                             logger.info(f"  Album colors: {colors_str}")
                     
                     # Log fixture states
-                    for name, state in self._fixture_states.items():
+                    for name, state in fixture_states.items():
                         logger.info(f"  Fixture '{name}': R={state.red} G={state.green} B={state.blue} "
                                    f"Dimmer={state.dimmer} Pan={state.pan} Tilt={state.tilt} PTSpeed={state.pt_speed}")
                     
@@ -624,12 +665,8 @@ class MusicAutoShowGUI:
                             logger.info(f"  DMX channels 1-32: ALL ZERO")
                     
                     last_debug_time = now
-                
-                try:
-                    self._update_gui(data)
-                except Exception:
-                    pass
-            time.sleep(0.033)
+            
+            time.sleep(0.033)  # ~30 FPS
     
     def _update_gui(self, data: AnalysisData) -> None:
         if not dpg.is_dearpygui_running():
