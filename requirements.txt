@@ -4,7 +4,7 @@ numpy>=1.24.0
 
 # Real-time Audio Analysis (required)
 PyAudioWPatch>=0.2.12  # WASAPI loopback support on Windows
-librosa>=0.10.0        # Beat/tempo detection
+aubio>=0.4.9           # Real-time beat/tempo detection
 
 # DMX Control
 pyftdi>=0.54.0         # FTDI-based DMX interfaces
