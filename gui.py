@@ -18,7 +18,7 @@ except ImportError:
 from config import (
     ShowConfig, FixtureConfig, FixtureProfile, ChannelConfig,
     VisualizationMode, MovementMode, StrobeEffectMode, RotationMode,
-    DMXConfig, EffectsConfig, ChannelType,
+    EffectFixtureMode, DMXConfig, EffectsConfig, ChannelType,
     AudioInputMode, get_available_presets, get_preset, FIXTURE_PRESETS, 
     get_channel_type_display_name
 )
@@ -369,6 +369,14 @@ class MusicAutoShowGUI:
             dpg.add_separator()
             dpg.add_text("Effect Fixtures (Derby/Moonflower)", color=(180, 180, 200))
             
+            # Effect fixture mode selector (strobe vs movement balance)
+            effect_fixture_modes = [m.value for m in EffectFixtureMode]
+            dpg.add_combo(label="Show Mode", items=effect_fixture_modes, 
+                         default_value=self.config.effects.effect_fixture_mode.value,
+                         callback=self._on_effect_fixture_mode_changed, tag="effect_fixture_mode", width=200)
+            dpg.add_text("", tag="effect_fixture_mode_hint", color=(130, 130, 160))
+            self._update_effect_fixture_mode_hint(self.config.effects.effect_fixture_mode.value)
+            
             # Rotation mode selector (Channel 3)
             rotation_modes = [m.value for m in RotationMode]
             dpg.add_combo(label="Rotation Mode", items=rotation_modes, 
@@ -529,6 +537,26 @@ class MusicAutoShowGUI:
         hint = hints.get(mode_value, "")
         if dpg.does_item_exist("movement_mode_hint"):
             dpg.set_value("movement_mode_hint", hint)
+    
+    def _on_effect_fixture_mode_changed(self, sender, app_data) -> None:
+        """Handle effect fixture mode change."""
+        self.config.effects.effect_fixture_mode = EffectFixtureMode(app_data)
+        self._update_effect_fixture_mode_hint(app_data)
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
+    
+    def _update_effect_fixture_mode_hint(self, mode_value: str) -> None:
+        """Update the effect fixture mode hint text."""
+        hints = {
+            "balanced": "Balance between strobe and movement",
+            "strobe_focus": "More blinking, less movement",
+            "movement_focus": "More movement, minimal strobe",
+            "strobe_only": "Maximum strobe, very slow movement",
+            "movement_only": "No strobe, maximum movement",
+        }
+        hint = hints.get(mode_value, "")
+        if dpg.does_item_exist("effect_fixture_mode_hint"):
+            dpg.set_value("effect_fixture_mode_hint", hint)
     
     def _on_rotation_mode_changed(self, sender, app_data) -> None:
         """Handle rotation mode change."""

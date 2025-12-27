@@ -371,7 +371,10 @@ class EffectsEngine:
     def _get_strobe_value(self, data: AnalysisData, beat_triggered: bool) -> int:
         """
         Get Channel 2 (Strobe) value.
-        0-5: Off, 6-255: Strobe speed slow to fast.
+        0-5: Strobe off (but light stays on), 6-255: Strobe speed slow to fast.
+        
+        IMPORTANT: We return 0 for "no strobe" - the fixture color stays on,
+        only the strobe effect is disabled. The color is controlled by Channel 1.
         
         Respects effect_fixture_mode:
         - STROBE_FOCUS / STROBE_ONLY: More aggressive strobe
@@ -380,7 +383,7 @@ class EffectsEngine:
         """
         mode = self.config.effects.effect_fixture_mode
         
-        # Movement-only mode: no strobe at all
+        # Movement-only mode: no strobe at all (light stays on via color channel)
         if mode == EffectFixtureMode.MOVEMENT_ONLY:
             return 0
         
@@ -396,26 +399,26 @@ class EffectsEngine:
         if self._strobe_active:
             # Drop strobe - fast
             strobe_value = 200
-        elif beat_triggered and data.features.bass > 0.7:
-            # Strong beat = quick strobe burst
-            strobe_value = int(100 + data.features.bass * 100)  # 100-200 range
-        elif data.features.energy > 0.6:
-            # Gentle strobe on high energy
-            strobe_value = int(6 + (data.features.energy - 0.6) * 100)  # 6-46 range
         
-        # Apply mode multipliers
+        # Apply mode-specific strobe behavior
         if mode == EffectFixtureMode.STROBE_ONLY:
-            # Maximum strobe - lower threshold, higher values
-            if strobe_value == 0 and data.features.energy > 0.3:
-                strobe_value = int(6 + data.features.energy * 80)
-            elif strobe_value > 0:
-                strobe_value = min(255, int(strobe_value * 1.3))
+            # Maximum strobe - always some strobe when there's any energy
+            if strobe_value == 0:
+                if beat_triggered and data.features.bass > 0.5:
+                    strobe_value = int(80 + data.features.bass * 120)
+                elif data.features.energy > 0.2:
+                    strobe_value = int(6 + data.features.energy * 100)
         elif mode == EffectFixtureMode.STROBE_FOCUS:
-            # More strobe - lower threshold
-            if strobe_value == 0 and data.features.energy > 0.4:
-                strobe_value = int(6 + (data.features.energy - 0.4) * 60)
-            elif strobe_value > 0:
-                strobe_value = min(255, int(strobe_value * 1.15))
+            # More strobe - triggers on beats with bass
+            if strobe_value == 0:
+                if beat_triggered and data.features.bass > 0.6:
+                    strobe_value = int(60 + data.features.bass * 100)
+                elif data.features.energy > 0.5:
+                    strobe_value = int(6 + (data.features.energy - 0.5) * 60)
+        else:
+            # BALANCED mode - only strobe on very strong beats, otherwise off
+            if strobe_value == 0 and beat_triggered and data.features.bass > 0.8:
+                strobe_value = int(80 + data.features.bass * 80)  # Quick burst on heavy bass
         
         return strobe_value
     
