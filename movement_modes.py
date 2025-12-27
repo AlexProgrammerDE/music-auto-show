@@ -923,26 +923,37 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     tilt_diff = target_tilt - current_tilt
     state.tilt = int(current_tilt + tilt_diff * tilt_rate)
     
-    # Set P/T speed channel appropriately for mode AND tempo
+    # Set P/T speed channel appropriately for tempo
     # For SPEED_PAN_TILT_FAST_SLOW: 0 = fastest, 255 = slowest
-    # Slow songs should use higher values (slower motor) to match the vibe
     # 
-    # tempo_scale: 0.5 at 60 BPM, 1.0 at 120 BPM, 1.5 at 180 BPM
-    # We invert this for motor speed: slow tempo = slower motor
-    # motor_slow_factor: 2.0 at 60 BPM, 1.0 at 120 BPM, 0.67 at 180 BPM
-    motor_slow_factor = 1.0 / max(0.5, tempo_scale)
+    # Base principle: 127 (middle) at 120 BPM reference tempo
+    # Slower songs (< 120 BPM) -> higher values (slower motor)
+    # Faster songs (> 120 BPM) -> lower values (faster motor)
     
-    # Base speeds per mode (before tempo adjustment)
-    if mode in (MovementMode.SWEEP, MovementMode.SUBTLE, MovementMode.FIGURE_8):
-        base_speed = 60  # Slower motor for smooth modes
-    elif mode in (MovementMode.DRAMATIC, MovementMode.STROBE_POSITION, MovementMode.BALLYHOO, MovementMode.CRAZY):
-        base_speed = 10  # Fast motor for aggressive modes
-    elif mode in (MovementMode.CIRCLE, MovementMode.CHASE):
-        base_speed = 20  # Moderately fast motor
+    # Calculate tempo offset from reference (120 BPM)
+    # At 60 BPM: offset = -60, at 180 BPM: offset = +60
+    tempo_offset = tempo - REFERENCE_TEMPO
+    
+    # Scale tempo offset to pt_speed adjustment
+    # Every 1 BPM difference = ~1 pt_speed unit adjustment
+    # 60 BPM -> +60 (slower), 180 BPM -> -60 (faster)
+    tempo_adjustment = -tempo_offset
+    
+    # Mode adjustment: some modes prefer slightly faster/slower base
+    # This is a small offset, not a major change
+    if mode in (MovementMode.DRAMATIC, MovementMode.STROBE_POSITION, MovementMode.CRAZY):
+        mode_offset = -20  # Slightly faster
+    elif mode in (MovementMode.BALLYHOO, MovementMode.CHASE):
+        mode_offset = -10  # Slightly faster
+    elif mode in (MovementMode.SWEEP, MovementMode.SUBTLE, MovementMode.FIGURE_8):
+        mode_offset = +15  # Slightly slower for smooth modes
     else:
-        base_speed = 30  # Moderate default
+        mode_offset = 0  # Neutral
     
-    # Apply tempo scaling: slow songs get higher pt_speed (slower motor)
-    # Also factor in user's speed setting
-    adjusted_speed = base_speed * motor_slow_factor * (1.0 - speed * 0.5)
-    state.pt_speed = int(max(0, min(255, adjusted_speed)))
+    # User speed setting: small adjustment (-25 to +25)
+    # speed=1.0 -> -25 (faster), speed=0.0 -> +25 (slower)
+    speed_offset = int((0.5 - speed) * 50)
+    
+    # Combine: start at 127, adjust based on tempo, mode, and user speed
+    pt_speed_value = 127 + int(tempo_adjustment) + mode_offset + speed_offset
+    state.pt_speed = max(0, min(255, pt_speed_value))
