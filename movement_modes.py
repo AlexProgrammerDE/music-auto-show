@@ -923,13 +923,26 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     tilt_diff = target_tilt - current_tilt
     state.tilt = int(current_tilt + tilt_diff * tilt_rate)
     
-    # Set P/T speed channel appropriately for mode
-    # For continuous modes, we want slower motor speed for smoothness
+    # Set P/T speed channel appropriately for mode AND tempo
+    # For SPEED_PAN_TILT_FAST_SLOW: 0 = fastest, 255 = slowest
+    # Slow songs should use higher values (slower motor) to match the vibe
+    # 
+    # tempo_scale: 0.5 at 60 BPM, 1.0 at 120 BPM, 1.5 at 180 BPM
+    # We invert this for motor speed: slow tempo = slower motor
+    # motor_slow_factor: 2.0 at 60 BPM, 1.0 at 120 BPM, 0.67 at 180 BPM
+    motor_slow_factor = 1.0 / max(0.5, tempo_scale)
+    
+    # Base speeds per mode (before tempo adjustment)
     if mode in (MovementMode.SWEEP, MovementMode.SUBTLE, MovementMode.FIGURE_8):
-        state.pt_speed = int(60 * (1.0 - speed))  # Slower motor
+        base_speed = 60  # Slower motor for smooth modes
     elif mode in (MovementMode.DRAMATIC, MovementMode.STROBE_POSITION, MovementMode.BALLYHOO, MovementMode.CRAZY):
-        state.pt_speed = int(10 * (1.0 - speed))  # Fast motor
+        base_speed = 10  # Fast motor for aggressive modes
     elif mode in (MovementMode.CIRCLE, MovementMode.CHASE):
-        state.pt_speed = int(20 * (1.0 - speed))  # Moderately fast motor
+        base_speed = 20  # Moderately fast motor
     else:
-        state.pt_speed = int(30 * (1.0 - speed))  # Moderate
+        base_speed = 30  # Moderate default
+    
+    # Apply tempo scaling: slow songs get higher pt_speed (slower motor)
+    # Also factor in user's speed setting
+    adjusted_speed = base_speed * motor_slow_factor * (1.0 - speed * 0.5)
+    state.pt_speed = int(max(0, min(255, adjusted_speed)))
