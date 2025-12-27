@@ -156,24 +156,30 @@ class AudioAnalyzer:
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[AnalysisData], None]] = []
         
-        # Librosa-based onset detection (we accumulate audio for periodic analysis)
-        self._audio_buffer = deque(maxlen=sample_rate * 2)  # 2 seconds of audio
-        self._onset_envelope = None
+        # Audio buffer for analysis
+        self._audio_buffer = deque(maxlen=sample_rate * 4)  # 4 seconds of audio for tempo
         self._last_tempo_update = 0.0
-        self._tempo_update_interval = 1.0  # Update tempo every second
+        self._tempo_update_interval = 0.5  # Update tempo every 0.5 seconds
         
         # Beat tracking state
         self._last_beat_time = 0.0
         self._beat_count = 0
-        self._tempo_history = deque(maxlen=8)  # Rolling tempo estimates
-        self._onset_history = deque(maxlen=16)  # Recent onset times for tempo calc
+        self._tempo_history = deque(maxlen=16)  # Rolling tempo estimates
+        self._onset_times = deque(maxlen=64)  # Recent onset times for IOI analysis
         self._current_tempo = 120.0  # Current estimated tempo
+        self._tempo_confidence = 0.0  # Confidence in current tempo estimate
         
-        # Onset detection state (uses normalized 0-1 values)
-        self._prev_onset_strength = 0.0
+        # Spectral flux onset detection (more accurate than simple energy)
+        self._prev_spectrum: Optional[np.ndarray] = None
+        self._onset_envelope = deque(maxlen=256)  # ~6 seconds at 40fps
+        self._onset_threshold_factor = 1.5  # Multiplier above median for onset
         self._onset_cooldown = 0.0
-        self._min_onset_interval = 0.08  # Minimum 80ms between onsets (faster response)
+        self._min_onset_interval = 0.05  # Minimum 50ms between onsets
         self._onset_strength_history: deque[float] = deque(maxlen=64)  # For visualization
+        
+        # Autocorrelation tempo estimation
+        self._acf_tempo_min = 60  # Minimum BPM to detect
+        self._acf_tempo_max = 200  # Maximum BPM to detect
         
         # Adaptive energy scaling (auto-gain)
         self._max_rms_observed = 0.01  # Start with small value, will grow
@@ -516,35 +522,43 @@ class AudioAnalyzer:
             self._max_rms_observed *= self._rms_decay  # Slowly decay to adapt to quieter sections
         self._max_rms_observed = max(0.01, self._max_rms_observed)  # Prevent division by zero
         
-        # Real-time onset detection using normalized energy derivative
+        # Spectral flux onset detection (more accurate than energy-based)
         onset_detected = False
-        # Use normalized RMS for onset detection (0-1 range)
-        normalized_rms = rms / self._max_rms_observed
-        if current_time > self._onset_cooldown:
-            # Detect onset when normalized energy rises sharply
-            if normalized_rms > 0.3 and normalized_rms > self._prev_onset_strength * 1.3:
-                onset_detected = True
-                self._onset_history.append(current_time)
-                self._onset_cooldown = current_time + self._min_onset_interval
-        self._prev_onset_strength = normalized_rms * 0.7 + self._prev_onset_strength * 0.3  # Smooth
-        self._onset_strength_history.append(self._prev_onset_strength)  # Store for visualization
+        onset_strength = self._compute_spectral_flux(audio_data)
+        self._onset_envelope.append(onset_strength)
+        self._onset_strength_history.append(min(1.0, onset_strength))  # Store for visualization
         
-        # Beat detection based on tempo prediction
+        # Adaptive threshold: onset if above median * factor
+        if len(self._onset_envelope) >= 8 and current_time > self._onset_cooldown:
+            threshold = np.median(list(self._onset_envelope)) * self._onset_threshold_factor + 0.01
+            if onset_strength > threshold:
+                onset_detected = True
+                self._onset_times.append(current_time)
+                self._onset_cooldown = current_time + self._min_onset_interval
+        
+        # Beat detection using tempo prediction with onset confirmation
         beat_detected = False
         if self._current_tempo > 0:
             beat_interval = 60.0 / self._current_tempo
             time_since_beat = current_time - self._last_beat_time
             
-            # Predict beat based on tempo, with onset confirmation
-            if time_since_beat >= beat_interval * 0.9:
-                if onset_detected or time_since_beat >= beat_interval:
+            # Predict beat: allow onset to trigger slightly early/late
+            early_window = beat_interval * 0.15  # 15% early tolerance
+            if time_since_beat >= beat_interval - early_window:
+                if onset_detected:
+                    # Onset-confirmed beat
+                    beat_detected = True
+                    self._last_beat_time = current_time
+                    self._beat_count += 1
+                elif time_since_beat >= beat_interval * 1.1:
+                    # Force beat if too late (tempo might be slightly off)
                     beat_detected = True
                     self._last_beat_time = current_time
                     self._beat_count += 1
         
-        # Periodically update tempo using librosa (expensive, so do less often)
+        # Update tempo estimate periodically
         if current_time - self._last_tempo_update > self._tempo_update_interval:
-            self._update_tempo_librosa()
+            self._update_tempo_autocorrelation()
             self._last_tempo_update = current_time
         self._energy_history.append(rms)
         
@@ -590,8 +604,8 @@ class AudioAnalyzer:
             features.time_since_beat = current_time - self._last_beat_time
             
             # Estimate danceability from beat regularity and bass energy
-            if len(self._onset_history) >= 3:
-                intervals = np.diff(list(self._onset_history))
+            if len(self._onset_times) >= 3:
+                intervals = np.diff(list(self._onset_times))
                 if len(intervals) > 0 and np.mean(intervals) > 0:
                     # Regularity: how consistent are the intervals (lower std = more regular)
                     coefficient_of_variation = np.std(intervals) / np.mean(intervals)
@@ -711,44 +725,142 @@ class AudioAnalyzer:
         except Exception:
             return [0.0] * num_bands
     
-    def _update_tempo_librosa(self) -> None:
-        """Update tempo estimate using librosa beat tracking."""
-        if len(self._audio_buffer) < self.sample_rate:  # Need at least 1 second
+    def _compute_spectral_flux(self, audio_data: np.ndarray) -> float:
+        """
+        Compute spectral flux for onset detection.
+        Spectral flux measures the change in spectrum between frames,
+        which is more reliable for beat detection than simple energy.
+        """
+        if len(audio_data) < self._fft_size:
+            return 0.0
+        
+        # Compute magnitude spectrum
+        windowed = audio_data[:self._fft_size] * np.hanning(self._fft_size)
+        spectrum = np.abs(np.fft.rfft(windowed))
+        
+        # Normalize spectrum
+        spectrum = spectrum / (np.max(spectrum) + 1e-10)
+        
+        if self._prev_spectrum is None:
+            self._prev_spectrum = spectrum
+            return 0.0
+        
+        # Spectral flux: sum of positive differences (only increases)
+        diff = spectrum - self._prev_spectrum
+        flux = np.sum(np.maximum(0, diff))
+        
+        # Update previous spectrum
+        self._prev_spectrum = spectrum
+        
+        return float(flux)
+    
+    def _update_tempo_autocorrelation(self) -> None:
+        """
+        Update tempo estimate using autocorrelation of the onset envelope.
+        This is a standard real-time BPM detection approach.
+        """
+        if len(self._onset_envelope) < 64:  # Need enough data
             return
         
         try:
-            # Convert buffer to numpy array
-            audio_array = np.array(list(self._audio_buffer), dtype=np.float32)
+            # Method 1: Autocorrelation of onset envelope
+            onset_signal = np.array(list(self._onset_envelope), dtype=np.float32)
             
-            # Use librosa to estimate tempo
-            tempo, _ = librosa.beat.beat_track(
-                y=audio_array,
-                sr=self.sample_rate,
-                units='time'
-            )
+            # Normalize
+            onset_signal = onset_signal - np.mean(onset_signal)
+            if np.std(onset_signal) > 0:
+                onset_signal = onset_signal / np.std(onset_signal)
             
-            # librosa may return an array, get scalar
-            if hasattr(tempo, '__len__'):
-                tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
-            else:
-                tempo = float(tempo)
+            # Compute autocorrelation
+            n = len(onset_signal)
+            autocorr = np.correlate(onset_signal, onset_signal, mode='full')
+            autocorr = autocorr[n-1:]  # Take positive lags only
             
-            # Sanity check tempo range (60-200 BPM typical)
-            if 60 <= tempo <= 200:
-                self._tempo_history.append(tempo)
-                # Smooth tempo updates
-                if self._tempo_history:
-                    self._current_tempo = float(np.median(list(self._tempo_history)))
+            # Convert lag indices to BPM
+            # At 40 fps, lag of 30 frames = 0.75 sec = 80 BPM
+            fps = 40  # Approximate processing rate
+            min_lag = int(fps * 60 / self._acf_tempo_max)  # Lag for max BPM
+            max_lag = int(fps * 60 / self._acf_tempo_min)  # Lag for min BPM
+            
+            # Find peaks in autocorrelation within BPM range
+            if max_lag < len(autocorr):
+                search_range = autocorr[min_lag:max_lag]
+                if len(search_range) > 0:
+                    peak_idx = np.argmax(search_range) + min_lag
+                    acf_tempo = fps * 60 / peak_idx
+                    
+                    # Method 2: Inter-onset interval (IOI) analysis for validation
+                    ioi_tempo = self._estimate_tempo_from_ioi()
+                    
+                    # Combine estimates with preference for IOI if confident
+                    if ioi_tempo is not None:
+                        # Check if they agree (within 10%)
+                        if abs(acf_tempo - ioi_tempo) / ioi_tempo < 0.1:
+                            tempo_estimate = (acf_tempo + ioi_tempo) / 2
+                            self._tempo_confidence = 0.9
+                        else:
+                            # Prefer IOI if we have good onset data
+                            if len(self._onset_times) >= 8:
+                                tempo_estimate = ioi_tempo
+                                self._tempo_confidence = 0.7
+                            else:
+                                tempo_estimate = acf_tempo
+                                self._tempo_confidence = 0.5
+                    else:
+                        tempo_estimate = acf_tempo
+                        self._tempo_confidence = 0.5
+                    
+                    # Sanity check and smooth
+                    if self._acf_tempo_min <= tempo_estimate <= self._acf_tempo_max:
+                        self._tempo_history.append(tempo_estimate)
+                        if len(self._tempo_history) >= 3:
+                            # Use median for robustness
+                            self._current_tempo = float(np.median(list(self._tempo_history)))
         except Exception:
-            # If librosa fails, fall back to onset-based tempo estimation
-            if len(self._onset_history) >= 4:
-                intervals = np.diff(list(self._onset_history))
-                if len(intervals) > 0:
-                    avg_interval = np.mean(intervals)
-                    if avg_interval > 0:
-                        estimated_tempo = 60.0 / avg_interval
-                        if 60 <= estimated_tempo <= 200:
-                            self._current_tempo = estimated_tempo
+            pass  # Keep previous tempo on error
+    
+    def _estimate_tempo_from_ioi(self) -> Optional[float]:
+        """
+        Estimate tempo from Inter-Onset Intervals using clustering.
+        More accurate when we have reliable onset detection.
+        """
+        if len(self._onset_times) < 4:
+            return None
+        
+        try:
+            # Get recent onset times
+            onset_times = np.array(list(self._onset_times))
+            
+            # Calculate inter-onset intervals
+            intervals = np.diff(onset_times)
+            
+            # Filter reasonable intervals (30 BPM to 240 BPM)
+            min_interval = 60.0 / 240  # 0.25 seconds
+            max_interval = 60.0 / 30   # 2.0 seconds
+            valid_intervals = intervals[(intervals >= min_interval) & (intervals <= max_interval)]
+            
+            if len(valid_intervals) < 3:
+                return None
+            
+            # Cluster intervals to find dominant period
+            # Simple approach: histogram-based clustering
+            hist, bin_edges = np.histogram(valid_intervals, bins=20)
+            peak_bin = np.argmax(hist)
+            dominant_interval = (bin_edges[peak_bin] + bin_edges[peak_bin + 1]) / 2
+            
+            # Convert to BPM
+            tempo = 60.0 / dominant_interval
+            
+            # Consider half/double tempo
+            # If many intervals are ~half the dominant, might be detecting every other beat
+            half_intervals = valid_intervals[(valid_intervals >= dominant_interval * 0.45) & 
+                                              (valid_intervals <= dominant_interval * 0.55)]
+            if len(half_intervals) > len(valid_intervals) * 0.3:
+                tempo *= 2  # We're likely detecting half-beats
+            
+            return tempo if self._acf_tempo_min <= tempo <= self._acf_tempo_max else None
+        except Exception:
+            return None
     
     def _get_band_energy_normalized(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
         """Get energy in a frequency band from FFT data (raw, not normalized)."""
