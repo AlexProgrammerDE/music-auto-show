@@ -563,6 +563,88 @@ def _create_showtec_techno_derby() -> FixtureProfile:
     )
 
 
+def _create_lixada_dj_projektor() -> FixtureProfile:
+    """Create profile for Lixada DJ Projektor (7 channel mode)."""
+    return FixtureProfile(
+        name="Lixada DJ Projektor 7ch",
+        manufacturer="Lixada",
+        model="DJ Projektor",
+        fixture_type=FixtureType.EFFECT,
+        channel_count=7,
+        channels=[
+            ChannelConfig(
+                offset=1,
+                name="Master Dimmer",
+                channel_type=ChannelType.INTENSITY_MASTER_DIMMER,
+                default_value=255,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Off"),
+                    ChannelCapability(min_value=1, max_value=255, name="Dimmer 0-100%"),
+                ]
+            ),
+            ChannelConfig(
+                offset=2,
+                name="Red/Yellow",
+                channel_type=ChannelType.INTENSITY_RED,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Off"),
+                    ChannelCapability(min_value=1, max_value=255, name="Red/Yellow intensity"),
+                ]
+            ),
+            ChannelConfig(
+                offset=3,
+                name="Green/Violet",
+                channel_type=ChannelType.INTENSITY_GREEN,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Off"),
+                    ChannelCapability(min_value=1, max_value=255, name="Green/Violet intensity"),
+                ]
+            ),
+            ChannelConfig(
+                offset=4,
+                name="Blue/White",
+                channel_type=ChannelType.INTENSITY_BLUE,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Off"),
+                    ChannelCapability(min_value=1, max_value=255, name="Blue/White intensity"),
+                ]
+            ),
+            ChannelConfig(
+                offset=5,
+                name="Strobe",
+                channel_type=ChannelType.SHUTTER_STROBE_SLOW_FAST,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Strobe off"),
+                    ChannelCapability(min_value=1, max_value=255, name="Strobe slow to fast"),
+                ]
+            ),
+            ChannelConfig(
+                offset=6,
+                name="Motor Position",
+                channel_type=ChannelType.EFFECT,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=255, name="Motor position"),
+                ]
+            ),
+            ChannelConfig(
+                offset=7,
+                name="Color Presets",
+                channel_type=ChannelType.COLOR_MACRO,
+                default_value=0,
+                capabilities=[
+                    ChannelCapability(min_value=0, max_value=0, name="Manual control (no preset)"),
+                    ChannelCapability(min_value=1, max_value=255, name="Color presets"),
+                ]
+            ),
+        ],
+    )
+
+
 # Built-in fixture presets
 FIXTURE_PRESETS: dict[str, FixtureProfile] = {
     "Purelight Muvy WashQ 14ch": _create_muvy_washq_profile(),
@@ -570,6 +652,7 @@ FIXTURE_PRESETS: dict[str, FixtureProfile] = {
     "Generic RGBW PAR": _create_generic_rgbw_par(),
     "Generic Dimmer+RGBW": _create_generic_dimmer_rgbw(),
     "Showtec Techno Derby 4ch": _create_showtec_techno_derby(),
+    "Lixada DJ Projektor 7ch": _create_lixada_dj_projektor(),
 }
 
 
