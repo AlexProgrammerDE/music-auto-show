@@ -35,9 +35,13 @@ try:
     from madmom.audio.spectrogram import LogarithmicFilteredSpectrogramProcessor
     from madmom.processors import SequentialProcessor
     MADMOM_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     MADMOM_AVAILABLE = False
-    logger.warning("madmom not available - beat/tempo detection will be disabled")
+    logger.warning(f"madmom not available (ImportError: {e}) - beat/tempo detection will be disabled")
+except Exception as e:
+    # Catch other exceptions (e.g., pkg_resources issues in Python 3.13+)
+    MADMOM_AVAILABLE = False
+    logger.warning(f"madmom failed to load ({type(e).__name__}: {e}) - beat/tempo detection will be disabled")
 
 try:
     from media_info import MediaInfoProvider, MediaInfo
@@ -357,8 +361,8 @@ class AudioAnalyzer:
             return False
         
         if not MADMOM_AVAILABLE:
-            print("madmom not available. Install with: pip install madmom")
-            return False
+            logger.warning("madmom not available - beat/tempo detection will use fallback method")
+            # Continue without madmom - we'll use energy-based beat detection as fallback
         
         try:
             self._pyaudio = pyaudio.PyAudio()
