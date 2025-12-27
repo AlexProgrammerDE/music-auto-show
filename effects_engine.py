@@ -312,6 +312,7 @@ class EffectsEngine:
         
         for i, fixture in enumerate(effect_fixtures):
             state = self._states[fixture.name]
+            profile = self._get_profile(fixture)
             
             # Get current RGB from the visualization mode (already calculated)
             r, g, b = state.red, state.green, state.blue
@@ -322,8 +323,9 @@ class EffectsEngine:
             # Channel 2: Strobe speed
             state.strobe = self._get_strobe_value(data, beat_triggered)
             
-            # Channel 3: Pattern rotation
-            state.effect = self._get_rotation_value()
+            # Channel 3: Pattern rotation (respects channel's max_value)
+            effect_channel = self._get_channel_config(fixture, profile, ChannelType.EFFECT)
+            state.effect = self._get_rotation_value_for_channel(effect_channel)
             
             # Channel 4: Strobe effects (light movement patterns)
             state.effect_speed = self._get_strobe_effect_value(data, beat_triggered, bar_triggered)
@@ -410,9 +412,45 @@ class EffectsEngine:
             # Heavy smoothing to avoid jitter
             self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.02
     
+    def _get_channel_config(self, fixture: FixtureConfig, profile: Optional[FixtureProfile], 
+                            channel_type: ChannelType) -> Optional[ChannelConfig]:
+        """Get the channel config for a specific channel type."""
+        channels = fixture.get_channels(profile)
+        for ch in channels:
+            if ch.channel_type == channel_type:
+                return ch
+        return None
+    
     def _get_rotation_value(self) -> int:
-        """Get the smoothed rotation value for Channel 3."""
+        """Get the smoothed rotation value for Channel 3 (legacy, uses full 0-255 range)."""
         return int(max(0, min(255, self._smoothed_rotation)))
+    
+    def _get_rotation_value_for_channel(self, channel: Optional[ChannelConfig]) -> int:
+        """
+        Get the rotation value scaled to the channel's allowed range.
+        
+        The rotation phase (0-1) is scaled to fit within the channel's min_value to max_value.
+        This allows fixtures with limited ranges (e.g., 0-135 for manual only) to use
+        the full range of motion without getting stuck at the limit.
+        """
+        if channel is None:
+            return int(max(0, min(255, self._smoothed_rotation)))
+        
+        min_val = channel.min_value
+        max_val = channel.max_value
+        
+        # If we're in an AUTO mode (values > 127 typically), but max_val is <= 127,
+        # fall back to manual sweep within the allowed range
+        if self._smoothed_rotation > 127 and max_val <= 127:
+            # Use the rotation phase to sweep within manual range
+            position = 0.5 + 0.5 * math.sin(self._rotation_phase * 2 * math.pi)
+            return int(min_val + position * (max_val - min_val))
+        
+        # Scale the rotation value to fit within the channel's range
+        # Map 0-255 to min_val-max_val
+        normalized = self._smoothed_rotation / 255.0
+        scaled = min_val + normalized * (max_val - min_val)
+        return int(max(min_val, min(max_val, scaled)))
     
     def _get_strobe_effect_value(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> int:
         """
