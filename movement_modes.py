@@ -19,6 +19,11 @@ Dynamic show modes (more visual impact):
 - CHASE: Sequential position chase - beams "chase" across fixtures
 - STROBE_POSITION: Fast snappy beat-synced position jumps - aggressive
 - CRAZY: Wild full-range movement - showcases entire 0-255 pan/tilt capability
+
+Movement speed is automatically scaled based on tempo (BPM):
+- Slow songs (60-90 BPM): Movements are slower and more graceful
+- Medium songs (90-130 BPM): Standard movement speed
+- Fast songs (130-180+ BPM): Movements keep up with the energy
 """
 import random
 from typing import TYPE_CHECKING
@@ -29,6 +34,31 @@ if TYPE_CHECKING:
     from effects_engine import EffectsEngine, FixtureState
     from config import FixtureConfig
     from audio_analyzer import AnalysisData
+
+
+# Reference tempo for "normal" speed - movements are scaled relative to this
+REFERENCE_TEMPO = 120.0
+
+
+def _get_tempo_scale(tempo: float) -> float:
+    """
+    Calculate a tempo-based scaling factor for movement speed.
+    
+    This ensures movements feel natural for the song's tempo:
+    - At 60 BPM, returns ~0.5 (half speed)
+    - At 120 BPM, returns 1.0 (normal speed)  
+    - At 180 BPM, returns ~1.5 (faster)
+    
+    The scaling is clamped to avoid extremes.
+    """
+    if tempo <= 0:
+        return 1.0
+    
+    # Linear scaling based on tempo ratio
+    scale = tempo / REFERENCE_TEMPO
+    
+    # Clamp to reasonable range (0.4x to 1.8x)
+    return max(0.4, min(1.8, scale))
 
 
 def apply_movement(engine: "EffectsEngine", data: "AnalysisData", 
@@ -159,8 +189,8 @@ def apply_movement(engine: "EffectsEngine", data: "AnalysisData",
                 speed, energy, bass
             )
         
-        # Smoothly interpolate toward targets - speed varies by mode
-        _interpolate_position(engine, fixture, state, mode, speed)
+        # Smoothly interpolate toward targets - speed varies by mode and tempo
+        _interpolate_position(engine, fixture, state, mode, speed, data.features.tempo)
 
 
 def _apply_subtle_movement(
@@ -312,10 +342,12 @@ def _apply_sweep_movement(
     """
     Slow continuous sweeping motion - theatrical, smooth movement.
     The fixtures slowly sweep across the space continuously.
+    Speed scales with tempo so slow songs have graceful sweeps.
     """
     # Update sweep phase continuously based on time
     dt = 0.025  # Approximate frame time at 40fps
-    sweep_rate = 0.03 * speed  # Base sweep rate, modified by speed setting
+    tempo_scale = _get_tempo_scale(data.features.tempo)
+    sweep_rate = 0.03 * speed * tempo_scale  # Tempo-scaled sweep rate
     
     current_phase = engine._sweep_phase.get(fixture.name, 0.0)
     direction = engine._sweep_direction.get(fixture.name, 1)
@@ -399,15 +431,16 @@ def _apply_circle_movement(
     """
     Circular motion - beams trace circles with phase offset per fixture.
     Classic moving head effect that looks amazing with multiple fixtures.
-    Speed increases with energy, size pulses on beats.
+    Speed scales with tempo and increases with energy, size pulses on beats.
     """
     import math
     
     dt = 0.025  # ~40fps frame time
-    base_rate = 0.08 * speed  # Base rotation speed
+    tempo_scale = _get_tempo_scale(data.features.tempo)
+    base_rate = 0.08 * speed * tempo_scale  # Tempo-scaled rotation speed
     
-    # Energy increases rotation speed
-    rate = base_rate * (0.7 + energy * 0.6)
+    # Energy increases rotation speed (but less dramatically now that tempo is factored in)
+    rate = base_rate * (0.8 + energy * 0.4)
     
     # Get/update circle phase for this fixture
     current_phase = engine._sweep_phase.get(fixture.name, 0.0)
@@ -453,15 +486,16 @@ def _apply_figure_8_movement(
     """
     Figure-8/lemniscate pattern - elegant infinity loop motion.
     Beautiful flowing movement that fills the space gracefully.
-    Uses parametric equations for smooth lemniscate curve.
+    Speed scales with tempo. Uses parametric equations for smooth lemniscate curve.
     """
     import math
     
     dt = 0.025
-    base_rate = 0.06 * speed  # Slightly slower for elegance
+    tempo_scale = _get_tempo_scale(data.features.tempo)
+    base_rate = 0.06 * speed * tempo_scale  # Tempo-scaled, slightly slower for elegance
     
     # Energy affects speed
-    rate = base_rate * (0.6 + energy * 0.5)
+    rate = base_rate * (0.7 + energy * 0.4)
     
     # Update phase
     current_phase = engine._sweep_phase.get(fixture.name, 0.0)
@@ -500,14 +534,15 @@ def _apply_ballyhoo_movement(
     """
     Ballyhoo - fast sweeping wave motion across fixtures.
     Classic professional lighting effect where beams sweep across
-    in a coordinated wave pattern. Very dynamic and impressive.
+    in a coordinated wave pattern. Speed scales with tempo for appropriate feel.
     """
     import math
     
     dt = 0.025
-    # Ballyhoo is fast! Base rate is aggressive
-    base_rate = 0.12 * speed
-    rate = base_rate * (0.8 + energy * 0.4)
+    tempo_scale = _get_tempo_scale(data.features.tempo)
+    # Ballyhoo is fast! Base rate is aggressive but tempo-aware
+    base_rate = 0.12 * speed * tempo_scale
+    rate = base_rate * (0.85 + energy * 0.3)
     
     # Update phase
     current_phase = engine._sweep_phase.get(fixture.name, 0.0)
@@ -551,7 +586,7 @@ def _apply_fan_movement(
     """
     Fan mode - fixtures fan in and out from center point.
     Creates dramatic reveals and contractions. On bars, fixtures
-    either spread wide or converge to center. Beat pulses affect tilt.
+    either spread wide or converge to center. Speed scales with tempo.
     """
     import math
     
@@ -568,9 +603,10 @@ def _apply_fan_movement(
             target_fan = 0.2  # Converge to center
         engine._sweep_direction[fixture.name] = target_fan
     
-    # Smoothly interpolate toward target fan amount
+    # Smoothly interpolate toward target fan amount (tempo-scaled)
     dt = 0.025
-    interp_rate = 0.08 * speed
+    tempo_scale = _get_tempo_scale(data.features.tempo)
+    interp_rate = 0.08 * speed * tempo_scale
     fan_diff = target_fan - fan_amount
     fan_amount += fan_diff * interp_rate
     engine._sweep_phase[fixture.name] = fan_amount
@@ -725,27 +761,28 @@ def _apply_crazy_movement(
     This is the most extreme movement mode - rapid, large movements across
     the full 0-255 range for both pan and tilt. Perfect for high-energy drops,
     showcasing fixtures, or creating absolute chaos. Still synced to music
-    with beat-reactive direction changes and energy-modulated speed.
+    with beat-reactive direction changes and tempo-scaled speed.
     
     Features:
     - Full 0-255 range utilization for both pan and tilt
     - Multiple overlapping oscillation patterns (Lissajous-like)
     - Beat-synced direction reversals and position jumps
-    - Energy-driven speed modulation
+    - Tempo and energy-driven speed modulation
     - Per-fixture phase offset for varied patterns
     - Random chaos injection on strong beats
     """
     import math
     
     dt = 0.025  # ~40fps frame time
+    tempo_scale = _get_tempo_scale(data.features.tempo)
     
     # Base oscillation rates - intentionally using non-harmonic ratios
-    # for complex Lissajous-like patterns
-    base_pan_rate = 0.18 * speed   # Fast pan oscillation
-    base_tilt_rate = 0.23 * speed  # Slightly different tilt rate for complexity
+    # for complex Lissajous-like patterns, scaled by tempo
+    base_pan_rate = 0.18 * speed * tempo_scale   # Tempo-scaled pan oscillation
+    base_tilt_rate = 0.23 * speed * tempo_scale  # Tempo-scaled tilt rate
     
-    # Energy dramatically increases speed - go wild!
-    energy_boost = 0.5 + energy * 1.5  # Up to 2x speed at full energy
+    # Energy increases speed but less dramatically since tempo is factored in
+    energy_boost = 0.6 + energy * 1.0  # Up to 1.6x speed at full energy
     pan_rate = base_pan_rate * energy_boost
     tilt_rate = base_tilt_rate * energy_boost
     
@@ -830,10 +867,19 @@ def _apply_crazy_movement(
 
 
 def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig", 
-                          state: "FixtureState", mode: MovementMode, speed: float) -> None:
+                          state: "FixtureState", mode: MovementMode, speed: float,
+                          tempo: float = 120.0) -> None:
     """
     Smoothly interpolate fixture position toward target.
-    Interpolation speed varies by movement mode for appropriate feel.
+    Interpolation speed varies by movement mode and tempo for appropriate feel.
+    
+    Args:
+        engine: Effects engine instance
+        fixture: Fixture configuration
+        state: Current fixture state to update
+        mode: Movement mode being used
+        speed: User-configured movement speed (0-1)
+        tempo: Current detected BPM for tempo scaling
     """
     # Define interpolation rates for each mode
     # Lower = smoother/slower movement, higher = snappier/faster
@@ -855,6 +901,11 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     }
     
     pan_rate, tilt_rate = interp_rates.get(mode, (0.12, 0.15))
+    
+    # Apply tempo scaling - slower songs get slower interpolation
+    tempo_scale = _get_tempo_scale(tempo)
+    pan_rate *= tempo_scale
+    tilt_rate *= tempo_scale
     
     # Apply speed modifier (higher speed = faster interpolation)
     pan_rate *= (0.5 + speed * 0.5)
