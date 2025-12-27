@@ -170,11 +170,11 @@ class AudioAnalyzer:
         self._aubio_tempo = None
         self._aubio_onset = None
         if AUBIO_AVAILABLE:
-            # Use standard aubio settings for better beat detection
-            # hop_size=512 with win_size=1024 is the recommended default
+            # hop_size must match buffer_size since that's what we receive from audio callback
+            # win_size should be 2x hop_size for good frequency resolution
             # Using "specdiff" method which is better for beat detection than "default"
-            hop_size = 512
-            win_size = 1024
+            hop_size = buffer_size
+            win_size = buffer_size * 2
             self._aubio_tempo = aubio.tempo("specdiff", win_size, hop_size, sample_rate)
             self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
             logger.info(f"Aubio initialized: method=specdiff, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
