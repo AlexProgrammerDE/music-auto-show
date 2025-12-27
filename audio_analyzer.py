@@ -541,27 +541,16 @@ class AudioAnalyzer:
             is_beat = self._aubio_tempo(signal)
             if is_beat:
                 beat_detected = True
-                
-                # Track beat intervals to calculate BPM from actual detected beats
-                if self._last_beat_time > 0:
-                    interval = current_time - self._last_beat_time
-                    if 0.2 < interval < 2.0:  # Reasonable interval (30-300 BPM range)
-                        self._beat_intervals.append(interval)
-                
                 self._last_beat_time = current_time
                 self._beat_count += 1
                 
-                # Calculate BPM from actual beat intervals (more accurate than aubio's get_bpm)
-                if len(self._beat_intervals) >= 2:
-                    # Use median of recent intervals for stability
-                    median_interval = float(np.median(list(self._beat_intervals)))
-                    interval_bpm = 60.0 / median_interval
-                    
+                # Get BPM from aubio's native tempo tracker
+                bpm = self._aubio_tempo.get_bpm()
+                if 30 <= bpm <= 250:  # Sanity check
                     # Apply octave error correction for extreme values
-                    corrected_bpm = self._correct_tempo_octave(interval_bpm)
-                    
+                    corrected_bpm = self._correct_tempo_octave(bpm)
                     self._tempo_history.append(corrected_bpm)
-                    if len(self._tempo_history) >= 4:
+                    if len(self._tempo_history) >= 2:
                         self._current_tempo = float(np.median(list(self._tempo_history)))
             
             # Onset detection
