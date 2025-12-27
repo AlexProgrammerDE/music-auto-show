@@ -185,9 +185,13 @@ class AudioAnalyzer:
         self._tempo_history: deque[float] = deque(maxlen=32)  # Rolling tempo estimates
         self._onset_history: deque[float] = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 120.0  # Current estimated tempo
-        self._learning_beats: list[float] = []  # BPM values during learning phase
-        self._tempo_locked = False  # Whether we've locked onto a tempo
         self._confidence_threshold = 0.2  # Minimum confidence to accept a beat
+        
+        # Librosa-based tempo estimation (more accurate than aubio's get_bpm)
+        self._audio_buffer: deque[float] = deque(maxlen=sample_rate * 4)  # 4 seconds of audio
+        self._last_tempo_update = 0.0
+        self._tempo_update_interval = 1.0  # Update tempo every 1 second using librosa
+        self._tempo_history: deque[float] = deque(maxlen=8)  # Recent tempo estimates
         
         # Onset detection state
         self._prev_onset_strength = 0.0
@@ -535,11 +539,20 @@ class AudioAnalyzer:
         beat_detected = False
         onset_detected = False
         
+        # Add audio to buffer for librosa tempo analysis
+        self._audio_buffer.extend(audio_data.tolist())
+        
+        # Periodically update tempo using librosa (more accurate than aubio)
+        if LIBROSA_AVAILABLE and current_time - self._last_tempo_update > self._tempo_update_interval:
+            self._update_tempo_librosa()
+            self._last_tempo_update = current_time
+        
         if self._aubio_tempo is not None:
             # Feed audio to aubio tempo detector (expects float32)
             signal = audio_data.astype(np.float32)
             
             # aubio.tempo returns 1 if beat detected, 0 otherwise
+            # We use aubio ONLY for beat timing, not for BPM calculation
             is_beat = self._aubio_tempo(signal)
             if is_beat:
                 # Get confidence - only process high-confidence beats
@@ -549,33 +562,6 @@ class AudioAnalyzer:
                     beat_detected = True
                     self._last_beat_time = current_time
                     self._beat_count += 1
-                    
-                    # Get BPM from aubio's native tempo tracker
-                    bpm = self._aubio_tempo.get_bpm()
-                    if 30 <= bpm <= 250:  # Sanity check
-                        # Apply octave error correction
-                        corrected_bpm = self._correct_tempo_octave(bpm, confidence)
-                        
-                        # Learning phase: collect initial beats before locking tempo
-                        if not self._tempo_locked:
-                            self._learning_beats.append(corrected_bpm)
-                            if len(self._learning_beats) >= 5:
-                                # Lock onto median of learning beats
-                                self._current_tempo = float(np.median(self._learning_beats))
-                                self._tempo_locked = True
-                                self._tempo_history.append(self._current_tempo)
-                                logger.debug(f"Tempo locked at {self._current_tempo:.1f} BPM")
-                        else:
-                            # Stable phase: use intelligent candidate selection
-                            # Consider original, half, and double - pick closest to current
-                            candidates = [corrected_bpm, corrected_bpm * 2, corrected_bpm / 2]
-                            best_candidate = min(candidates, key=lambda x: abs(x - self._current_tempo))
-                            
-                            # Only accept if within reasonable range of current tempo
-                            if abs(best_candidate - self._current_tempo) < self._current_tempo * 0.15:
-                                self._tempo_history.append(best_candidate)
-                                # EMA smoothing for responsive yet stable tempo
-                                self._current_tempo = self._current_tempo * 0.9 + best_candidate * 0.1
             
             # Onset detection
             if self._aubio_onset is not None:
@@ -811,6 +797,38 @@ class AudioAnalyzer:
             bpm *= 2
         
         return bpm
+    
+    def _update_tempo_librosa(self) -> None:
+        """Update tempo estimate using librosa beat tracking (more accurate than aubio)."""
+        if len(self._audio_buffer) < self.sample_rate:  # Need at least 1 second
+            return
+        
+        try:
+            # Convert buffer to numpy array
+            audio_array = np.array(list(self._audio_buffer), dtype=np.float32)
+            
+            # Use librosa to estimate tempo
+            tempo, _ = librosa.beat.beat_track(
+                y=audio_array,
+                sr=self.sample_rate,
+                units='time'
+            )
+            
+            # librosa may return an array, get scalar
+            if hasattr(tempo, '__len__'):
+                tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
+            else:
+                tempo = float(tempo)
+            
+            # Sanity check tempo range (60-200 BPM typical)
+            if 60 <= tempo <= 200:
+                self._tempo_history.append(tempo)
+                # Smooth tempo updates using median
+                if self._tempo_history:
+                    self._current_tempo = float(np.median(list(self._tempo_history)))
+                    logger.debug(f"Librosa tempo: {tempo:.1f} BPM, current: {self._current_tempo:.1f} BPM")
+        except Exception as e:
+            logger.debug(f"Librosa tempo estimation failed: {e}")
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
         """Normalize frequency bands with adaptive per-band scaling."""
