@@ -166,31 +166,25 @@ class AudioAnalyzer:
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[AnalysisData], None]] = []
         
-        # Aubio-based real-time tempo and onset detection
-        self._aubio_tempo = None
+        # Aubio for onset detection only (not tempo - librosa is more accurate)
         self._aubio_onset = None
         if AUBIO_AVAILABLE:
-            # hop_size must match buffer_size since that's what we receive from audio callback
-            # win_size should be 2x hop_size for good frequency resolution
-            # Using "specflux" method - more accurate for complex polyphonic music
             hop_size = buffer_size
             win_size = buffer_size * 2
-            self._aubio_tempo = aubio.tempo("specflux", win_size, hop_size, sample_rate)
             self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
-            logger.info(f"Aubio initialized: method=specflux, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
+            logger.info(f"Aubio onset detector initialized: method=specflux, hop_size={hop_size}, win_size={win_size}")
         
         # Beat tracking state
         self._last_beat_time = 0.0
         self._beat_count = 0
-        self._tempo_history: deque[float] = deque(maxlen=32)  # Rolling tempo estimates
         self._onset_history: deque[float] = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 120.0  # Current estimated tempo
-        self._confidence_threshold = 0.2  # Minimum confidence to accept a beat
         
-        # Librosa-based tempo estimation (more accurate than aubio's get_bpm)
+        # Librosa-based tempo estimation (works for any BPM, more accurate than aubio)
         self._audio_buffer: deque[float] = deque(maxlen=sample_rate * 4)  # 4 seconds of audio
         self._last_tempo_update = 0.0
         self._tempo_update_interval = 1.0  # Update tempo every 1 second using librosa
+        self._tempo_history: deque[float] = deque(maxlen=8)  # Recent tempo estimates
         self._tempo_history: deque[float] = deque(maxlen=8)  # Recent tempo estimates
         
         # Onset detection state
@@ -535,7 +529,7 @@ class AudioAnalyzer:
             self._max_rms_observed *= self._rms_decay  # Slowly decay to adapt to quieter sections
         self._max_rms_observed = max(0.01, self._max_rms_observed)  # Prevent division by zero
         
-        # Aubio-based beat and onset detection
+        # Beat and onset detection
         beat_detected = False
         onset_detected = False
         
@@ -547,35 +541,32 @@ class AudioAnalyzer:
             self._update_tempo_librosa()
             self._last_tempo_update = current_time
         
-        if self._aubio_tempo is not None:
-            # Feed audio to aubio tempo detector (expects float32)
+        # Beat detection: predict beats based on librosa tempo
+        # This works for any BPM including very fast (500+) or slow songs
+        if self._current_tempo > 0:
+            beat_interval = 60.0 / self._current_tempo
+            time_since_beat = current_time - self._last_beat_time
+            
+            # Predict beat based on tempo
+            if time_since_beat >= beat_interval * 0.95:  # Small tolerance for timing
+                beat_detected = True
+                self._last_beat_time = current_time
+                self._beat_count += 1
+        
+        # Onset detection using aubio (for visual effects, independent of beat)
+        if self._aubio_onset is not None:
             signal = audio_data.astype(np.float32)
+            is_onset = self._aubio_onset(signal)
+            if is_onset:
+                onset_detected = True
+                self._onset_history.append(current_time)
             
-            # aubio.tempo returns 1 if beat detected, 0 otherwise
-            # We use aubio ONLY for beat timing, not for BPM calculation
-            is_beat = self._aubio_tempo(signal)
-            if is_beat:
-                # Get confidence - only process high-confidence beats
-                confidence = self._aubio_tempo.get_confidence()
-                
-                if confidence > self._confidence_threshold:
-                    beat_detected = True
-                    self._last_beat_time = current_time
-                    self._beat_count += 1
-            
-            # Onset detection
-            if self._aubio_onset is not None:
-                is_onset = self._aubio_onset(signal)
-                if is_onset:
-                    onset_detected = True
-                    self._onset_history.append(current_time)
-                
-                # Get onset strength for visualization
-                onset_strength = self._aubio_onset.get_descriptor()
-                # Normalize to 0-1 range
-                normalized_strength = min(1.0, float(onset_strength) / 10.0)
-                self._onset_strength_history.append(normalized_strength)
-                self._prev_onset_strength = normalized_strength
+            # Get onset strength for visualization
+            onset_strength = self._aubio_onset.get_descriptor()
+            # Normalize to 0-1 range
+            normalized_strength = min(1.0, float(onset_strength) / 10.0)
+            self._onset_strength_history.append(normalized_strength)
+            self._prev_onset_strength = normalized_strength
         else:
             # Fallback: simple energy-based detection if aubio not available
             normalized_rms = rms / self._max_rms_observed
