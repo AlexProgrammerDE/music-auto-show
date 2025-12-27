@@ -84,6 +84,22 @@ class ChannelCapability(BaseModel):
     max_value: int = Field(..., ge=0, le=255)
     name: str = Field(..., description="Name of this capability")
     description: str = Field(default="")
+    
+    # Whether effects engine should use this range
+    usable: bool = Field(default=True, description="Whether effects engine can use this range")
+    
+    # Semantic hints for the effects engine
+    is_off: bool = Field(default=False, description="This range turns the channel off")
+    is_manual: bool = Field(default=False, description="This range is for manual/position control")
+    is_auto: bool = Field(default=False, description="This range is for automatic/speed control")
+    
+    def contains(self, value: int) -> bool:
+        """Check if a value falls within this capability range."""
+        return self.min_value <= value <= self.max_value
+    
+    def get_range_size(self) -> int:
+        """Get the size of this capability range."""
+        return self.max_value - self.min_value + 1
 
 
 class ChannelConfig(BaseModel):
@@ -112,6 +128,80 @@ class ChannelConfig(BaseModel):
     def get_dmx_channel(self, start_channel: int) -> int:
         """Get actual DMX channel number."""
         return start_channel + self.offset - 1
+    
+    def get_usable_capabilities(self) -> list[ChannelCapability]:
+        """Get capabilities marked as usable by the effects engine."""
+        return [cap for cap in self.capabilities if cap.usable]
+    
+    def get_usable_range(self) -> tuple[int, int]:
+        """
+        Get the combined usable range for this channel.
+        Returns (min, max) covering all usable capabilities.
+        Falls back to min_value/max_value if no capabilities defined.
+        """
+        usable = self.get_usable_capabilities()
+        if not usable:
+            return (self.min_value, self.max_value)
+        
+        return (
+            min(cap.min_value for cap in usable),
+            max(cap.max_value for cap in usable)
+        )
+    
+    def get_manual_range(self) -> Optional[tuple[int, int]]:
+        """Get the manual/position control range if defined."""
+        manual_caps = [cap for cap in self.capabilities if cap.is_manual and cap.usable]
+        if not manual_caps:
+            return None
+        return (
+            min(cap.min_value for cap in manual_caps),
+            max(cap.max_value for cap in manual_caps)
+        )
+    
+    def get_auto_range(self) -> Optional[tuple[int, int]]:
+        """Get the automatic/speed control range if defined."""
+        auto_caps = [cap for cap in self.capabilities if cap.is_auto and cap.usable]
+        if not auto_caps:
+            return None
+        return (
+            min(cap.min_value for cap in auto_caps),
+            max(cap.max_value for cap in auto_caps)
+        )
+    
+    def scale_to_usable_range(self, normalized: float) -> int:
+        """
+        Scale a normalized value (0-1) to the usable range.
+        Respects capability constraints.
+        """
+        min_val, max_val = self.get_usable_range()
+        value = int(min_val + normalized * (max_val - min_val))
+        return max(min_val, min(max_val, value))
+    
+    def scale_to_manual_range(self, normalized: float) -> int:
+        """
+        Scale a normalized value (0-1) to the manual range.
+        Falls back to usable range if no manual range defined.
+        """
+        manual_range = self.get_manual_range()
+        if manual_range is None:
+            return self.scale_to_usable_range(normalized)
+        
+        min_val, max_val = manual_range
+        value = int(min_val + normalized * (max_val - min_val))
+        return max(min_val, min(max_val, value))
+    
+    def scale_to_auto_range(self, normalized: float) -> int:
+        """
+        Scale a normalized value (0-1) to the auto range.
+        Falls back to usable range if no auto range defined.
+        """
+        auto_range = self.get_auto_range()
+        if auto_range is None:
+            return self.scale_to_usable_range(normalized)
+        
+        min_val, max_val = auto_range
+        value = int(min_val + normalized * (max_val - min_val))
+        return max(min_val, min(max_val, value))
 
 
 class AudioInputMode(str, Enum):
@@ -531,9 +621,12 @@ def _create_showtec_techno_derby() -> FixtureProfile:
                 channel_type=ChannelType.EFFECT,
                 default_value=0,
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=0, name="No function"),
-                    ChannelCapability(min_value=1, max_value=127, name="Manual rotation position"),
-                    ChannelCapability(min_value=128, max_value=255, name="Auto rotation slow to fast"),
+                    ChannelCapability(min_value=0, max_value=0, name="No function", 
+                                     usable=True, is_off=True),
+                    ChannelCapability(min_value=1, max_value=127, name="Manual rotation position", 
+                                     usable=True, is_manual=True),
+                    ChannelCapability(min_value=128, max_value=255, name="Auto rotation slow to fast", 
+                                     usable=True, is_auto=True),
                 ]
             ),
             ChannelConfig(
@@ -631,10 +724,11 @@ def _create_lixada_dj_projektor() -> FixtureProfile:
                 name="Motor Position",
                 channel_type=ChannelType.EFFECT,
                 default_value=0,
-                max_value=135,  # Limit to manual range (>135 is auto motion)
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=135, name="Manual position"),
-                    ChannelCapability(min_value=136, max_value=255, name="Auto motion (not used)"),
+                    ChannelCapability(min_value=0, max_value=135, name="Manual position", 
+                                     usable=True, is_manual=True),
+                    ChannelCapability(min_value=136, max_value=255, name="Auto motion", 
+                                     usable=False, is_auto=True),
                 ]
             ),
             ChannelConfig(

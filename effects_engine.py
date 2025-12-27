@@ -351,66 +351,68 @@ class EffectsEngine:
     
     def _update_rotation_state(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
         """
-        Update the rotation state for Channel 3.
+        Update the rotation state using normalized phase values (0-1).
         
-        Channel 3 ranges:
-        - 0: No function
-        - 1-127: Manual rotation position (set a fixed angle)
-        - 128-255: Auto rotation speed (slow to fast)
+        The rotation phase is abstract and gets scaled to each fixture's
+        actual channel constraints when output. This allows different fixtures
+        to have different ranges while sharing the same animation logic.
         
-        This function updates internal state that is then read by _get_rotation_value().
+        - _rotation_phase: 0-1 cyclic value for position/animation
+        - _rotation_intensity: 0-1 value for speed/intensity (used in auto modes)
         """
         mode = self.config.effects.rotation_mode
         dt = 1.0 / max(1, self.config.dmx.fps)  # Time delta per frame
         
         if mode == RotationMode.OFF:
-            self._rotation_target = 0
+            self._rotation_phase = 0.0
             self._smoothed_rotation = 0
             return
         
         if mode == RotationMode.MANUAL_SLOW:
-            # Slow continuous sweep through manual positions (1-127)
-            # Complete cycle every ~8 seconds
+            # Slow continuous sweep - complete cycle every ~8 seconds
             self._rotation_phase = (self._rotation_phase + dt / 8.0) % 1.0
-            # Use sine wave for smooth back-and-forth motion
-            position = 0.5 + 0.5 * math.sin(self._rotation_phase * 2 * math.pi)
-            self._rotation_target = int(1 + position * 126)  # 1-127 range
-            # Smooth transition
-            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.1
+            self._smoothed_rotation = self._rotation_phase * 127  # Legacy compatibility
         
         elif mode == RotationMode.MANUAL_BEAT:
-            # Jump to new position on beats
+            # Jump to new position on beats (8 discrete positions)
             if beat_triggered:
-                # Random position, but smooth transition
-                self._rotation_target = int(1 + (data.estimated_beat % 8) * 15.75)  # 8 positions
-            # Smooth transition to target
-            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.15
+                target_phase = (data.estimated_beat % 8) / 8.0
+                # Smooth transition to target
+                diff = target_phase - self._rotation_phase
+                # Handle wrap-around
+                if diff > 0.5:
+                    diff -= 1.0
+                elif diff < -0.5:
+                    diff += 1.0
+                self._rotation_phase += diff * 0.15
+                self._rotation_phase = self._rotation_phase % 1.0
+            self._smoothed_rotation = self._rotation_phase * 127  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_SLOW:
-            # Fixed slow auto rotation (128-170 range)
-            self._rotation_target = 140
-            self._smoothed_rotation = 140
+            # Slow continuous phase for auto speed
+            self._rotation_phase = (self._rotation_phase + dt / 10.0) % 1.0
+            self._smoothed_rotation = 140  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_MEDIUM:
-            # Fixed medium auto rotation (170-210 range)
-            self._rotation_target = 180
-            self._smoothed_rotation = 180
+            # Medium continuous phase for auto speed
+            self._rotation_phase = (self._rotation_phase + dt / 6.0) % 1.0
+            self._smoothed_rotation = 180  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_FAST:
-            # Fixed fast auto rotation (210-255 range)
-            self._rotation_target = 230
-            self._smoothed_rotation = 230
+            # Fast continuous phase for auto speed
+            self._rotation_phase = (self._rotation_phase + dt / 3.0) % 1.0
+            self._smoothed_rotation = 230  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_MUSIC:
-            # Auto rotation speed follows music energy
-            # But smoothed to avoid jitter
-            base_speed = 140  # Start at slow auto
-            energy_boost = data.features.energy * 80  # Up to +80 based on energy
-            tempo_boost = min(1.0, data.features.tempo / 150.0) * 20  # Up to +20 based on tempo
-            target = int(base_speed + energy_boost + tempo_boost)
-            self._rotation_target = max(128, min(255, target))
-            # Heavy smoothing to avoid jitter
-            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.02
+            # Phase speed follows music energy
+            base_speed = 0.05  # Base phase increment
+            energy_boost = data.features.energy * 0.15
+            tempo_factor = min(1.0, data.features.tempo / 150.0) * 0.05
+            phase_speed = base_speed + energy_boost + tempo_factor
+            self._rotation_phase = (self._rotation_phase + dt * phase_speed * 10) % 1.0
+            # Legacy smoothed rotation for backward compatibility
+            target = 140 + data.features.energy * 80 + tempo_factor * 20
+            self._smoothed_rotation += (target - self._smoothed_rotation) * 0.02
     
     def _get_channel_config(self, fixture: FixtureConfig, profile: Optional[FixtureProfile], 
                             channel_type: ChannelType) -> Optional[ChannelConfig]:
@@ -427,30 +429,37 @@ class EffectsEngine:
     
     def _get_rotation_value_for_channel(self, channel: Optional[ChannelConfig]) -> int:
         """
-        Get the rotation value scaled to the channel's allowed range.
+        Get the rotation value scaled to the channel's constraints.
         
-        The rotation phase (0-1) is scaled to fit within the channel's min_value to max_value.
-        This allows fixtures with limited ranges (e.g., 0-135 for manual only) to use
-        the full range of motion without getting stuck at the limit.
+        Uses the channel's capability definitions to determine valid ranges:
+        - If in AUTO mode and channel has usable auto range, use that
+        - If in MANUAL mode or auto not available, use manual range
+        - Falls back to usable range if no specific ranges defined
         """
         if channel is None:
             return int(max(0, min(255, self._smoothed_rotation)))
         
-        min_val = channel.min_value
-        max_val = channel.max_value
+        mode = self.config.effects.rotation_mode
         
-        # If we're in an AUTO mode (values > 127 typically), but max_val is <= 127,
-        # fall back to manual sweep within the allowed range
-        if self._smoothed_rotation > 127 and max_val <= 127:
-            # Use the rotation phase to sweep within manual range
+        # Check if we're requesting auto rotation
+        is_auto_mode = mode in (RotationMode.AUTO_SLOW, RotationMode.AUTO_MEDIUM, 
+                                RotationMode.AUTO_FAST, RotationMode.AUTO_MUSIC)
+        
+        auto_range = channel.get_auto_range()
+        manual_range = channel.get_manual_range()
+        
+        if is_auto_mode and auto_range is not None:
+            # Use auto range - scale the rotation phase to auto speed
+            # For auto modes, use energy/tempo to control speed within range
+            return channel.scale_to_auto_range(self._rotation_phase)
+        elif manual_range is not None:
+            # Use manual range - use sine wave for smooth position sweep
             position = 0.5 + 0.5 * math.sin(self._rotation_phase * 2 * math.pi)
-            return int(min_val + position * (max_val - min_val))
-        
-        # Scale the rotation value to fit within the channel's range
-        # Map 0-255 to min_val-max_val
-        normalized = self._smoothed_rotation / 255.0
-        scaled = min_val + normalized * (max_val - min_val)
-        return int(max(min_val, min(max_val, scaled)))
+            return channel.scale_to_manual_range(position)
+        else:
+            # Fallback to usable range with sine sweep
+            position = 0.5 + 0.5 * math.sin(self._rotation_phase * 2 * math.pi)
+            return channel.scale_to_usable_range(position)
     
     def _get_strobe_effect_value(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> int:
         """
