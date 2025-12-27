@@ -650,7 +650,9 @@ class AudioAnalyzer:
             # Update beat position
             if features.tempo > 0:
                 beat_duration = 60.0 / features.tempo
-                self._data.beat_position = min(1.0, features.time_since_beat / beat_duration)
+                # Use modulo to wrap beat position smoothly (handles missed beats)
+                time_in_beat = features.time_since_beat % beat_duration
+                self._data.beat_position = time_in_beat / beat_duration
                 
                 # Bar position (assuming 4/4)
                 beats_per_bar = 4
@@ -774,11 +776,7 @@ class AudioAnalyzer:
         
         Aubio's beat tracker can sometimes detect at half or double the actual tempo,
         especially when there are strong off-beat elements (like hi-hats or background drums
-        on every second beat). This function uses multiple heuristics to correct these errors:
-        
-        1. Normalize to a reasonable "human" tempo range (70-175 BPM)
-        2. Use beat interval analysis to validate the tempo
-        3. Prefer tempos in the common range (90-150 BPM) when ambiguous
+        on every second beat). This function corrects only extreme cases.
         
         Args:
             raw_bpm: The raw BPM value from aubio
@@ -786,58 +784,14 @@ class AudioAnalyzer:
         Returns:
             Corrected BPM value
         """
-        # Target range for most music (preferred tempo range)
-        # Most music falls between 70-175 BPM
-        target_min = 70.0
-        target_max = 175.0
-        preferred_min = 90.0  # Sweet spot lower bound
-        preferred_max = 150.0  # Sweet spot upper bound
-        
         bpm = raw_bpm
         
-        # First pass: bring extremely low/high values into a reasonable range
-        while bpm < 40:
+        # Only correct extreme values outside normal music range (60-200 BPM)
+        # This is conservative to avoid incorrectly "correcting" valid tempos
+        while bpm < 60:
             bpm *= 2
-        while bpm > 220:
+        while bpm > 200:
             bpm /= 2
-        
-        # Check if we have enough beat intervals to validate
-        if len(self._beat_intervals) >= 4:
-            # Calculate BPM from actual beat intervals
-            intervals = list(self._beat_intervals)
-            median_interval = float(np.median(intervals))
-            interval_bpm = 60.0 / median_interval if median_interval > 0 else bpm
-            
-            # If interval-based BPM is roughly double or half of detected BPM,
-            # the detected BPM is likely wrong
-            ratio = bpm / interval_bpm if interval_bpm > 0 else 1.0
-            
-            # If ratio is close to 2, we're detecting at double time
-            if 1.8 < ratio < 2.2:
-                bpm /= 2
-            # If ratio is close to 0.5, we're detecting at half time
-            elif 0.45 < ratio < 0.55:
-                bpm *= 2
-        
-        # Second pass: normalize to target range
-        # If BPM is too low, double it; if too high, halve it
-        if bpm < target_min and bpm * 2 <= target_max * 1.2:
-            bpm *= 2
-        elif bpm > target_max and bpm / 2 >= target_min * 0.8:
-            bpm /= 2
-        
-        # Third pass: prefer the "sweet spot" range when we have a choice
-        # This helps with ambiguous cases like 80 BPM vs 160 BPM
-        if bpm < preferred_min and bpm * 2 <= preferred_max:
-            doubled = bpm * 2
-            # Prefer doubled if it's in the sweet spot
-            if preferred_min <= doubled <= preferred_max:
-                bpm = doubled
-        elif bpm > preferred_max and bpm / 2 >= preferred_min:
-            halved = bpm / 2
-            # Prefer halved if it's in the sweet spot
-            if preferred_min <= halved <= preferred_max:
-                bpm = halved
         
         return bpm
     
