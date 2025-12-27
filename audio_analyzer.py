@@ -31,9 +31,7 @@ except ImportError:
 # Madmom for neural network beat tracking (RNN + DBN)
 try:
     from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
-    from madmom.audio.signal import SignalProcessor, FramedSignalProcessor
-    from madmom.audio.spectrogram import LogarithmicFilteredSpectrogramProcessor
-    from madmom.processors import SequentialProcessor
+    from madmom.audio.signal import Signal
     MADMOM_AVAILABLE = True
     MADMOM_ERROR = None
 except ImportError as e:
@@ -168,26 +166,24 @@ class AudioAnalyzer:
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[AnalysisData], None]] = []
         
-        # Madmom neural network beat tracking (RNN + DBN online mode)
+        # Madmom neural network beat tracking (RNN + DBN)
         self._madmom_beat_processor = None
         self._madmom_dbn_processor = None
         self._madmom_fps = 100  # Frames per second for madmom processing
+        self._madmom_process_interval = 2.0  # Process every N seconds
+        self._madmom_last_process_time = 0.0
+        self._madmom_audio_accumulator: list[float] = []  # Accumulate audio for batch processing
         if MADMOM_AVAILABLE:
             try:
-                # RNNBeatProcessor with online mode for streaming audio
-                self._madmom_beat_processor = RNNBeatProcessor(
-                    online=True,
-                    fps=self._madmom_fps,
-                    nn_files=None  # Use default LSTM models
-                )
-                # DBNBeatTrackingProcessor for probabilistic beat decoding
+                # RNNBeatProcessor processes full audio signals and outputs beat activations
+                self._madmom_beat_processor = RNNBeatProcessor(fps=self._madmom_fps)
+                # DBNBeatTrackingProcessor decodes activations into beat times
                 self._madmom_dbn_processor = DBNBeatTrackingProcessor(
                     min_bpm=60,
                     max_bpm=200,
-                    fps=self._madmom_fps,
-                    online=True
+                    fps=self._madmom_fps
                 )
-                logger.info(f"Madmom beat tracker initialized: fps={self._madmom_fps}, online=True")
+                logger.info(f"Madmom beat tracker initialized: fps={self._madmom_fps}")
             except Exception as e:
                 logger.warning(f"Failed to initialize madmom processors: {e}")
                 self._madmom_beat_processor = None
@@ -199,9 +195,7 @@ class AudioAnalyzer:
         self._onset_history: deque[float] = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 0.0  # Current estimated tempo (0 until detected)
         
-        # Audio buffer for madmom processing (needs chunks at madmom's fps rate)
-        self._madmom_hop_size = sample_rate // self._madmom_fps  # Samples per frame
-        self._audio_buffer: deque[float] = deque(maxlen=sample_rate * 2)  # 2 seconds buffer
+        # Beat activation history for visualization
         self._beat_activations: deque[float] = deque(maxlen=self._madmom_fps * 4)  # 4 sec of activations
         self._tempo_history: deque[float] = deque(maxlen=16)  # Recent tempo estimates
         
@@ -552,11 +546,13 @@ class AudioAnalyzer:
         beat_detected = False
         onset_detected = False
         
-        # Add audio to buffer for madmom processing
-        self._audio_buffer.extend(audio_data.tolist())
+        # Accumulate audio for madmom processing
+        self._madmom_audio_accumulator.extend(audio_data.tolist())
         
-        # Process with madmom when we have enough samples for a frame
-        if self._madmom_beat_processor is not None and len(self._audio_buffer) >= self._madmom_hop_size:
+        # Process with madmom periodically (every N seconds of audio)
+        if (self._madmom_beat_processor is not None and 
+            current_time - self._madmom_last_process_time >= self._madmom_process_interval and
+            len(self._madmom_audio_accumulator) >= self.sample_rate * 2):  # Need at least 2 seconds
             self._process_madmom_beat_detection(current_time)
         
         # Beat detection: use madmom activations or predict based on tempo
@@ -806,57 +802,65 @@ class AudioAnalyzer:
     
     def _process_madmom_beat_detection(self, current_time: float) -> None:
         """
-        Process audio with madmom's RNN beat processor and DBN tracking.
-        Uses online mode for real-time streaming beat detection.
+        Process accumulated audio with madmom's RNN beat processor and DBN tracking.
+        Processes in batches for accurate tempo estimation.
         """
         if self._madmom_beat_processor is None or self._madmom_dbn_processor is None:
             return
         
         try:
-            # Extract a frame's worth of audio for processing
-            frame_samples = list(self._audio_buffer)[:self._madmom_hop_size]
-            if len(frame_samples) < self._madmom_hop_size:
-                return
-            
-            # Remove processed samples from buffer
-            for _ in range(min(self._madmom_hop_size, len(self._audio_buffer))):
-                self._audio_buffer.popleft()
+            # Get the accumulated audio (keep last 8 seconds for better tempo estimation)
+            max_samples = self.sample_rate * 8
+            audio_samples = self._madmom_audio_accumulator[-max_samples:]
             
             # Convert to numpy array (madmom expects float32)
-            audio_frame = np.array(frame_samples, dtype=np.float32)
+            audio_signal = np.array(audio_samples, dtype=np.float32)
             
-            # Get beat activation from RNN (online mode processes frame by frame)
-            # The RNN outputs activation values indicating beat probability
-            activation = self._madmom_beat_processor.process(audio_frame)
+            # Create a Signal object that madmom can process
+            # madmom expects mono audio at its expected sample rate
+            signal = Signal(audio_signal, sample_rate=self.sample_rate, num_channels=1)
             
-            if activation is not None and len(activation) > 0:
-                # Store activation for visualization and onset detection
-                act_value = float(np.mean(activation)) if hasattr(activation, '__len__') else float(activation)
-                self._beat_activations.append(act_value)
+            # Get beat activations from RNN
+            # RNNBeatProcessor returns activation values (one per frame at fps rate)
+            activations = self._madmom_beat_processor(signal)
+            
+            if activations is not None and len(activations) > 0:
+                # Store recent activations for visualization
+                for act in activations[-self._madmom_fps:]:  # Last 1 second
+                    self._beat_activations.append(float(act))
                 
                 # Use DBN processor to decode beats from activations
-                # This provides probabilistic beat tracking with tempo estimation
-                if len(self._beat_activations) >= self._madmom_fps // 2:  # Need some context
-                    activations_array = np.array(list(self._beat_activations), dtype=np.float32)
-                    beats = self._madmom_dbn_processor.process(activations_array)
-                    
-                    # Update tempo from detected beats
-                    if beats is not None and len(beats) >= 2:
-                        # Calculate tempo from beat intervals
-                        beat_times = np.array(beats)
-                        intervals = np.diff(beat_times)
-                        if len(intervals) > 0:
-                            avg_interval = np.mean(intervals)
-                            if avg_interval > 0:
-                                tempo = 60.0 / avg_interval
-                                # Sanity check tempo range
-                                if 60 <= tempo <= 200:
-                                    self._tempo_history.append(tempo)
-                                    if self._tempo_history:
-                                        self._current_tempo = float(np.median(list(self._tempo_history)))
-                                        logger.debug(f"Madmom tempo: {tempo:.1f} BPM, current: {self._current_tempo:.1f} BPM")
+                beats = self._madmom_dbn_processor(activations)
+                
+                # Update tempo from detected beats
+                if beats is not None and len(beats) >= 2:
+                    # Calculate tempo from beat intervals
+                    intervals = np.diff(beats)
+                    if len(intervals) > 0:
+                        # Filter out outliers
+                        valid_intervals = intervals[(intervals > 0.25) & (intervals < 2.0)]
+                        if len(valid_intervals) > 0:
+                            avg_interval = np.median(valid_intervals)
+                            tempo = 60.0 / avg_interval
+                            # Apply octave correction
+                            tempo = self._correct_tempo_octave(tempo, 0.5)
+                            
+                            if 60 <= tempo <= 200:
+                                self._tempo_history.append(tempo)
+                                self._current_tempo = float(np.median(list(self._tempo_history)))
+                                logger.info(f"Madmom detected tempo: {tempo:.1f} BPM (current: {self._current_tempo:.1f} BPM)")
+            
+            # Trim accumulator to keep memory bounded (keep last 10 seconds)
+            max_keep = self.sample_rate * 10
+            if len(self._madmom_audio_accumulator) > max_keep:
+                self._madmom_audio_accumulator = self._madmom_audio_accumulator[-max_keep:]
+            
+            self._madmom_last_process_time = current_time
+            
         except Exception as e:
-            logger.debug(f"Madmom beat detection failed: {e}")
+            logger.warning(f"Madmom beat detection failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
         """Normalize frequency bands with adaptive per-band scaling."""
