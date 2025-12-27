@@ -89,6 +89,15 @@ class AnalysisData:
     # Album art colors (RGB tuples extracted from cover art)
     album_colors: List[Tuple[int, int, int]] = field(default_factory=list)
     
+    # Waveform data for visualization (downsampled to ~100 points)
+    waveform: List[float] = field(default_factory=list)
+    
+    # Frequency spectrum for visualization (bass/mid/high bands, ~32 bins)
+    spectrum: List[float] = field(default_factory=list)
+    
+    # Onset strength history for beat detection visualization
+    onset_history: List[float] = field(default_factory=list)
+    
     @property
     def normalized_energy(self) -> float:
         return self.features.energy
@@ -164,6 +173,7 @@ class AudioAnalyzer:
         self._prev_onset_strength = 0.0
         self._onset_cooldown = 0.0
         self._min_onset_interval = 0.08  # Minimum 80ms between onsets (faster response)
+        self._onset_strength_history: deque[float] = deque(maxlen=64)  # For visualization
         
         # Adaptive energy scaling (auto-gain)
         self._max_rms_observed = 0.01  # Start with small value, will grow
@@ -517,6 +527,7 @@ class AudioAnalyzer:
                 self._onset_history.append(current_time)
                 self._onset_cooldown = current_time + self._min_onset_interval
         self._prev_onset_strength = normalized_rms * 0.7 + self._prev_onset_strength * 0.3  # Smooth
+        self._onset_strength_history.append(self._prev_onset_strength)  # Store for visualization
         
         # Beat detection based on tempo prediction
         beat_detected = False
@@ -613,6 +624,92 @@ class AudioAnalyzer:
             # Section intensity based on energy and beat
             beat_pulse = 1.0 - self._data.beat_position if beat_detected else 0
             self._data.section_intensity = features.energy * 0.7 + beat_pulse * 0.3
+            
+            # Generate waveform data for visualization (downsample to ~100 points)
+            self._data.waveform = self._get_waveform_display(audio_data)
+            
+            # Generate spectrum data for visualization
+            self._data.spectrum = self._get_spectrum_display(audio_data)
+            
+            # Store onset strength history for beat visualization
+            self._data.onset_history = list(self._onset_strength_history)
+    
+    def _get_waveform_display(self, audio_data: np.ndarray, num_points: int = 100) -> List[float]:
+        """
+        Downsample audio data to a fixed number of points for waveform display.
+        Returns values in range [-1, 1].
+        """
+        if len(audio_data) == 0:
+            return [0.0] * num_points
+        
+        # Downsample by taking max absolute value in each chunk (envelope)
+        chunk_size = max(1, len(audio_data) // num_points)
+        waveform = []
+        
+        for i in range(num_points):
+            start = i * chunk_size
+            end = min(start + chunk_size, len(audio_data))
+            if start < len(audio_data):
+                chunk = audio_data[start:end]
+                # Use max absolute value for a more visible waveform
+                max_val = float(np.max(np.abs(chunk)))
+                # Apply some compression for better visibility
+                if max_val > 0:
+                    # Normalize and apply slight compression
+                    normalized = min(1.0, max_val / max(0.01, self._max_rms_observed * 3))
+                    waveform.append(normalized)
+                else:
+                    waveform.append(0.0)
+            else:
+                waveform.append(0.0)
+        
+        return waveform
+    
+    def _get_spectrum_display(self, audio_data: np.ndarray, num_bands: int = 32) -> List[float]:
+        """
+        Get frequency spectrum for visualization.
+        Returns num_bands values in range [0, 1] representing energy in each frequency band.
+        Bands are logarithmically spaced to match human perception.
+        """
+        if len(audio_data) < self._fft_size:
+            return [0.0] * num_bands
+        
+        try:
+            # Apply window and compute FFT
+            windowed = audio_data[:self._fft_size] * np.hanning(self._fft_size)
+            fft_data = np.abs(np.fft.rfft(windowed))
+            
+            # Logarithmically spaced frequency bands (20Hz to 16kHz)
+            min_freq = 20
+            max_freq = 16000
+            
+            # Create logarithmic frequency bands
+            freq_bands = np.logspace(np.log10(min_freq), np.log10(max_freq), num_bands + 1)
+            
+            spectrum = []
+            for i in range(num_bands):
+                low_freq = freq_bands[i]
+                high_freq = freq_bands[i + 1]
+                
+                # Find indices for this frequency range
+                low_idx = int(low_freq * self._fft_size / self.sample_rate)
+                high_idx = int(high_freq * self._fft_size / self.sample_rate)
+                
+                low_idx = max(0, min(low_idx, len(fft_data) - 1))
+                high_idx = max(low_idx + 1, min(high_idx, len(fft_data)))
+                
+                # Get energy in this band
+                if high_idx > low_idx:
+                    band_energy = np.mean(fft_data[low_idx:high_idx] ** 2)
+                    # Normalize with adaptive scaling
+                    normalized = min(1.0, band_energy / max(0.001, self._max_rms_observed ** 2 * 10))
+                    spectrum.append(float(normalized))
+                else:
+                    spectrum.append(0.0)
+            
+            return spectrum
+        except Exception:
+            return [0.0] * num_bands
     
     def _update_tempo_librosa(self) -> None:
         """Update tempo estimate using librosa beat tracking."""

@@ -100,7 +100,10 @@ class SimulatedAudioAnalyzer:
                 track_name=self._data.track_name,
                 artist_name=self._data.artist_name,
                 is_playing=self._data.is_playing,
-                album_colors=list(self._data.album_colors)
+                album_colors=list(self._data.album_colors),
+                waveform=list(self._data.waveform) if hasattr(self._data, 'waveform') else [],
+                spectrum=list(self._data.spectrum) if hasattr(self._data, 'spectrum') else [],
+                onset_history=list(self._data.onset_history) if hasattr(self._data, 'onset_history') else []
             )
     
     def _simulation_loop(self) -> None:
@@ -159,6 +162,18 @@ class SimulatedAudioAnalyzer:
                 # Simulate album colors (cycle through some nice colors)
                 hue = (elapsed * 0.1) % 1.0
                 self._data.album_colors = self._generate_palette(hue)
+                
+                # Simulate waveform (100 points with beat-synced dynamics)
+                self._data.waveform = self._generate_waveform(elapsed, time_since_beat, beat_interval, base_energy)
+                
+                # Simulate spectrum (32 frequency bands)
+                self._data.spectrum = self._generate_spectrum(elapsed, time_since_beat, beat_interval,
+                                                               self._data.features.bass,
+                                                               self._data.features.mid,
+                                                               self._data.features.high)
+                
+                # Simulate onset history (64 points)
+                self._data.onset_history = self._generate_onset_history(elapsed, time_since_beat, beat_interval)
             
             # Notify callbacks
             for callback in self._callbacks:
@@ -168,6 +183,103 @@ class SimulatedAudioAnalyzer:
                     pass
             
             time.sleep(0.025)  # 40 Hz
+    
+    def _generate_waveform(self, elapsed: float, time_since_beat: float, 
+                           beat_interval: float, energy: float) -> List[float]:
+        """Generate a simulated waveform for visualization."""
+        import random
+        num_points = 100
+        waveform = []
+        
+        # Beat pulse effect (stronger at beat, decays)
+        beat_factor = 1.0 - (time_since_beat / beat_interval) * 0.5
+        
+        for i in range(num_points):
+            # Base wave with multiple frequencies
+            t = elapsed * 10 + i * 0.1
+            wave = (
+                0.3 * math.sin(t * 2.0) +  # Low frequency
+                0.2 * math.sin(t * 5.0) +  # Mid frequency
+                0.1 * math.sin(t * 13.0)   # High frequency
+            )
+            
+            # Add some randomness
+            wave += random.uniform(-0.1, 0.1)
+            
+            # Scale by energy and beat
+            wave = abs(wave) * energy * beat_factor
+            
+            # Clamp to 0-1
+            waveform.append(max(0.0, min(1.0, wave)))
+        
+        return waveform
+    
+    def _generate_spectrum(self, elapsed: float, time_since_beat: float, beat_interval: float,
+                          bass: float, mid: float, high: float) -> List[float]:
+        """Generate a simulated frequency spectrum (32 bands)."""
+        import random
+        num_bands = 32
+        spectrum = []
+        
+        # Beat pulse
+        beat_factor = 1.0 - (time_since_beat / beat_interval) * 0.3
+        
+        for i in range(num_bands):
+            # Position in spectrum (0=low, 1=high)
+            pos = i / (num_bands - 1)
+            
+            # Blend bass/mid/high based on position
+            if pos < 0.33:
+                # Bass region
+                base = bass * (1.0 - pos * 3) + mid * (pos * 3)
+            elif pos < 0.66:
+                # Mid region
+                blend = (pos - 0.33) * 3
+                base = mid * (1.0 - blend) + high * blend
+            else:
+                # High region
+                base = high * (1.0 - (pos - 0.66) * 1.5)
+            
+            # Add wave variation
+            wave = 0.2 * math.sin(elapsed * 5 + i * 0.5)
+            
+            # Add randomness
+            noise = random.uniform(-0.05, 0.05)
+            
+            value = (base + wave + noise) * beat_factor
+            spectrum.append(max(0.0, min(1.0, value)))
+        
+        return spectrum
+    
+    def _generate_onset_history(self, elapsed: float, time_since_beat: float, 
+                                beat_interval: float) -> List[float]:
+        """Generate simulated onset strength history (64 points)."""
+        num_points = 64
+        history = []
+        
+        for i in range(num_points):
+            # Simulate past onset values (older to newer)
+            # Create peaks at beat intervals
+            t = elapsed - (num_points - i) * 0.025  # ~40Hz sampling
+            
+            # Calculate position within beat for this point
+            beat_phase = (t % beat_interval) / beat_interval
+            
+            # Create onset peak at start of each beat
+            if beat_phase < 0.1:
+                # Sharp rise at beat
+                onset = 0.8 + 0.2 * math.sin(beat_phase * math.pi / 0.1)
+            else:
+                # Decay after beat
+                decay = (beat_phase - 0.1) / 0.9
+                onset = 0.3 * (1.0 - decay) + 0.2
+            
+            # Add some noise
+            onset += 0.05 * math.sin(t * 20 + i)
+            
+            history.append(max(0.0, min(1.0, onset)))
+        
+        return history
     
     def _generate_palette(self, base_hue: float) -> List[Tuple[int, int, int]]:
         """Generate a color palette based on a base hue."""

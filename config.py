@@ -157,6 +157,55 @@ class MovementMode(str, Enum):
     CRAZY = "crazy"  # Wild full-range movement - showcases entire pan/tilt capability
 
 
+class RotationMode(str, Enum):
+    """
+    Rotation modes for effect fixtures like Showtec Techno Derby.
+    
+    These correspond to Channel 3 (Pattern Rotation) of the Techno Derby:
+    - 0: No function
+    - 1-127: Manual rotation position (fixed angle)
+    - 128-255: Auto rotation speed (slow to fast)
+    """
+    OFF = "off"  # No rotation (0)
+    MANUAL_SLOW = "manual_slow"  # Slow manual sweep through positions
+    MANUAL_BEAT = "manual_beat"  # Jump to new position on beats
+    AUTO_SLOW = "auto_slow"  # Auto rotation at slow constant speed
+    AUTO_MEDIUM = "auto_medium"  # Auto rotation at medium constant speed
+    AUTO_FAST = "auto_fast"  # Auto rotation at fast constant speed
+    AUTO_MUSIC = "auto_music"  # Auto rotation speed follows music energy
+
+
+class StrobeEffectMode(str, Enum):
+    """
+    Strobe effect modes for effect fixtures like Showtec Techno Derby.
+    
+    These correspond to Channel 4 (Strobe Effects) of the Techno Derby:
+    - Each effect moves the lights in the array in a different pattern
+    - Within each effect, higher DMX values = faster movement
+    - Effect 18 is strobe always on (no pattern movement)
+    """
+    OFF = "off"  # No strobe effect (0-9)
+    EFFECT_1 = "effect_1"  # Pattern 1 - slow to fast (10-19)
+    EFFECT_2 = "effect_2"  # Pattern 2 - slow to fast (20-29)
+    EFFECT_3 = "effect_3"  # Pattern 3 - slow to fast (30-39)
+    EFFECT_4 = "effect_4"  # Pattern 4 - slow to fast (40-49)
+    EFFECT_5 = "effect_5"  # Pattern 5 - slow to fast (50-59)
+    EFFECT_6 = "effect_6"  # Pattern 6 - slow to fast (60-69)
+    EFFECT_7 = "effect_7"  # Pattern 7 - slow to fast (70-79)
+    EFFECT_8 = "effect_8"  # Pattern 8 - slow to fast (80-89)
+    EFFECT_9 = "effect_9"  # Pattern 9 - slow to fast (90-99)
+    EFFECT_10 = "effect_10"  # Pattern 10 - slow to fast (100-109)
+    EFFECT_11 = "effect_11"  # Pattern 11 - slow to fast (110-119)
+    EFFECT_12 = "effect_12"  # Pattern 12 - slow to fast (120-129)
+    EFFECT_13 = "effect_13"  # Pattern 13 - slow to fast (130-139)
+    EFFECT_14 = "effect_14"  # Pattern 14 - slow to fast (140-149)
+    EFFECT_15 = "effect_15"  # Pattern 15 - slow to fast (150-159)
+    EFFECT_16 = "effect_16"  # Pattern 16 - slow to fast (160-169)
+    EFFECT_17 = "effect_17"  # Pattern 17 - slow to fast (170-179)
+    EFFECT_18_STROBE = "effect_18_strobe"  # Strobe always on (180-255)
+    AUTO = "auto"  # Cycle through effects automatically based on music
+
+
 class FixtureProfile(BaseModel):
     """
     Profile defining a fixture type's channel layout.
@@ -252,6 +301,13 @@ class EffectsConfig(BaseModel):
     movement_enabled: bool = Field(default=True)
     movement_speed: float = Field(default=0.5, ge=0.0, le=1.0)
     movement_mode: MovementMode = Field(default=MovementMode.STANDARD)
+    # Effect fixture settings (for Derby, Moonflower, etc. like Techno Derby)
+    # Rotation mode (Channel 3 on Techno Derby)
+    rotation_mode: RotationMode = Field(default=RotationMode.AUTO_MEDIUM, description="Pattern rotation mode for effect fixtures")
+    # Strobe effect settings (Channel 4 on Techno Derby)
+    strobe_effect_enabled: bool = Field(default=True, description="Enable strobe effect patterns on effect fixtures")
+    strobe_effect_mode: StrobeEffectMode = Field(default=StrobeEffectMode.AUTO, description="Strobe effect pattern mode")
+    strobe_effect_speed: float = Field(default=0.5, ge=0.0, le=1.0, description="Speed within the selected effect (0=slow, 1=fast)")
 
 
 class ShowConfig(BaseModel):

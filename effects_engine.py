@@ -19,7 +19,8 @@ from dataclasses import dataclass
 
 from config import (
     FixtureConfig, FixtureProfile, VisualizationMode, FixtureType,
-    ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS
+    ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS, StrobeEffectMode,
+    RotationMode
 )
 from audio_analyzer import AnalysisData
 from dmx_controller import DMXController
@@ -162,6 +163,11 @@ class EffectsEngine:
         self._strobe_active = False
         self._strobe_end_time = 0.0
         
+        # Effect fixture rotation state (for smooth rotation on Channel 3)
+        self._rotation_phase: float = 0.0  # Current rotation phase (0.0 - 1.0)
+        self._rotation_target: int = 64  # Target position for manual modes (1-127)
+        self._smoothed_rotation: float = 64.0  # Smoothed rotation value
+        
         # Blackout state
         self._blackout_active = False
         
@@ -291,15 +297,18 @@ class EffectsEngine:
         """
         Process effect lights (Derby, Moonflower, etc.) separately from RGB fixtures.
         
-        Effect lights use:
-        - Color Macro channel: Select colors based on audio (maps RGB to nearest color macro value)
-        - Strobe channel: Beat-synced strobe effects
-        - Pattern/Rotation channel: Speed based on energy/tempo
-        - Effect channel: Different patterns based on mode
+        Showtec Techno Derby channels:
+        - Channel 1 (color_macro): Color selection (0-215 colors, 216-255 auto change)
+        - Channel 2 (strobe): Strobe speed (0-5 off, 6-255 slow to fast)
+        - Channel 3 (effect): Pattern rotation (0 off, 1-127 manual position, 128-255 auto speed)
+        - Channel 4 (effect_speed): Strobe effect patterns (effects 1-18)
         """
         effect_fixtures = self.get_effect_fixtures()
         if not effect_fixtures:
             return
+        
+        # Update rotation state (shared across all effect fixtures)
+        self._update_rotation_state(data, beat_triggered, bar_triggered)
         
         for i, fixture in enumerate(effect_fixtures):
             state = self._states[fixture.name]
@@ -307,92 +316,292 @@ class EffectsEngine:
             # Get current RGB from the visualization mode (already calculated)
             r, g, b = state.red, state.green, state.blue
             
-            # Map RGB to color macro value for Techno Derby
-            # Channel 1 color ranges:
-            # 0-5: No function, 6-20: Red, 21-35: Green, 36-50: Blue, 51-65: White
-            # 66-80: R+G, 81-95: R+B, 96-110: R+W, 111-125: G+B, 126-140: G+W, 141-155: B+W
-            # 156-170: RGB, 171-185: RGW, 186-200: GBW, 201-215: RGBW
-            # 216-229: Slow color change, 230-255: Fast color change
+            # Channel 1: Color macro
             state.color_macro = self._rgb_to_color_macro(r, g, b, data.features.energy)
             
-            # Strobe on beats - Channel 2 (0-5 off, 6-255 slow to fast)
-            if beat_triggered and data.features.bass > 0.6:
-                # Strong beat = faster strobe
-                strobe_speed = int(50 + data.features.bass * 150)  # 50-200 range
-                state.strobe = max(6, min(255, strobe_speed))
-            elif self._strobe_active:
-                # Drop strobe
-                state.strobe = 200
-            else:
-                # Gentle strobe on energy, or off
-                if data.features.energy > 0.5:
-                    state.strobe = int(6 + data.features.energy * 80)  # Slow strobe
-                else:
-                    state.strobe = 0  # Off
+            # Channel 2: Strobe speed
+            state.strobe = self._get_strobe_value(data, beat_triggered)
             
-            # Pattern rotation - Channel 3 (0: off, 1-127: manual, 128-255: auto speed)
-            # Use tempo and energy to control rotation speed
-            if data.features.energy > 0.3:
-                # Auto rotation, speed based on tempo
-                base_rotation = 128  # Start of auto range
-                tempo_factor = min(1.0, data.features.tempo / 150.0)  # Normalize to ~150 BPM
-                rotation_speed = int(base_rotation + tempo_factor * 100 + data.features.energy * 27)
-                state.effect = max(128, min(255, rotation_speed))
-            else:
-                # Low energy = slow or no rotation
-                state.effect = 0
+            # Channel 3: Pattern rotation
+            state.effect = self._get_rotation_value()
             
-            # Effect speed channel (Channel 4) - select pattern based on bar/beat
-            # Effects 1-18, value ranges 10-179, with 180-255 being strobe always on
-            if self._is_drop:
-                # On drops, use strobe effect
-                state.effect_speed = 180  # Effect 18 - strobe always on
-            elif bar_triggered:
-                # Change effect on bar changes
-                effect_num = (data.estimated_bar % 8) + 1  # Cycle through effects 1-8
-                state.effect_speed = 10 + (effect_num - 1) * 10 + 5  # Middle of each range
-            elif beat_triggered and data.features.bass > 0.7:
-                # Strong bass = more intense effect
-                effect_num = min(18, int(9 + data.features.energy * 9))  # Effects 9-18
-                state.effect_speed = 10 + (effect_num - 1) * 10 + 5
-            # Otherwise keep current effect
+            # Channel 4: Strobe effects (light movement patterns)
+            state.effect_speed = self._get_strobe_effect_value(data, beat_triggered, bar_triggered)
+    
+    def _get_strobe_value(self, data: AnalysisData, beat_triggered: bool) -> int:
+        """
+        Get Channel 2 (Strobe) value.
+        0-5: Off, 6-255: Strobe speed slow to fast.
+        """
+        if self._strobe_active:
+            # Drop strobe - fast
+            return 200
+        
+        if beat_triggered and data.features.bass > 0.7:
+            # Strong beat = quick strobe burst
+            return int(100 + data.features.bass * 100)  # 100-200 range
+        
+        # Gentle strobe on high energy, otherwise off
+        if data.features.energy > 0.6:
+            return int(6 + (data.features.energy - 0.6) * 100)  # 6-46 range
+        
+        return 0  # Off
+    
+    def _update_rotation_state(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
+        """
+        Update the rotation state for Channel 3.
+        
+        Channel 3 ranges:
+        - 0: No function
+        - 1-127: Manual rotation position (set a fixed angle)
+        - 128-255: Auto rotation speed (slow to fast)
+        
+        This function updates internal state that is then read by _get_rotation_value().
+        """
+        mode = self.config.effects.rotation_mode
+        dt = 1.0 / max(1, self.config.dmx.fps)  # Time delta per frame
+        
+        if mode == RotationMode.OFF:
+            self._rotation_target = 0
+            self._smoothed_rotation = 0
+            return
+        
+        if mode == RotationMode.MANUAL_SLOW:
+            # Slow continuous sweep through manual positions (1-127)
+            # Complete cycle every ~8 seconds
+            self._rotation_phase = (self._rotation_phase + dt / 8.0) % 1.0
+            # Use sine wave for smooth back-and-forth motion
+            position = 0.5 + 0.5 * math.sin(self._rotation_phase * 2 * math.pi)
+            self._rotation_target = int(1 + position * 126)  # 1-127 range
+            # Smooth transition
+            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.1
+        
+        elif mode == RotationMode.MANUAL_BEAT:
+            # Jump to new position on beats
+            if beat_triggered:
+                # Random position, but smooth transition
+                self._rotation_target = int(1 + (data.estimated_beat % 8) * 15.75)  # 8 positions
+            # Smooth transition to target
+            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.15
+        
+        elif mode == RotationMode.AUTO_SLOW:
+            # Fixed slow auto rotation (128-170 range)
+            self._rotation_target = 140
+            self._smoothed_rotation = 140
+        
+        elif mode == RotationMode.AUTO_MEDIUM:
+            # Fixed medium auto rotation (170-210 range)
+            self._rotation_target = 180
+            self._smoothed_rotation = 180
+        
+        elif mode == RotationMode.AUTO_FAST:
+            # Fixed fast auto rotation (210-255 range)
+            self._rotation_target = 230
+            self._smoothed_rotation = 230
+        
+        elif mode == RotationMode.AUTO_MUSIC:
+            # Auto rotation speed follows music energy
+            # But smoothed to avoid jitter
+            base_speed = 140  # Start at slow auto
+            energy_boost = data.features.energy * 80  # Up to +80 based on energy
+            tempo_boost = min(1.0, data.features.tempo / 150.0) * 20  # Up to +20 based on tempo
+            target = int(base_speed + energy_boost + tempo_boost)
+            self._rotation_target = max(128, min(255, target))
+            # Heavy smoothing to avoid jitter
+            self._smoothed_rotation += (self._rotation_target - self._smoothed_rotation) * 0.02
+    
+    def _get_rotation_value(self) -> int:
+        """Get the smoothed rotation value for Channel 3."""
+        return int(max(0, min(255, self._smoothed_rotation)))
+    
+    def _get_strobe_effect_value(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> int:
+        """
+        Get the DMX value for Channel 4 (Strobe Effects) based on settings.
+        
+        Techno Derby Channel 4 ranges:
+        0-9: No function
+        10-19: Effect 1 (slow to fast)
+        20-29: Effect 2 (slow to fast)
+        ... (each effect is a 10-value range)
+        170-179: Effect 17 (slow to fast)
+        180-255: Effect 18 (strobe always on)
+        
+        Returns a DMX value 0-255 for the strobe effect channel.
+        """
+        effects_config = self.config.effects
+        
+        # If strobe effects are disabled, return 0 (no function)
+        if not effects_config.strobe_effect_enabled:
+            return 0
+        
+        mode = effects_config.strobe_effect_mode
+        speed = effects_config.strobe_effect_speed  # 0.0 to 1.0
+        
+        # Handle specific effect modes
+        if mode == StrobeEffectMode.OFF:
+            return 0
+        
+        if mode == StrobeEffectMode.EFFECT_18_STROBE:
+            # Effect 18 is always on strobe (180-255)
+            return 180 + int(speed * 75)  # 180-255 range
+        
+        if mode == StrobeEffectMode.AUTO:
+            # Auto mode: cycle through effects based on music
+            return self._get_auto_strobe_effect(data, beat_triggered, bar_triggered, speed)
+        
+        # Specific effect mode (EFFECT_1 through EFFECT_17)
+        effect_map = {
+            StrobeEffectMode.EFFECT_1: 1,
+            StrobeEffectMode.EFFECT_2: 2,
+            StrobeEffectMode.EFFECT_3: 3,
+            StrobeEffectMode.EFFECT_4: 4,
+            StrobeEffectMode.EFFECT_5: 5,
+            StrobeEffectMode.EFFECT_6: 6,
+            StrobeEffectMode.EFFECT_7: 7,
+            StrobeEffectMode.EFFECT_8: 8,
+            StrobeEffectMode.EFFECT_9: 9,
+            StrobeEffectMode.EFFECT_10: 10,
+            StrobeEffectMode.EFFECT_11: 11,
+            StrobeEffectMode.EFFECT_12: 12,
+            StrobeEffectMode.EFFECT_13: 13,
+            StrobeEffectMode.EFFECT_14: 14,
+            StrobeEffectMode.EFFECT_15: 15,
+            StrobeEffectMode.EFFECT_16: 16,
+            StrobeEffectMode.EFFECT_17: 17,
+        }
+        
+        effect_num = effect_map.get(mode, 1)
+        # Calculate DMX value: base + speed within the 10-value range
+        # Effect 1 = 10-19, Effect 2 = 20-29, etc.
+        base_value = 10 + (effect_num - 1) * 10
+        speed_offset = int(speed * 9)  # 0-9 within the range
+        return base_value + speed_offset
+    
+    def _get_auto_strobe_effect(self, data: AnalysisData, beat_triggered: bool, 
+                                 bar_triggered: bool, base_speed: float) -> int:
+        """
+        Automatically select strobe effect based on music analysis.
+        
+        - Low energy: subtle effects (1-6)
+        - Medium energy: moderate effects (7-12)
+        - High energy: intense effects (13-17)
+        - Drops: strobe always on (effect 18)
+        """
+        energy = data.features.energy
+        bass = data.features.bass
+        
+        # On drops, use strobe always on
+        if self._is_drop:
+            return 180 + int(base_speed * 75)  # Effect 18 range
+        
+        # Determine effect range based on energy
+        if energy < 0.4:
+            # Low energy: effects 1-6 (subtle patterns)
+            effect_range = (1, 6)
+        elif energy < 0.7:
+            # Medium energy: effects 7-12
+            effect_range = (7, 12)
+        else:
+            # High energy: effects 13-17 (intense patterns)
+            effect_range = (13, 17)
+        
+        # Select specific effect within range based on bar number
+        effect_span = effect_range[1] - effect_range[0] + 1
+        effect_num = effect_range[0] + (data.estimated_bar % effect_span)
+        
+        # Speed within effect based on bass and configured speed
+        # Stronger bass = faster movement within the effect
+        dynamic_speed = base_speed * 0.5 + bass * 0.5
+        
+        # Calculate DMX value
+        base_value = 10 + (effect_num - 1) * 10
+        speed_offset = int(dynamic_speed * 9)
+        return base_value + speed_offset
     
     def _rgb_to_color_macro(self, r: int, g: int, b: int, energy: float) -> int:
         """
         Map RGB values to Techno Derby color macro values.
         
         Returns a value in the color macro range based on which colors are active.
+        The Techno Derby has these color options on Channel 1:
+        0-5: No function
+        6-20: Red
+        21-35: Green
+        36-50: Blue
+        51-65: White
+        66-80: Red + Green
+        81-95: Red + Blue
+        96-110: Red + White
+        111-125: Green + Blue
+        126-140: Green + White
+        141-155: Blue + White
+        156-170: Red + Green + Blue
+        171-185: Red + Green + White
+        186-200: Green + Blue + White
+        201-215: Red + Green + Blue + White
+        216-229: Slow color change
+        230-255: Fast color change
         """
         # Thresholds for considering a color "on"
         threshold = 80
+        high_threshold = 180  # For detecting "white-like" brightness
         
         red_on = r > threshold
         green_on = g > threshold
         blue_on = b > threshold
         
-        # Check for white (all high)
-        white_on = r > 180 and g > 180 and b > 180
+        # Check for white-like appearance (all channels bright and balanced)
+        # White is when RGB values are similar and all high
+        min_val = min(r, g, b)
+        max_val = max(r, g, b)
+        is_balanced = (max_val - min_val) < 60  # Colors are similar
+        is_bright = min_val > 150
+        white_like = is_balanced and is_bright
         
-        # High energy = use auto color change
-        if energy > 0.8:
-            return 230 + int((energy - 0.8) * 125)  # 230-255 fast color change
+        # High energy = use auto color change for variety
+        if energy > 0.85:
+            return 230 + int((energy - 0.85) * 166)  # 230-255 fast color change
+        
+        # Count active colors
+        color_count = sum([red_on, green_on, blue_on])
         
         # Map to color macros (use middle of each range for stability)
-        if white_on or (red_on and green_on and blue_on):
-            return 208  # RGBW middle of 201-215
-        elif red_on and green_on and blue_on:
+        if white_like:
+            # Pure white appearance - use white or RGBW
+            if color_count == 3:
+                return 208  # RGBW middle of 201-215
+            return 58   # White middle of 51-65
+        elif color_count == 3:
+            # All three colors on but not balanced = RGB
             return 163  # RGB middle of 156-170
-        elif green_on and blue_on:
-            return 118  # G+B middle of 111-125
-        elif red_on and blue_on:
-            return 88   # R+B middle of 81-95
         elif red_on and green_on:
+            # Red + Green (yellow-ish)
+            # Consider adding white for brighter scenes
+            if (r + g) > 350:
+                return 178  # R+G+W middle of 171-185
             return 73   # R+G middle of 66-80
+        elif red_on and blue_on:
+            # Red + Blue (magenta)
+            return 88   # R+B middle of 81-95
+        elif green_on and blue_on:
+            # Green + Blue (cyan)
+            if (g + b) > 350:
+                return 193  # G+B+W middle of 186-200
+            return 118  # G+B middle of 111-125
         elif blue_on:
+            # Solo blue - consider adding white at high intensity
+            if b > 200:
+                return 148  # B+W middle of 141-155
             return 43   # Blue middle of 36-50
         elif green_on:
+            # Solo green - consider adding white at high intensity
+            if g > 200:
+                return 133  # G+W middle of 126-140
             return 28   # Green middle of 21-35
         elif red_on:
+            # Solo red - consider adding white at high intensity
+            if r > 200:
+                return 103  # R+W middle of 96-110
             return 13   # Red middle of 6-20
         else:
             # Low/no color - use slow color change for some visual interest

@@ -17,7 +17,8 @@ except ImportError:
 
 from config import (
     ShowConfig, FixtureConfig, FixtureProfile, ChannelConfig,
-    VisualizationMode, MovementMode, DMXConfig, EffectsConfig, ChannelType,
+    VisualizationMode, MovementMode, StrobeEffectMode, RotationMode,
+    DMXConfig, EffectsConfig, ChannelType,
     AudioInputMode, get_available_presets, get_preset, FIXTURE_PRESETS, 
     get_channel_type_display_name
 )
@@ -270,6 +271,32 @@ class MusicAutoShowGUI:
             dpg.add_slider_float(label="Movement Speed", default_value=self.config.effects.movement_speed,
                                 min_value=0.0, max_value=1.0, width=200,
                                 callback=lambda s, a: setattr(self.config.effects, 'movement_speed', a))
+            
+            dpg.add_separator()
+            dpg.add_text("Effect Fixtures (Derby/Moonflower)", color=(180, 180, 200))
+            
+            # Rotation mode selector (Channel 3)
+            rotation_modes = [m.value for m in RotationMode]
+            dpg.add_combo(label="Rotation Mode", items=rotation_modes, 
+                         default_value=self.config.effects.rotation_mode.value,
+                         callback=self._on_rotation_mode_changed, tag="rotation_mode", width=200)
+            dpg.add_text("", tag="rotation_mode_hint", color=(130, 130, 160))
+            self._update_rotation_mode_hint(self.config.effects.rotation_mode.value)
+            
+            dpg.add_checkbox(label="Enable Strobe Effects", default_value=self.config.effects.strobe_effect_enabled,
+                            callback=lambda s, a: setattr(self.config.effects, 'strobe_effect_enabled', a))
+            
+            # Strobe effect mode selector (Channel 4)
+            strobe_effect_modes = [m.value for m in StrobeEffectMode]
+            dpg.add_combo(label="Strobe Effect Pattern", items=strobe_effect_modes, 
+                         default_value=self.config.effects.strobe_effect_mode.value,
+                         callback=self._on_strobe_effect_mode_changed, tag="strobe_effect_mode", width=200)
+            dpg.add_text("", tag="strobe_effect_mode_hint", color=(130, 130, 160))
+            self._update_strobe_effect_mode_hint(self.config.effects.strobe_effect_mode.value)
+            
+            dpg.add_slider_float(label="Effect Speed", default_value=self.config.effects.strobe_effect_speed,
+                                min_value=0.0, max_value=1.0, width=200,
+                                callback=lambda s, a: setattr(self.config.effects, 'strobe_effect_speed', a))
     
     def _create_visualization_panel(self) -> None:
         with dpg.group(horizontal=True):
@@ -285,13 +312,19 @@ class MusicAutoShowGUI:
         dpg.add_text("Now Playing:", color=(200, 200, 255))
         self._track_info_id = dpg.add_text("No track playing", tag="track_info")
         
-        # Album color palette display
+        # Album color palette and audio visualization display
         with dpg.group(horizontal=True):
             dpg.add_text("Album Colors:", color=(150, 150, 180))
             dpg.add_spacer(width=10)
             # Create 5 color swatches using drawlist
             with dpg.drawlist(width=200, height=20, tag="color_palette"):
                 # Will be drawn in _update_gui
+                pass
+            
+            dpg.add_spacer(width=20)
+            # Audio analysis visualization (spectrum, beats, onset detection)
+            with dpg.drawlist(width=500, height=80, tag="audio_viz_display"):
+                # Will be drawn in _update_gui - shows how BPM/energy/etc are calculated
                 pass
         
         dpg.add_spacer(height=10)
@@ -390,6 +423,63 @@ class MusicAutoShowGUI:
         hint = hints.get(mode_value, "")
         if dpg.does_item_exist("movement_mode_hint"):
             dpg.set_value("movement_mode_hint", hint)
+    
+    def _on_rotation_mode_changed(self, sender, app_data) -> None:
+        """Handle rotation mode change."""
+        self.config.effects.rotation_mode = RotationMode(app_data)
+        self._update_rotation_mode_hint(app_data)
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
+    
+    def _update_rotation_mode_hint(self, mode_value: str) -> None:
+        """Update the rotation mode hint text."""
+        hints = {
+            "off": "No rotation",
+            "manual_slow": "Slow smooth sweep through positions",
+            "manual_beat": "Jump to new position on beats",
+            "auto_slow": "Constant slow auto-rotation",
+            "auto_medium": "Constant medium auto-rotation",
+            "auto_fast": "Constant fast auto-rotation",
+            "auto_music": "Auto-rotation speed follows energy",
+        }
+        hint = hints.get(mode_value, "")
+        if dpg.does_item_exist("rotation_mode_hint"):
+            dpg.set_value("rotation_mode_hint", hint)
+    
+    def _on_strobe_effect_mode_changed(self, sender, app_data) -> None:
+        """Handle strobe effect mode change."""
+        self.config.effects.strobe_effect_mode = StrobeEffectMode(app_data)
+        self._update_strobe_effect_mode_hint(app_data)
+        if self.effects_engine:
+            self.effects_engine.update_config(self.config)
+    
+    def _update_strobe_effect_mode_hint(self, mode_value: str) -> None:
+        """Update the strobe effect mode hint text."""
+        hints = {
+            "off": "No strobe effect pattern",
+            "auto": "Automatically cycle effects based on music",
+            "effect_1": "Pattern 1 - light movement",
+            "effect_2": "Pattern 2 - light movement",
+            "effect_3": "Pattern 3 - light movement",
+            "effect_4": "Pattern 4 - light movement",
+            "effect_5": "Pattern 5 - light movement",
+            "effect_6": "Pattern 6 - light movement",
+            "effect_7": "Pattern 7 - light movement",
+            "effect_8": "Pattern 8 - light movement",
+            "effect_9": "Pattern 9 - light movement",
+            "effect_10": "Pattern 10 - light movement",
+            "effect_11": "Pattern 11 - light movement",
+            "effect_12": "Pattern 12 - light movement",
+            "effect_13": "Pattern 13 - light movement",
+            "effect_14": "Pattern 14 - light movement",
+            "effect_15": "Pattern 15 - light movement",
+            "effect_16": "Pattern 16 - light movement",
+            "effect_17": "Pattern 17 - light movement",
+            "effect_18_strobe": "All lights on (strobe mode)",
+        }
+        hint = hints.get(mode_value, "")
+        if dpg.does_item_exist("strobe_effect_mode_hint"):
+            dpg.set_value("strobe_effect_mode_hint", hint)
     
     def _start_show(self) -> None:
         logger.info("=" * 50)
@@ -593,6 +683,204 @@ class MusicAutoShowGUI:
             else:
                 dpg.draw_text((0, 3), "(no colors detected)", size=11, 
                              color=(100, 100, 120), parent="color_palette")
+        
+        # Draw comprehensive audio analysis visualization
+        if dpg.does_item_exist("audio_viz_display"):
+            dpg.delete_item("audio_viz_display", children_only=True)
+            
+            viz_width = 500
+            viz_height = 80
+            parent = "audio_viz_display"
+            
+            # Background
+            dpg.draw_rectangle(
+                (0, 0), (viz_width, viz_height),
+                fill=(15, 15, 22, 255),
+                color=(50, 50, 70),
+                thickness=1,
+                parent=parent
+            )
+            
+            # Layout: [Spectrum 150px] [Beat/Onset 150px] [Frequency Bands 100px] [Beat Pulse 100px]
+            
+            # === Section 1: Frequency Spectrum (shows FFT - how bass/mid/high are calculated) ===
+            spectrum_x = 2
+            spectrum_width = 145
+            spectrum_height = viz_height - 4
+            
+            if data.spectrum and len(data.spectrum) > 0:
+                num_bands = len(data.spectrum)
+                bar_width = max(1, spectrum_width / num_bands)
+                
+                for i, value in enumerate(data.spectrum):
+                    x = spectrum_x + i * bar_width
+                    bar_h = value * (spectrum_height - 2)
+                    
+                    # Color gradient: blue (low) -> cyan -> green -> yellow -> red (high)
+                    pos = i / max(1, num_bands - 1)
+                    if pos < 0.33:
+                        # Blue to cyan (bass)
+                        r, g, b = 50, int(100 + pos * 3 * 155), 255
+                    elif pos < 0.66:
+                        # Cyan to green to yellow (mids)
+                        p = (pos - 0.33) * 3
+                        r = int(p * 255)
+                        g = 255
+                        b = int(255 * (1 - p))
+                    else:
+                        # Yellow to red (highs)
+                        p = (pos - 0.66) * 3
+                        r = 255
+                        g = int(255 * (1 - p))
+                        b = 50
+                    
+                    if bar_h > 0.5:
+                        dpg.draw_rectangle(
+                            (x, spectrum_height - bar_h + 2), (x + bar_width - 1, spectrum_height),
+                            fill=(r, g, b, 220),
+                            parent=parent
+                        )
+            
+            # Spectrum separator line
+            dpg.draw_line((150, 0), (150, viz_height), color=(50, 50, 70), thickness=1, parent=parent)
+            
+            # === Section 2: Onset Detection History (shows how beats are detected) ===
+            onset_x = 152
+            onset_width = 145
+            onset_height = viz_height - 4
+            
+            if data.onset_history and len(data.onset_history) > 0:
+                num_points = len(data.onset_history)
+                point_width = onset_width / num_points
+                
+                # Draw onset strength as a line graph
+                points = []
+                for i, value in enumerate(data.onset_history):
+                    x = onset_x + i * point_width
+                    y = onset_height - value * (onset_height - 4) + 2
+                    points.append((x, y))
+                
+                # Draw filled area under the curve
+                if len(points) >= 2:
+                    # Draw as connected lines (polyline)
+                    for i in range(len(points) - 1):
+                        x1, y1 = points[i]
+                        x2, y2 = points[i + 1]
+                        # Draw vertical fill
+                        dpg.draw_line(
+                            (x1, y1), (x1, onset_height),
+                            color=(100, 180, 255, 80),
+                            thickness=max(1, int(point_width)),
+                            parent=parent
+                        )
+                        # Draw the line
+                        dpg.draw_line(
+                            (x1, y1), (x2, y2),
+                            color=(100, 200, 255, 255),
+                            thickness=2,
+                            parent=parent
+                        )
+                
+                # Draw beat threshold line (where onset detection triggers)
+                threshold_y = onset_height - 0.3 * (onset_height - 4) + 2
+                dpg.draw_line(
+                    (onset_x, threshold_y), (onset_x + onset_width, threshold_y),
+                    color=(255, 100, 100, 150),
+                    thickness=1,
+                    parent=parent
+                )
+            
+            # Onset separator line
+            dpg.draw_line((300, 0), (300, viz_height), color=(50, 50, 70), thickness=1, parent=parent)
+            
+            # === Section 3: Frequency Bands (bass/mid/high as vertical bars) ===
+            bands_x = 305
+            bands_width = 90
+            band_width = 25
+            band_gap = 5
+            band_height = viz_height - 8
+            
+            # Bass bar (red/orange)
+            bass_h = data.features.bass * band_height
+            dpg.draw_rectangle(
+                (bands_x, band_height - bass_h + 4), (bands_x + band_width, band_height + 4),
+                fill=(255, 80, 50, 230),
+                parent=parent
+            )
+            
+            # Mid bar (green/yellow)
+            mid_x = bands_x + band_width + band_gap
+            mid_h = data.features.mid * band_height
+            dpg.draw_rectangle(
+                (mid_x, band_height - mid_h + 4), (mid_x + band_width, band_height + 4),
+                fill=(150, 255, 50, 230),
+                parent=parent
+            )
+            
+            # High bar (cyan/blue)
+            high_x = mid_x + band_width + band_gap
+            high_h = data.features.high * band_height
+            dpg.draw_rectangle(
+                (high_x, band_height - high_h + 4), (high_x + band_width, band_height + 4),
+                fill=(50, 200, 255, 230),
+                parent=parent
+            )
+            
+            # Bands separator line
+            dpg.draw_line((400, 0), (400, viz_height), color=(50, 50, 70), thickness=1, parent=parent)
+            
+            # === Section 4: Beat Pulse Indicator (shows beat position and tempo) ===
+            pulse_x = 405
+            pulse_width = 92
+            pulse_center_x = pulse_x + pulse_width / 2
+            pulse_center_y = viz_height / 2
+            
+            # Beat position as expanding/contracting circle
+            beat_pos = data.beat_position  # 0-1 within beat
+            
+            # Pulse size: large at beat start, shrinks through beat
+            max_radius = min(pulse_width, viz_height) / 2 - 4
+            pulse_radius = max_radius * (1.0 - beat_pos * 0.6)
+            
+            # Color intensity based on beat position
+            intensity = int(255 * (1.0 - beat_pos * 0.7))
+            
+            # Draw outer glow
+            if pulse_radius > 5:
+                dpg.draw_circle(
+                    (pulse_center_x, pulse_center_y), pulse_radius + 3,
+                    fill=(intensity // 3, intensity // 2, intensity, 100),
+                    parent=parent
+                )
+            
+            # Draw main pulse circle
+            dpg.draw_circle(
+                (pulse_center_x, pulse_center_y), pulse_radius,
+                fill=(intensity // 2, intensity, intensity // 2, 200),
+                color=(200, 255, 200, intensity),
+                thickness=2,
+                parent=parent
+            )
+            
+            # Draw beat position arc (shows progress through beat)
+            arc_radius = max_radius + 2
+            arc_angle = beat_pos * 360
+            if arc_angle > 5:
+                # Draw arc as small line segments
+                import math
+                prev_x = pulse_center_x + arc_radius
+                prev_y = pulse_center_y
+                for angle in range(0, int(arc_angle), 15):
+                    rad = math.radians(angle - 90)  # Start from top
+                    x = pulse_center_x + arc_radius * math.cos(rad)
+                    y = pulse_center_y + arc_radius * math.sin(rad)
+                    dpg.draw_line(
+                        (prev_x, prev_y), (x, y),
+                        color=(255, 200, 100, 200),
+                        thickness=3,
+                        parent=parent
+                    )
+                    prev_x, prev_y = x, y
         
         if self.dmx_controller:
             channels = self.dmx_controller.get_all_channels()
