@@ -4,7 +4,7 @@ numpy>=1.24.0
 
 # Real-time Audio Analysis (required)
 PyAudioWPatch>=0.2.12  # WASAPI loopback support on Windows
-madmom>=0.16.1         # Neural network beat/tempo detection (RNN + DBN)
+madmom @ git+https://github.com/CPJKU/madmom.git  # Neural network beat/tempo detection (RNN + DBN)
 
 # DMX Control
 pyftdi>=0.54.0         # FTDI-based DMX interfaces
