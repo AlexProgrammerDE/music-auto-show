@@ -616,7 +616,7 @@ class EffectsEngine:
         if not profile.dual_color_map or len(profile.dual_color_map) < 3:
             return
         
-        # Get the brightness/saturation from current state
+        # Get the brightness from current state
         max_brightness = max(state.red, state.green, state.blue, 1)
         brightness = max_brightness / 255.0
         
@@ -630,28 +630,24 @@ class EffectsEngine:
             # Check primary color match
             if primary_hue is not None:
                 primary_dist = self._hue_distance(target_hue, primary_hue)
-                # Closer hue = higher contribution (use gaussian-like falloff)
-                primary_contrib = max(0, 1.0 - primary_dist * 3.0)
+                # Use a steeper falloff - only contribute if hue is close
+                # Distance of 0.167 (60 degrees) = 0 contribution
+                primary_contrib = max(0, 1.0 - primary_dist * 6.0)
                 contribution = max(contribution, primary_contrib)
             
             # Check secondary color match
             if secondary_hue is not None:
                 secondary_dist = self._hue_distance(target_hue, secondary_hue)
-                secondary_contrib = max(0, 1.0 - secondary_dist * 3.0)
+                secondary_contrib = max(0, 1.0 - secondary_dist * 6.0)
                 contribution = max(contribution, secondary_contrib)
             
-            # If secondary is None (white), it can contribute to any bright color
-            if secondary_hue is None:
-                # White contributes when we want high brightness/low saturation
-                # For now, give it a base contribution
-                contribution = max(contribution, 0.3)
+            # White (None) only contributes when we're close to the primary color
+            # Don't add white contribution independently
             
             channel_values.append(contribution)
         
-        # Normalize so at least one channel is at full brightness
-        max_contrib = max(channel_values) if channel_values else 1.0
-        if max_contrib > 0:
-            channel_values = [v / max_contrib for v in channel_values]
+        # Don't normalize - let channels that don't match stay dark
+        # This ensures red/orange only lights up the Red/Yellow channel
         
         # Apply brightness and convert to 0-255
         state.red = int(channel_values[0] * brightness * 255) if len(channel_values) > 0 else 0
