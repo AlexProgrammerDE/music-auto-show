@@ -33,7 +33,16 @@ try:
     AUBIO_AVAILABLE = True
 except ImportError:
     AUBIO_AVAILABLE = False
-    logger.warning("aubio not available - beat/tempo detection will be limited")
+
+# Fallback to librosa if aubio not available
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
+
+if not AUBIO_AVAILABLE and not LIBROSA_AVAILABLE:
+    logger.warning("Neither aubio nor librosa available - beat/tempo detection will be disabled")
 
 try:
     from media_info import MediaInfoProvider, MediaInfo
@@ -161,19 +170,23 @@ class AudioAnalyzer:
         self._aubio_tempo = None
         self._aubio_onset = None
         if AUBIO_AVAILABLE:
-            # hop_size should match buffer_size for real-time processing
-            hop_size = buffer_size
-            win_size = hop_size * 2  # 2x for good accuracy
-            self._aubio_tempo = aubio.tempo("default", win_size, hop_size, sample_rate)
-            self._aubio_onset = aubio.onset("default", win_size, hop_size, sample_rate)
-            logger.info(f"Aubio initialized: hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
+            # Use standard aubio settings for better beat detection
+            # hop_size=512 with win_size=1024 is the recommended default
+            # Using "specdiff" method which is better for beat detection than "default"
+            hop_size = 512
+            win_size = 1024
+            self._aubio_tempo = aubio.tempo("specdiff", win_size, hop_size, sample_rate)
+            self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
+            logger.info(f"Aubio initialized: method=specdiff, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
         
         # Beat tracking state
         self._last_beat_time = 0.0
         self._beat_count = 0
-        self._tempo_history = deque(maxlen=16)  # Rolling tempo estimates
+        self._tempo_history = deque(maxlen=32)  # Rolling tempo estimates (increased for stability)
         self._onset_history = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 120.0  # Current estimated tempo
+        self._raw_tempo_history = deque(maxlen=64)  # Raw BPM values for octave error correction
+        self._beat_intervals: deque[float] = deque(maxlen=16)  # Recent beat intervals for validation
         
         # Onset detection state
         self._prev_onset_strength = 0.0
@@ -332,8 +345,8 @@ class AudioAnalyzer:
             print("PyAudio not available. Install with: pip install PyAudioWPatch")
             return False
         
-        if not AUBIO_AVAILABLE:
-            print("aubio not available. Install with: pip install aubio")
+        if not AUBIO_AVAILABLE and not LIBROSA_AVAILABLE:
+            print("Neither aubio nor librosa available. Install with: pip install aubio (or librosa as fallback)")
             return False
         
         try:
@@ -529,14 +542,28 @@ class AudioAnalyzer:
             is_beat = self._aubio_tempo(signal)
             if is_beat:
                 beat_detected = True
+                
+                # Track beat intervals for octave error correction
+                if self._last_beat_time > 0:
+                    interval = current_time - self._last_beat_time
+                    if 0.2 < interval < 2.0:  # Reasonable interval (30-300 BPM range)
+                        self._beat_intervals.append(interval)
+                
                 self._last_beat_time = current_time
                 self._beat_count += 1
                 
                 # Get current BPM estimate from aubio
-                bpm = self._aubio_tempo.get_bpm()
-                if 30 <= bpm <= 250:  # Sanity check
-                    self._tempo_history.append(bpm)
-                    if len(self._tempo_history) >= 2:
+                raw_bpm = self._aubio_tempo.get_bpm()
+                if 30 <= raw_bpm <= 300:  # Wide range for raw values
+                    self._raw_tempo_history.append(raw_bpm)
+                    
+                    # Apply octave error correction
+                    # Aubio tends to detect at half-time when background drums play on off-beats
+                    corrected_bpm = self._correct_tempo_octave(raw_bpm)
+                    
+                    self._tempo_history.append(corrected_bpm)
+                    if len(self._tempo_history) >= 4:
+                        # Use median for stability against outliers
                         self._current_tempo = float(np.median(list(self._tempo_history)))
             
             # Onset detection
@@ -740,6 +767,79 @@ class AudioAnalyzer:
         # Use sum of squared magnitudes (power) for better energy representation
         band_power = np.sum(fft_data[low_idx:high_idx] ** 2)
         return float(band_power)
+    
+    def _correct_tempo_octave(self, raw_bpm: float) -> float:
+        """
+        Correct octave errors in tempo estimation.
+        
+        Aubio's beat tracker can sometimes detect at half or double the actual tempo,
+        especially when there are strong off-beat elements (like hi-hats or background drums
+        on every second beat). This function uses multiple heuristics to correct these errors:
+        
+        1. Normalize to a reasonable "human" tempo range (70-175 BPM)
+        2. Use beat interval analysis to validate the tempo
+        3. Prefer tempos in the common range (90-150 BPM) when ambiguous
+        
+        Args:
+            raw_bpm: The raw BPM value from aubio
+            
+        Returns:
+            Corrected BPM value
+        """
+        # Target range for most music (preferred tempo range)
+        # Most music falls between 70-175 BPM
+        target_min = 70.0
+        target_max = 175.0
+        preferred_min = 90.0  # Sweet spot lower bound
+        preferred_max = 150.0  # Sweet spot upper bound
+        
+        bpm = raw_bpm
+        
+        # First pass: bring extremely low/high values into a reasonable range
+        while bpm < 40:
+            bpm *= 2
+        while bpm > 220:
+            bpm /= 2
+        
+        # Check if we have enough beat intervals to validate
+        if len(self._beat_intervals) >= 4:
+            # Calculate BPM from actual beat intervals
+            intervals = list(self._beat_intervals)
+            median_interval = float(np.median(intervals))
+            interval_bpm = 60.0 / median_interval if median_interval > 0 else bpm
+            
+            # If interval-based BPM is roughly double or half of detected BPM,
+            # the detected BPM is likely wrong
+            ratio = bpm / interval_bpm if interval_bpm > 0 else 1.0
+            
+            # If ratio is close to 2, we're detecting at double time
+            if 1.8 < ratio < 2.2:
+                bpm /= 2
+            # If ratio is close to 0.5, we're detecting at half time
+            elif 0.45 < ratio < 0.55:
+                bpm *= 2
+        
+        # Second pass: normalize to target range
+        # If BPM is too low, double it; if too high, halve it
+        if bpm < target_min and bpm * 2 <= target_max * 1.2:
+            bpm *= 2
+        elif bpm > target_max and bpm / 2 >= target_min * 0.8:
+            bpm /= 2
+        
+        # Third pass: prefer the "sweet spot" range when we have a choice
+        # This helps with ambiguous cases like 80 BPM vs 160 BPM
+        if bpm < preferred_min and bpm * 2 <= preferred_max:
+            doubled = bpm * 2
+            # Prefer doubled if it's in the sweet spot
+            if preferred_min <= doubled <= preferred_max:
+                bpm = doubled
+        elif bpm > preferred_max and bpm / 2 >= preferred_min:
+            halved = bpm / 2
+            # Prefer halved if it's in the sweet spot
+            if preferred_min <= halved <= preferred_max:
+                bpm = halved
+        
+        return bpm
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
         """Normalize frequency bands with adaptive per-band scaling."""
