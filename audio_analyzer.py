@@ -222,6 +222,11 @@ class AudioAnalyzer:
         self._onset_strength_history: deque[float] = deque(maxlen=64)  # For visualization
         self._onset_threshold = 0.3  # Threshold for onset detection from activations
         
+        # Fallback tempo detection (energy-based, used when madmom unavailable)
+        self._energy_peak_times: deque[float] = deque(maxlen=32)  # Times of energy peaks
+        self._prev_energy = 0.0
+        self._energy_threshold = 0.6  # Threshold for peak detection (relative to max)
+        
         # Adaptive energy scaling (auto-gain)
         self._max_rms_observed = 0.01  # Start with small value, will grow
         self._rms_decay = 0.9995  # Slowly decay max to adapt to quieter sections
@@ -570,6 +575,9 @@ class AudioAnalyzer:
         # Process with madmom when we have enough samples for a frame
         if self._madmom_beat_processor is not None and len(self._audio_buffer) >= self._madmom_hop_size:
             self._process_madmom_beat_detection(current_time)
+        else:
+            # Fallback: energy-based tempo estimation when madmom not available
+            self._fallback_tempo_detection(rms, current_time)
         
         # Beat detection: use madmom activations or predict based on tempo
         if self._current_tempo > 0:
@@ -815,6 +823,48 @@ class AudioAnalyzer:
             bpm *= 2
         
         return bpm
+    
+    def _fallback_tempo_detection(self, rms: float, current_time: float) -> None:
+        """
+        Simple energy-based tempo detection when madmom is not available.
+        Detects peaks in energy and estimates tempo from peak intervals.
+        """
+        # Normalize energy
+        normalized_energy = rms / self._max_rms_observed if self._max_rms_observed > 0 else 0
+        
+        # Detect energy peaks (local maxima above threshold)
+        is_peak = (normalized_energy > self._energy_threshold and 
+                   normalized_energy > self._prev_energy and
+                   len(self._energy_peak_times) == 0 or 
+                   (len(self._energy_peak_times) > 0 and 
+                    current_time - self._energy_peak_times[-1] > 0.2))  # Min 200ms between peaks
+        
+        if is_peak:
+            self._energy_peak_times.append(current_time)
+            self._onset_history.append(current_time)
+            
+            # Estimate tempo from recent peaks
+            if len(self._energy_peak_times) >= 4:
+                peak_times = list(self._energy_peak_times)[-8:]  # Use last 8 peaks
+                intervals = np.diff(peak_times)
+                
+                if len(intervals) > 0:
+                    # Filter out outliers (intervals too short or too long)
+                    valid_intervals = [i for i in intervals if 0.25 < i < 2.0]  # 30-240 BPM range
+                    
+                    if valid_intervals:
+                        avg_interval = np.median(valid_intervals)
+                        if avg_interval > 0:
+                            tempo = 60.0 / avg_interval
+                            # Apply octave correction
+                            tempo = self._correct_tempo_octave(tempo, 0.5)
+                            
+                            if 60 <= tempo <= 200:
+                                self._tempo_history.append(tempo)
+                                if self._tempo_history:
+                                    self._current_tempo = float(np.median(list(self._tempo_history)))
+        
+        self._prev_energy = normalized_energy
     
     def _process_madmom_beat_detection(self, current_time: float) -> None:
         """
