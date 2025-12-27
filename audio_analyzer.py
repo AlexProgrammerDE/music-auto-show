@@ -1,7 +1,7 @@
 """
 Real-time audio analyzer that captures system audio and extracts audio features.
 Supports both WASAPI loopback (system audio) and microphone input.
-Uses PyAudioWPatch for WASAPI loopback capture and aubio for real-time beat/tempo detection.
+Uses PyAudioWPatch for WASAPI loopback capture and madmom for neural network beat/tempo detection.
 """
 import logging
 import threading
@@ -28,21 +28,16 @@ except ImportError:
     except ImportError:
         PYAUDIO_AVAILABLE = False
 
+# Madmom for neural network beat tracking (RNN + DBN)
 try:
-    import aubio
-    AUBIO_AVAILABLE = True
+    from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
+    from madmom.audio.signal import SignalProcessor, FramedSignalProcessor
+    from madmom.audio.spectrogram import LogarithmicFilteredSpectrogramProcessor
+    from madmom.processors import SequentialProcessor
+    MADMOM_AVAILABLE = True
 except ImportError:
-    AUBIO_AVAILABLE = False
-
-# Fallback to librosa if aubio not available
-try:
-    import librosa
-    LIBROSA_AVAILABLE = True
-except ImportError:
-    LIBROSA_AVAILABLE = False
-
-if not AUBIO_AVAILABLE and not LIBROSA_AVAILABLE:
-    logger.warning("Neither aubio nor librosa available - beat/tempo detection will be disabled")
+    MADMOM_AVAILABLE = False
+    logger.warning("madmom not available - beat/tempo detection will be disabled")
 
 try:
     from media_info import MediaInfoProvider, MediaInfo
@@ -166,13 +161,30 @@ class AudioAnalyzer:
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[AnalysisData], None]] = []
         
-        # Aubio for onset detection only (not tempo - librosa is more accurate)
-        self._aubio_onset = None
-        if AUBIO_AVAILABLE:
-            hop_size = buffer_size
-            win_size = buffer_size * 2
-            self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
-            logger.info(f"Aubio onset detector initialized: method=specflux, hop_size={hop_size}, win_size={win_size}")
+        # Madmom neural network beat tracking (RNN + DBN online mode)
+        self._madmom_beat_processor = None
+        self._madmom_dbn_processor = None
+        self._madmom_fps = 100  # Frames per second for madmom processing
+        if MADMOM_AVAILABLE:
+            try:
+                # RNNBeatProcessor with online mode for streaming audio
+                self._madmom_beat_processor = RNNBeatProcessor(
+                    online=True,
+                    fps=self._madmom_fps,
+                    nn_files=None  # Use default LSTM models
+                )
+                # DBNBeatTrackingProcessor for probabilistic beat decoding
+                self._madmom_dbn_processor = DBNBeatTrackingProcessor(
+                    min_bpm=60,
+                    max_bpm=200,
+                    fps=self._madmom_fps,
+                    online=True
+                )
+                logger.info(f"Madmom beat tracker initialized: fps={self._madmom_fps}, online=True")
+            except Exception as e:
+                logger.warning(f"Failed to initialize madmom processors: {e}")
+                self._madmom_beat_processor = None
+                self._madmom_dbn_processor = None
         
         # Beat tracking state
         self._last_beat_time = 0.0
@@ -180,16 +192,16 @@ class AudioAnalyzer:
         self._onset_history: deque[float] = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 120.0  # Current estimated tempo
         
-        # Librosa-based tempo estimation (works for any BPM, more accurate than aubio)
-        self._audio_buffer: deque[float] = deque(maxlen=sample_rate * 4)  # 4 seconds of audio
-        self._last_tempo_update = 0.0
-        self._tempo_update_interval = 1.0  # Update tempo every 1 second using librosa
-        self._tempo_history: deque[float] = deque(maxlen=8)  # Recent tempo estimates
-        self._tempo_history: deque[float] = deque(maxlen=8)  # Recent tempo estimates
+        # Audio buffer for madmom processing (needs chunks at madmom's fps rate)
+        self._madmom_hop_size = sample_rate // self._madmom_fps  # Samples per frame
+        self._audio_buffer: deque[float] = deque(maxlen=sample_rate * 2)  # 2 seconds buffer
+        self._beat_activations: deque[float] = deque(maxlen=self._madmom_fps * 4)  # 4 sec of activations
+        self._tempo_history: deque[float] = deque(maxlen=16)  # Recent tempo estimates
         
-        # Onset detection state
+        # Onset detection state (derived from beat activations)
         self._prev_onset_strength = 0.0
         self._onset_strength_history: deque[float] = deque(maxlen=64)  # For visualization
+        self._onset_threshold = 0.3  # Threshold for onset detection from activations
         
         # Adaptive energy scaling (auto-gain)
         self._max_rms_observed = 0.01  # Start with small value, will grow
@@ -344,8 +356,8 @@ class AudioAnalyzer:
             print("PyAudio not available. Install with: pip install PyAudioWPatch")
             return False
         
-        if not AUBIO_AVAILABLE and not LIBROSA_AVAILABLE:
-            print("Neither aubio nor librosa available. Install with: pip install aubio (or librosa as fallback)")
+        if not MADMOM_AVAILABLE:
+            print("madmom not available. Install with: pip install madmom")
             return False
         
         try:
@@ -533,42 +545,38 @@ class AudioAnalyzer:
         beat_detected = False
         onset_detected = False
         
-        # Add audio to buffer for librosa tempo analysis
+        # Add audio to buffer for madmom processing
         self._audio_buffer.extend(audio_data.tolist())
         
-        # Periodically update tempo using librosa (more accurate than aubio)
-        if LIBROSA_AVAILABLE and current_time - self._last_tempo_update > self._tempo_update_interval:
-            self._update_tempo_librosa()
-            self._last_tempo_update = current_time
+        # Process with madmom when we have enough samples for a frame
+        if self._madmom_beat_processor is not None and len(self._audio_buffer) >= self._madmom_hop_size:
+            self._process_madmom_beat_detection(current_time)
         
-        # Beat detection: predict beats based on librosa tempo
-        # This works for any BPM including very fast (500+) or slow songs
+        # Beat detection: use madmom activations or predict based on tempo
         if self._current_tempo > 0:
             beat_interval = 60.0 / self._current_tempo
             time_since_beat = current_time - self._last_beat_time
             
-            # Predict beat based on tempo
+            # Check if madmom detected a beat, or predict based on tempo
             if time_since_beat >= beat_interval * 0.95:  # Small tolerance for timing
                 beat_detected = True
                 self._last_beat_time = current_time
                 self._beat_count += 1
         
-        # Onset detection using aubio (for visual effects, independent of beat)
-        if self._aubio_onset is not None:
-            signal = audio_data.astype(np.float32)
-            is_onset = self._aubio_onset(signal)
-            if is_onset:
-                onset_detected = True
-                self._onset_history.append(current_time)
-            
-            # Get onset strength for visualization
-            onset_strength = self._aubio_onset.get_descriptor()
-            # Normalize to 0-1 range
-            normalized_strength = min(1.0, float(onset_strength) / 10.0)
+        # Onset detection from beat activations (madmom provides this)
+        if self._beat_activations:
+            # Use the latest activation value for onset strength
+            onset_strength = self._beat_activations[-1] if self._beat_activations else 0.0
+            normalized_strength = min(1.0, float(onset_strength))
             self._onset_strength_history.append(normalized_strength)
             self._prev_onset_strength = normalized_strength
+            
+            # Detect onset when activation exceeds threshold
+            if normalized_strength > self._onset_threshold:
+                onset_detected = True
+                self._onset_history.append(current_time)
         else:
-            # Fallback: simple energy-based detection if aubio not available
+            # Fallback: simple energy-based detection if madmom not processing yet
             normalized_rms = rms / self._max_rms_observed
             self._onset_strength_history.append(normalized_rms)
             self._prev_onset_strength = normalized_rms
@@ -789,37 +797,59 @@ class AudioAnalyzer:
         
         return bpm
     
-    def _update_tempo_librosa(self) -> None:
-        """Update tempo estimate using librosa beat tracking (more accurate than aubio)."""
-        if len(self._audio_buffer) < self.sample_rate:  # Need at least 1 second
+    def _process_madmom_beat_detection(self, current_time: float) -> None:
+        """
+        Process audio with madmom's RNN beat processor and DBN tracking.
+        Uses online mode for real-time streaming beat detection.
+        """
+        if self._madmom_beat_processor is None or self._madmom_dbn_processor is None:
             return
         
         try:
-            # Convert buffer to numpy array
-            audio_array = np.array(list(self._audio_buffer), dtype=np.float32)
+            # Extract a frame's worth of audio for processing
+            frame_samples = list(self._audio_buffer)[:self._madmom_hop_size]
+            if len(frame_samples) < self._madmom_hop_size:
+                return
             
-            # Use librosa to estimate tempo
-            tempo, _ = librosa.beat.beat_track(
-                y=audio_array,
-                sr=self.sample_rate,
-                units='time'
-            )
+            # Remove processed samples from buffer
+            for _ in range(min(self._madmom_hop_size, len(self._audio_buffer))):
+                self._audio_buffer.popleft()
             
-            # librosa may return an array, get scalar
-            if hasattr(tempo, '__len__'):
-                tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
-            else:
-                tempo = float(tempo)
+            # Convert to numpy array (madmom expects float32)
+            audio_frame = np.array(frame_samples, dtype=np.float32)
             
-            # Sanity check tempo range (60-200 BPM typical)
-            if 60 <= tempo <= 200:
-                self._tempo_history.append(tempo)
-                # Smooth tempo updates using median
-                if self._tempo_history:
-                    self._current_tempo = float(np.median(list(self._tempo_history)))
-                    logger.debug(f"Librosa tempo: {tempo:.1f} BPM, current: {self._current_tempo:.1f} BPM")
+            # Get beat activation from RNN (online mode processes frame by frame)
+            # The RNN outputs activation values indicating beat probability
+            activation = self._madmom_beat_processor.process(audio_frame)
+            
+            if activation is not None and len(activation) > 0:
+                # Store activation for visualization and onset detection
+                act_value = float(np.mean(activation)) if hasattr(activation, '__len__') else float(activation)
+                self._beat_activations.append(act_value)
+                
+                # Use DBN processor to decode beats from activations
+                # This provides probabilistic beat tracking with tempo estimation
+                if len(self._beat_activations) >= self._madmom_fps // 2:  # Need some context
+                    activations_array = np.array(list(self._beat_activations), dtype=np.float32)
+                    beats = self._madmom_dbn_processor.process(activations_array)
+                    
+                    # Update tempo from detected beats
+                    if beats is not None and len(beats) >= 2:
+                        # Calculate tempo from beat intervals
+                        beat_times = np.array(beats)
+                        intervals = np.diff(beat_times)
+                        if len(intervals) > 0:
+                            avg_interval = np.mean(intervals)
+                            if avg_interval > 0:
+                                tempo = 60.0 / avg_interval
+                                # Sanity check tempo range
+                                if 60 <= tempo <= 200:
+                                    self._tempo_history.append(tempo)
+                                    if self._tempo_history:
+                                        self._current_tempo = float(np.median(list(self._tempo_history)))
+                                        logger.debug(f"Madmom tempo: {tempo:.1f} BPM, current: {self._current_tempo:.1f} BPM")
         except Exception as e:
-            logger.debug(f"Librosa tempo estimation failed: {e}")
+            logger.debug(f"Madmom beat detection failed: {e}")
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
         """Normalize frequency bands with adaptive per-band scaling."""

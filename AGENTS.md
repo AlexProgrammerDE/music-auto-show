@@ -190,8 +190,10 @@ FixtureState.strobe    # Strobe speed 0-255
 ## Python Version & Dependencies
 
 - **Python**: 3.10+ required (uses modern type hints)
-- **Key deps**: pydantic>=2.0, numpy, librosa, dearpygui
+- **Key deps**: pydantic>=2.0, numpy, madmom, dearpygui
 - **Platform-specific**: PyAudioWPatch (Windows), PyAudio (Linux)
+
+Note: madmom provides neural network beat tracking (RNN + DBN) with online mode for real-time processing.
 
 ## Common Gotchas
 

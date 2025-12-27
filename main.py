@@ -65,6 +65,12 @@ def check_dependencies() -> dict:
     except ImportError:
         deps['numpy'] = False
     
+    try:
+        import madmom
+        deps['madmom'] = True
+    except ImportError:
+        deps['madmom'] = False
+    
     return deps
 
 
@@ -73,7 +79,7 @@ def print_dependency_status(deps: dict) -> None:
     print("Dependency Status:")
     print("-" * 40)
     
-    required = ['pydantic', 'numpy']
+    required = ['pydantic', 'numpy', 'madmom']
     optional_dmx = ['pyftdi', 'pyserial']
     optional_gui = ['dearpygui']
     

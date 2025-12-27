@@ -4,12 +4,12 @@ channels:
   - defaults
 dependencies:
   - python=3.11
-  - aubio
   - numpy
   - pyaudio
   - pip
   - pip:
     - pydantic>=2.0.0
+    - madmom>=0.16.1  # Neural network beat/tempo detection
     - pyftdi>=0.54.0
     - pyserial>=3.5
     - dearpygui>=1.10.0
