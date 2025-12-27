@@ -286,7 +286,7 @@ class AudioAnalyzer:
             p.terminate()
             return None
         except Exception as e:
-            print(f"Error finding loopback device: {e}")
+            logger.error(f"Error finding loopback device: {e}")
             return None
     
     def list_devices(self, input_only: bool = True) -> list[dict]:
@@ -357,7 +357,7 @@ class AudioAnalyzer:
             return True
         
         if not PYAUDIO_AVAILABLE:
-            print("PyAudio not available. Install with: pip install PyAudioWPatch")
+            logger.error("PyAudio not available. Install with: pip install PyAudioWPatch")
             return False
         
         if not MADMOM_AVAILABLE:
@@ -468,7 +468,7 @@ class AudioAnalyzer:
             return True
             
         except Exception as e:
-            print(f"Failed to start audio analyzer: {e}")
+            logger.error(f"Failed to start audio analyzer: {e}")
             self._cleanup()
             return False
     

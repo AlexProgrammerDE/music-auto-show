@@ -76,8 +76,8 @@ def check_dependencies() -> dict:
 
 def print_dependency_status(deps: dict) -> None:
     """Print dependency status."""
-    print("Dependency Status:")
-    print("-" * 40)
+    logger.info("Dependency Status:")
+    logger.info("-" * 40)
     
     required = ['pydantic', 'numpy', 'madmom']
     optional_dmx = ['pyftdi', 'pyserial']
@@ -89,31 +89,30 @@ def print_dependency_status(deps: dict) -> None:
         status = "OK" if deps.get(dep) else "MISSING (required)"
         if not deps.get(dep):
             all_ok = False
-        print(f"  {dep}: {status}")
+        logger.info(f"  {dep}: {status}")
     
-    print()
-    print("DMX Support:")
+    logger.info("")
+    logger.info("DMX Support:")
     dmx_ok = any(deps.get(d) for d in optional_dmx)
     for dep in optional_dmx:
         status = "OK" if deps.get(dep) else "not installed"
-        print(f"  {dep}: {status}")
+        logger.info(f"  {dep}: {status}")
     if not dmx_ok:
-        print("  (Simulation mode will be used)")
+        logger.info("  (Simulation mode will be used)")
     
-    print()
-    print("GUI Support:")
+    logger.info("")
+    logger.info("GUI Support:")
     for dep in optional_gui:
         status = "OK" if deps.get(dep) else "not installed"
-        print(f"  {dep}: {status}")
+        logger.info(f"  {dep}: {status}")
     if not deps.get('dearpygui'):
-        print("  (Only headless mode available)")
+        logger.info("  (Only headless mode available)")
     
-    print("-" * 40)
+    logger.info("-" * 40)
     
     if not all_ok:
-        print("\nInstall missing dependencies with:")
-        print("  pip install -r requirements.txt")
-        print()
+        logger.warning("Install missing dependencies with:")
+        logger.warning("  pip install -r requirements.txt")
 
 
 def main():
@@ -164,19 +163,19 @@ Examples:
         from audio_analyzer import AudioAnalyzer
         analyzer = AudioAnalyzer()
         devices = analyzer.list_devices()
-        print("\nAvailable Audio Input Devices:")
-        print("-" * 60)
+        logger.info("Available Audio Input Devices:")
+        logger.info("-" * 60)
         for dev in devices:
             loopback_tag = " [LOOPBACK]" if dev.get('is_loopback') else ""
-            print(f"  [{dev['index']}] {dev['name']}{loopback_tag}")
-            print(f"      Channels: {dev['channels']}, Sample Rate: {dev['sample_rate']} Hz")
-        print("-" * 60)
-        print("\nUse --microphone to use microphone input instead of system loopback")
+            logger.info(f"  [{dev['index']}] {dev['name']}{loopback_tag}")
+            logger.info(f"      Channels: {dev['channels']}, Sample Rate: {dev['sample_rate']} Hz")
+        logger.info("-" * 60)
+        logger.info("Use --microphone to use microphone input instead of system loopback")
         return
     
     # Check required dependencies
     if not deps.get('pydantic'):
-        print("Error: pydantic is required. Install with: pip install pydantic")
+        logger.error("pydantic is required. Install with: pip install pydantic")
         sys.exit(1)
     
     # Create example config
@@ -188,7 +187,7 @@ Examples:
     # Headless mode
     if args.headless or args.config:
         if not args.config:
-            print("Error: Configuration file required for headless mode")
+            logger.error("Configuration file required for headless mode")
             sys.exit(1)
         
         from headless import HeadlessRunner
@@ -209,9 +208,9 @@ Examples:
     
     # GUI mode
     if not deps.get('dearpygui'):
-        print("Error: Dear PyGui is required for GUI mode.")
-        print("Install with: pip install dearpygui")
-        print("Or use headless mode: python main.py --headless config.json")
+        logger.error("Dear PyGui is required for GUI mode.")
+        logger.error("Install with: pip install dearpygui")
+        logger.error("Or use headless mode: python main.py --headless config.json")
         sys.exit(1)
     
     from gui import MusicAutoShowGUI

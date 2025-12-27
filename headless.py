@@ -47,12 +47,12 @@ class HeadlessRunner:
         """Load configuration from file."""
         try:
             self.config = ShowConfig.load(self.config_path)
-            print(f"Loaded config: {self.config.name}")
-            print(f"  Fixtures: {len(self.config.fixtures)}")
-            print(f"  Mode: {self.config.effects.mode.value}")
+            logger.info(f"Loaded config: {self.config.name}")
+            logger.info(f"  Fixtures: {len(self.config.fixtures)}")
+            logger.info(f"  Mode: {self.config.effects.mode.value}")
             return True
         except Exception as e:
-            print(f"Failed to load config: {e}")
+            logger.error(f"Failed to load config: {e}")
             return False
     
     def start(self) -> bool:
@@ -231,7 +231,7 @@ class HeadlessRunner:
     
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals."""
-        print("\nShutting down...")
+        logger.info("Shutting down...")
         self._running = False
 
 
@@ -291,7 +291,7 @@ def create_example_config(output_path: str) -> None:
     config.effects.movement_enabled = True
     
     config.save(output_path)
-    print(f"Example config saved to: {output_path}")
+    logger.info(f"Example config saved to: {output_path}")
 
 
 def main():
@@ -318,11 +318,11 @@ def main():
     
     if not args.config:
         parser.print_help()
-        print("\nError: Configuration file required")
+        logger.error("Configuration file required")
         sys.exit(1)
     
     if not Path(args.config).exists():
-        print(f"Error: Configuration file not found: {args.config}")
+        logger.error(f"Configuration file not found: {args.config}")
         sys.exit(1)
     
     simulate_dmx = args.simulate_dmx or args.simulate

@@ -183,16 +183,14 @@ class MediaInfoProvider:
                 logger.info("Windows media backend initialized successfully")
             except ImportError as e:
                 logger.error(f"Windows media backend not available: {e}")
-                print(f"Windows media backend not available: {e}")
-                print("Install with: pip install winrt-Windows.Media.Control")
+                logger.error("Install with: pip install winrt-Windows.Media.Control")
                 self._backend = _DummyBackend()
         elif sys.platform == 'linux':
             try:
                 self._backend = _LinuxMediaBackend()
                 logger.info("Linux MPRIS backend initialized successfully")
             except ImportError:
-                logger.error("dbus-python not available")
-                print("dbus-python not available. Install with: pip install dbus-python")
+                logger.error("dbus-python not available. Install with: pip install dbus-python")
                 self._backend = _DummyBackend()
         elif sys.platform == 'darwin':
             self._backend = _MacOSMediaBackend()
@@ -337,8 +335,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                 logger.info("winrt DataReader available for thumbnail extraction")
             except ImportError:
                 self._DataReader = None
-                logger.warning("Album art extraction disabled - missing winrt-Windows.Storage.Streams")
-                print("Album art colors disabled. To enable: pip install winrt-Windows.Storage.Streams")
+                logger.warning("Album art extraction disabled - missing winrt-Windows.Storage.Streams. To enable: pip install winrt-Windows.Storage.Streams")
         except ImportError:
             # Try alternative import for winsdk
             try:
@@ -356,8 +353,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                     logger.info("winsdk DataReader available for thumbnail extraction")
                 except ImportError:
                     self._DataReader = None
-                    logger.warning("Album art extraction disabled - missing winsdk storage module")
-                    print("Album art colors disabled. To enable: pip install winsdk")
+                    logger.warning("Album art extraction disabled - missing winsdk storage module. To enable: pip install winsdk")
             except ImportError as e:
                 self._last_error = f"winrt import failed: {e}"
                 raise ImportError(f"Neither winrt nor winsdk available: {e}")
@@ -703,30 +699,33 @@ def get_current_media() -> MediaInfo:
 
 
 if __name__ == "__main__":
+    # Configure logging for test
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    
     # Test the module
-    print("Testing media info provider...")
-    print(f"Platform: {sys.platform}")
-    print(f"PIL available: {PIL_AVAILABLE}")
+    logger.info("Testing media info provider...")
+    logger.info(f"Platform: {sys.platform}")
+    logger.info(f"PIL available: {PIL_AVAILABLE}")
     
     provider = MediaInfoProvider()
-    print(f"Backend: {type(provider._backend).__name__}")
+    logger.info(f"Backend: {type(provider._backend).__name__}")
     
     info = get_current_media()
-    print(f"\nCurrent media:")
-    print(f"  Title: {info.title or '(none)'}")
-    print(f"  Artist: {info.artist or '(none)'}")
-    print(f"  Album: {info.album or '(none)'}")
-    print(f"  Playing: {info.is_playing}")
-    print(f"  Source: {info.source_app or '(none)'}")
-    print(f"  Thumbnail: {'Yes' if info.thumbnail_data else 'No'} ({len(info.thumbnail_data) if info.thumbnail_data else 0} bytes)")
-    print(f"  Colors: {format_colors_for_display(info.colors)}")
+    logger.info("Current media:")
+    logger.info(f"  Title: {info.title or '(none)'}")
+    logger.info(f"  Artist: {info.artist or '(none)'}")
+    logger.info(f"  Album: {info.album or '(none)'}")
+    logger.info(f"  Playing: {info.is_playing}")
+    logger.info(f"  Source: {info.source_app or '(none)'}")
+    logger.info(f"  Thumbnail: {'Yes' if info.thumbnail_data else 'No'} ({len(info.thumbnail_data) if info.thumbnail_data else 0} bytes)")
+    logger.info(f"  Colors: {format_colors_for_display(info.colors)}")
     
     # Show error if available (Windows)
     if hasattr(provider._backend, '_last_error') and provider._backend._last_error:
-        print(f"  Last error: {provider._backend._last_error}")
+        logger.info(f"  Last error: {provider._backend._last_error}")
     
     # Continuous test
-    print("\nStarting continuous monitoring (Ctrl+C to stop)...")
+    logger.info("Starting continuous monitoring (Ctrl+C to stop)...")
     try:
         provider.start()
         while True:
@@ -734,10 +733,10 @@ if __name__ == "__main__":
             info = provider.get_info()
             if info.title:
                 colors_str = format_colors_for_display(info.colors)
-                print(f"  Now: {info.artist} - {info.title} [{info.source_app}] {'▶' if info.is_playing else '⏸'}")
-                print(f"       Colors: {colors_str}")
+                logger.info(f"  Now: {info.artist} - {info.title} [{info.source_app}] {'>' if info.is_playing else '||'}")
+                logger.info(f"       Colors: {colors_str}")
             else:
-                print(f"  No media detected (source: {info.source_app or 'none'})")
+                logger.info(f"  No media detected (source: {info.source_app or 'none'})")
     except KeyboardInterrupt:
-        print("\nStopped.")
+        logger.info("Stopped.")
         provider.stop()

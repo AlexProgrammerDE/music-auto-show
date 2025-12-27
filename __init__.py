@@ -1,8 +1,8 @@
 """
-Music Auto Show - DMX Light Show Synchronized with Spotify
+Music Auto Show - DMX Light Show Synchronized with Music
 
-A cross-platform Python application that automatically visualizes music
-from Spotify to DMX-controlled lighting fixtures.
+A cross-platform Python application that visualizes system audio
+to DMX-controlled lighting fixtures in real-time.
 """
 
 __version__ = "1.0.0"

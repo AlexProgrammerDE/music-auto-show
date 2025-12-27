@@ -131,7 +131,7 @@ class MusicAutoShowGUI:
     
     def run(self) -> None:
         if not DEARPYGUI_AVAILABLE:
-            print("Dear PyGui not available. Install with: pip install dearpygui")
+            logger.error("Dear PyGui not available. Install with: pip install dearpygui")
             return
         
         dpg.create_context()
@@ -978,7 +978,7 @@ class MusicAutoShowGUI:
                 if dpg.does_item_exist("show_name_input"):
                     dpg.set_value("show_name_input", self.config.name)
             except Exception as e:
-                print(f"Failed to load config: {e}")
+                logger.error(f"Failed to load config: {e}")
     
     def _save_config_dialog(self) -> None:
         with dpg.file_dialog(directory_selector=False, show=True, callback=self._save_config_callback,
@@ -990,7 +990,7 @@ class MusicAutoShowGUI:
             try:
                 self.config.save(app_data['file_path_name'])
             except Exception as e:
-                print(f"Failed to save config: {e}")
+                logger.error(f"Failed to save config: {e}")
 
 
 def run_gui():
