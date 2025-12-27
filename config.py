@@ -645,13 +645,14 @@ def _create_showtec_techno_derby() -> FixtureProfile:
                 name="Pattern Rotation",
                 channel_type=ChannelType.EFFECT,
                 default_value=0,
+                max_value=127,  # Restrict to manual range only
                 capabilities=[
                     ChannelCapability(min_value=0, max_value=0, name="No function", 
                                      usable=True, is_off=True),
                     ChannelCapability(min_value=1, max_value=127, name="Manual rotation position", 
                                      usable=True, is_manual=True),
                     ChannelCapability(min_value=128, max_value=255, name="Auto rotation slow to fast", 
-                                     usable=True, is_auto=True),
+                                     usable=False, is_auto=True),  # Disabled - don't use auto mode
                 ]
             ),
             ChannelConfig(
