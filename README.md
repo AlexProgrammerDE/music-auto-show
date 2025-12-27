@@ -29,12 +29,63 @@ A cross-platform Python application that automatically visualizes system audio t
 
 ## Installation
 
+### Option 1: Conda (Recommended)
+
+Conda is recommended because `aubio` (the beat detection library) requires pre-compiled binaries that aren't available via pip for all Python versions.
+
 ```bash
-# Clone or download the project
-cd music-auto-show
+# 1. Install Miniconda (if you don't have conda)
+# Download from: https://docs.conda.io/en/latest/miniconda.html
+
+# 2. Create environment with Python 3.12
+conda create -n music-auto-show python=3.12 -y
+conda activate music-auto-show
+
+# 3. Install aubio via conda-forge
+conda install -c conda-forge aubio -y
+
+# 4. Install remaining dependencies via pip
+pip install pydantic numpy PyAudioWPatch pyftdi pyserial dearpygui Pillow
+
+# 5. (Windows only) Install media info support
+pip install winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Storage.Streams
+```
+
+**One-liner for Windows:**
+```bash
+conda create -n music-auto-show python=3.12 -y && conda activate music-auto-show && conda install -c conda-forge aubio -y && pip install pydantic numpy PyAudioWPatch pyftdi pyserial dearpygui Pillow winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Storage.Streams
+```
+
+**One-liner for Linux:**
+```bash
+conda create -n music-auto-show python=3.12 -y && conda activate music-auto-show && conda install -c conda-forge aubio -y && pip install pydantic numpy PyAudio pyftdi pyserial dearpygui Pillow dbus-python
+```
+
+### Option 2: pip only (Python 3.10-3.12)
+
+If you have Python 3.10, 3.11, or 3.12, aubio may install directly via pip:
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
 
 # Install dependencies
 pip install -r requirements.txt
+```
+
+> **Note:** pip install of aubio fails on Python 3.13+ on Windows due to missing pre-built wheels. Use conda instead.
+
+### Option 3: Linux with system packages
+
+On Debian/Ubuntu, you can install aubio system-wide:
+
+```bash
+sudo apt install python3-aubio python3-pyaudio
+
+# Then install the rest
+pip install pydantic numpy pyftdi pyserial dearpygui Pillow dbus-python
 ```
 
 ### Dependencies
@@ -43,12 +94,15 @@ pip install -r requirements.txt
 - `pydantic` - Configuration validation
 - `numpy` - Numerical operations
 - `PyAudioWPatch` - WASAPI loopback audio capture (Windows)
+- `PyAudio` - Audio capture (Linux/Mac)
 - `aubio` - Real-time beat/tempo detection
 
 **Optional (but recommended):**
 - `dearpygui` - GUI interface
 - `pyftdi` - FTDI/ENTTEC Open DMX USB support
 - `pyserial` - Generic serial DMX support
+- `Pillow` - Album art color extraction
+- `winrt-*` (Windows) / `dbus-python` (Linux) - Now playing info
 
 ### Windows Audio Setup
 
