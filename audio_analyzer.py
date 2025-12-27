@@ -172,12 +172,11 @@ class AudioAnalyzer:
         if AUBIO_AVAILABLE:
             # hop_size must match buffer_size since that's what we receive from audio callback
             # win_size should be 2x hop_size for good frequency resolution
-            # Using "specdiff" method which is better for beat detection than "default"
             hop_size = buffer_size
             win_size = buffer_size * 2
-            self._aubio_tempo = aubio.tempo("specdiff", win_size, hop_size, sample_rate)
-            self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
-            logger.info(f"Aubio initialized: method=specdiff, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
+            self._aubio_tempo = aubio.tempo("default", win_size, hop_size, sample_rate)
+            self._aubio_onset = aubio.onset("default", win_size, hop_size, sample_rate)
+            logger.info(f"Aubio initialized: method=default, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
         
         # Beat tracking state
         self._last_beat_time = 0.0
@@ -543,7 +542,7 @@ class AudioAnalyzer:
             if is_beat:
                 beat_detected = True
                 
-                # Track beat intervals for octave error correction
+                # Track beat intervals to calculate BPM from actual detected beats
                 if self._last_beat_time > 0:
                     interval = current_time - self._last_beat_time
                     if 0.2 < interval < 2.0:  # Reasonable interval (30-300 BPM range)
@@ -552,18 +551,17 @@ class AudioAnalyzer:
                 self._last_beat_time = current_time
                 self._beat_count += 1
                 
-                # Get current BPM estimate from aubio
-                raw_bpm = self._aubio_tempo.get_bpm()
-                if 30 <= raw_bpm <= 300:  # Wide range for raw values
-                    self._raw_tempo_history.append(raw_bpm)
+                # Calculate BPM from actual beat intervals (more accurate than aubio's get_bpm)
+                if len(self._beat_intervals) >= 2:
+                    # Use median of recent intervals for stability
+                    median_interval = float(np.median(list(self._beat_intervals)))
+                    interval_bpm = 60.0 / median_interval
                     
-                    # Apply octave error correction
-                    # Aubio tends to detect at half-time when background drums play on off-beats
-                    corrected_bpm = self._correct_tempo_octave(raw_bpm)
+                    # Apply octave error correction for extreme values
+                    corrected_bpm = self._correct_tempo_octave(interval_bpm)
                     
                     self._tempo_history.append(corrected_bpm)
                     if len(self._tempo_history) >= 4:
-                        # Use median for stability against outliers
                         self._current_tempo = float(np.median(list(self._tempo_history)))
             
             # Onset detection
