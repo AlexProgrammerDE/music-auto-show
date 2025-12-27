@@ -33,33 +33,19 @@ A cross-platform Python application that automatically visualizes system audio t
 
 Conda is recommended because `aubio` (the beat detection library) requires pre-compiled binaries that aren't available via pip for all Python versions.
 
+**Windows:**
 ```bash
-# 1. Install Miniconda (if you don't have conda)
-# Download from: https://docs.conda.io/en/latest/miniconda.html
-
-# 2. Create environment with Python 3.12
-conda create -n music-auto-show python=3.12 -y
+conda env create -f environment.yml
 conda activate music-auto-show
-
-# 3. Install aubio via conda-forge
-conda install -c conda-forge aubio -y
-
-# 4. Install remaining dependencies via pip
-pip install pydantic numpy PyAudioWPatch pyftdi pyserial dearpygui Pillow
-
-# 5. (Windows only) Install media info support
-pip install winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Storage.Streams
 ```
 
-**One-liner for Windows:**
+**Linux:**
 ```bash
-conda create -n music-auto-show python=3.12 -y && conda activate music-auto-show && conda install -c conda-forge aubio -y && pip install pydantic numpy PyAudioWPatch pyftdi pyserial dearpygui Pillow winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Storage.Streams
+conda env create -f environment-linux.yml
+conda activate music-auto-show
 ```
 
-**One-liner for Linux:**
-```bash
-conda create -n music-auto-show python=3.12 -y && conda activate music-auto-show && conda install -c conda-forge aubio -y && pip install pydantic numpy PyAudio pyftdi pyserial dearpygui Pillow dbus-python
-```
+If you don't have conda, download Miniconda from: https://docs.conda.io/en/latest/miniconda.html
 
 ### Option 2: pip only (Python 3.10-3.12)
 

@@ -1,0 +1,17 @@
+name: music-auto-show
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - aubio
+  - numpy
+  - pyaudio
+  - pip
+  - pip:
+    - pydantic>=2.0.0
+    - pyftdi>=0.54.0
+    - pyserial>=3.5
+    - dearpygui>=1.10.0
+    - Pillow>=10.0.0
+    - dbus-python>=1.3.2

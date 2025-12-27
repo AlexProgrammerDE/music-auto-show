@@ -1,0 +1,20 @@
+name: music-auto-show
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - aubio
+  - numpy
+  - pip
+  - pip:
+    - pydantic>=2.0.0
+    - PyAudioWPatch>=0.2.12  # Windows WASAPI loopback
+    - pyftdi>=0.54.0
+    - pyserial>=3.5
+    - dearpygui>=1.10.0
+    - Pillow>=10.0.0
+    # Windows media info (comment out on Linux/Mac)
+    - winrt-Windows.Media.Control>=2.0.0
+    - winrt-Windows.Foundation>=2.0.0
+    - winrt-Windows.Storage.Streams>=2.0.0
