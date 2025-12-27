@@ -70,6 +70,20 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
     
+    def _on_frame(self) -> None:
+        """
+        Frame callback - called every frame by DearPyGui.
+        Re-registers itself for the next frame.
+        """
+        if not self._running:
+            return
+        
+        # Update GUI with latest state
+        self._update_gui_from_state()
+        
+        # Re-register for next frame (DearPyGui frame callbacks are one-shot)
+        dpg.set_frame_callback(frame=dpg.get_frame_count() + 1, callback=self._on_frame)
+    
     def _update_gui_from_state(self) -> None:
         """
         Update GUI elements from shared state.
@@ -223,11 +237,11 @@ class MusicAutoShowGUI:
         
         self._running = True
         
-        # Use manual render loop to update GUI from main thread
-        while dpg.is_dearpygui_running():
-            # Update GUI with latest state (main thread only)
-            self._update_gui_from_state()
-            dpg.render_dearpygui_frame()
+        # Set up frame callback for GUI updates (doesn't block during window drag)
+        dpg.set_frame_callback(frame=1, callback=self._on_frame)
+        
+        # Use DearPyGui's built-in render loop (handles window events properly)
+        dpg.start_dearpygui()
         
         self._running = False
         self._stop_show()
