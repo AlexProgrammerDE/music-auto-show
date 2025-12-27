@@ -70,19 +70,18 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
     
-    def _on_frame(self) -> None:
+    def _gui_update_loop(self) -> None:
         """
-        Frame callback - called every frame by DearPyGui.
-        Re-registers itself for the next frame.
+        GUI update loop - runs in a separate thread.
+        Updates GUI values at a fixed rate, independent of render loop.
+        This keeps updates happening even during window drag on Windows.
         """
-        if not self._running:
-            return
-        
-        # Update GUI with latest state
-        self._update_gui_from_state()
-        
-        # Re-register for next frame (DearPyGui frame callbacks are one-shot)
-        dpg.set_frame_callback(frame=dpg.get_frame_count() + 1, callback=self._on_frame)
+        while self._running and dpg.is_dearpygui_running():
+            try:
+                self._update_gui_from_state()
+            except Exception:
+                pass
+            time.sleep(0.033)  # ~30 FPS updates
     
     def _update_gui_from_state(self) -> None:
         """
@@ -237,8 +236,9 @@ class MusicAutoShowGUI:
         
         self._running = True
         
-        # Set up frame callback for GUI updates (doesn't block during window drag)
-        dpg.set_frame_callback(frame=1, callback=self._on_frame)
+        # Start a GUI update thread that will update values even during window drag
+        self._gui_update_thread = threading.Thread(target=self._gui_update_loop, daemon=True)
+        self._gui_update_thread.start()
         
         # Use DearPyGui's built-in render loop (handles window events properly)
         dpg.start_dearpygui()
