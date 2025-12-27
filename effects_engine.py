@@ -68,6 +68,9 @@ class FixtureState:
     effect: int = 0
     effect_speed: int = 0
     
+    # Light array effect patterns (distinct from color strobe)
+    effect_pattern: int = 0  # LED array pattern (e.g., Techno Derby Ch4)
+    
     # Other
     gobo: int = 0
     prism: int = 0
@@ -335,8 +338,8 @@ class EffectsEngine:
             effect_channel = self._get_channel_config(fixture, profile, ChannelType.EFFECT)
             state.effect = self._get_rotation_value_for_channel(effect_channel)
             
-            # Channel 4: Strobe effects (light movement patterns)
-            state.effect_speed = self._get_strobe_effect_value(data, beat_triggered, bar_triggered)
+            # Channel 4: LED array effect patterns (light movement patterns)
+            state.effect_pattern = self._get_strobe_effect_value(data, beat_triggered, bar_triggered)
     
     def _process_effect_channels(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
         """
@@ -828,6 +831,7 @@ class EffectsEngine:
             smoothed.color_macro = current.color_macro
             smoothed.effect = current.effect
             smoothed.effect_speed = current.effect_speed
+            smoothed.effect_pattern = current.effect_pattern
             smoothed.gobo = current.gobo
             smoothed.prism = current.prism
             smoothed.zoom = int(smoothed.zoom * factor + current.zoom * inverse)
@@ -921,6 +925,10 @@ class EffectsEngine:
             return state.effect
         elif ct == ChannelType.EFFECT_SPEED:
             return state.effect_speed
+        elif ct == ChannelType.EFFECT_PATTERN:
+            return state.effect_pattern
+        elif ct == ChannelType.EFFECT_PATTERN_SPEED:
+            return state.effect_pattern  # Same value, speed is encoded in pattern
         
         # Gobo
         elif ct in (ChannelType.GOBO_WHEEL, ChannelType.GOBO_INDEX):

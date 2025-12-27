@@ -78,6 +78,11 @@ class ChannelType(str, Enum):
     EFFECT = "effect"
     EFFECT_SPEED = "effect_speed"
     
+    # Light array effect patterns (e.g., Techno Derby white LED array with 18 patterns)
+    # These are distinct from color strobe - they control LED array movement patterns
+    EFFECT_PATTERN = "effect_pattern"  # Pattern selection with speed within each pattern
+    EFFECT_PATTERN_SPEED = "effect_pattern_speed"  # Speed control for patterns
+    
     # Maintenance
     MAINTENANCE = "maintenance"
     NOTHING = "nothing"  # No function / reserved
@@ -651,29 +656,29 @@ def _create_showtec_techno_derby() -> FixtureProfile:
             ),
             ChannelConfig(
                 offset=4,
-                name="Strobe Effects",
-                channel_type=ChannelType.EFFECT,
+                name="LED Array Patterns",
+                channel_type=ChannelType.EFFECT_PATTERN,
                 default_value=0,
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=9, name="No function"),
-                    ChannelCapability(min_value=10, max_value=19, name="Effect 1"),
-                    ChannelCapability(min_value=20, max_value=29, name="Effect 2"),
-                    ChannelCapability(min_value=30, max_value=39, name="Effect 3"),
-                    ChannelCapability(min_value=40, max_value=49, name="Effect 4"),
-                    ChannelCapability(min_value=50, max_value=59, name="Effect 5"),
-                    ChannelCapability(min_value=60, max_value=69, name="Effect 6"),
-                    ChannelCapability(min_value=70, max_value=79, name="Effect 7"),
-                    ChannelCapability(min_value=80, max_value=89, name="Effect 8"),
-                    ChannelCapability(min_value=90, max_value=99, name="Effect 9"),
-                    ChannelCapability(min_value=100, max_value=109, name="Effect 10"),
-                    ChannelCapability(min_value=110, max_value=119, name="Effect 11"),
-                    ChannelCapability(min_value=120, max_value=129, name="Effect 12"),
-                    ChannelCapability(min_value=130, max_value=139, name="Effect 13"),
-                    ChannelCapability(min_value=140, max_value=149, name="Effect 14"),
-                    ChannelCapability(min_value=150, max_value=159, name="Effect 15"),
-                    ChannelCapability(min_value=160, max_value=169, name="Effect 16"),
-                    ChannelCapability(min_value=170, max_value=179, name="Effect 17"),
-                    ChannelCapability(min_value=180, max_value=255, name="Effect 18 (strobe always on)"),
+                    ChannelCapability(min_value=0, max_value=9, name="No function", is_off=True),
+                    ChannelCapability(min_value=10, max_value=19, name="Pattern 1"),
+                    ChannelCapability(min_value=20, max_value=29, name="Pattern 2"),
+                    ChannelCapability(min_value=30, max_value=39, name="Pattern 3"),
+                    ChannelCapability(min_value=40, max_value=49, name="Pattern 4"),
+                    ChannelCapability(min_value=50, max_value=59, name="Pattern 5"),
+                    ChannelCapability(min_value=60, max_value=69, name="Pattern 6"),
+                    ChannelCapability(min_value=70, max_value=79, name="Pattern 7"),
+                    ChannelCapability(min_value=80, max_value=89, name="Pattern 8"),
+                    ChannelCapability(min_value=90, max_value=99, name="Pattern 9"),
+                    ChannelCapability(min_value=100, max_value=109, name="Pattern 10"),
+                    ChannelCapability(min_value=110, max_value=119, name="Pattern 11"),
+                    ChannelCapability(min_value=120, max_value=129, name="Pattern 12"),
+                    ChannelCapability(min_value=130, max_value=139, name="Pattern 13"),
+                    ChannelCapability(min_value=140, max_value=149, name="Pattern 14"),
+                    ChannelCapability(min_value=150, max_value=159, name="Pattern 15"),
+                    ChannelCapability(min_value=160, max_value=169, name="Pattern 16"),
+                    ChannelCapability(min_value=170, max_value=179, name="Pattern 17"),
+                    ChannelCapability(min_value=180, max_value=255, name="Pattern 18 (all on)"),
                 ]
             ),
         ],
@@ -847,6 +852,8 @@ def get_channel_type_display_name(ct: ChannelType) -> str:
         ChannelType.PRISM_ROTATION: "Prism Rotation",
         ChannelType.EFFECT: "Effect",
         ChannelType.EFFECT_SPEED: "Effect Speed",
+        ChannelType.EFFECT_PATTERN: "LED Array Pattern",
+        ChannelType.EFFECT_PATTERN_SPEED: "Pattern Speed",
         ChannelType.MAINTENANCE: "Maintenance",
         ChannelType.NOTHING: "Nothing",
         ChannelType.FIXED: "Fixed Value",
