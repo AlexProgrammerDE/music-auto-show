@@ -99,6 +99,10 @@ class ChannelConfig(BaseModel):
     # For FIXED type - the value to always output
     fixed_value: Optional[int] = Field(default=None, ge=0, le=255, description="Fixed DMX value (only for FIXED type)")
     
+    # Value range limits (for channels where only part of the range should be used)
+    min_value: int = Field(default=0, ge=0, le=255, description="Minimum allowed value")
+    max_value: int = Field(default=255, ge=0, le=255, description="Maximum allowed value")
+    
     # Capabilities (value ranges with meanings)
     capabilities: list[ChannelCapability] = Field(default_factory=list)
     
@@ -627,8 +631,10 @@ def _create_lixada_dj_projektor() -> FixtureProfile:
                 name="Motor Position",
                 channel_type=ChannelType.EFFECT,
                 default_value=0,
+                max_value=135,  # Limit to manual range (>135 is auto motion)
                 capabilities=[
-                    ChannelCapability(min_value=0, max_value=255, name="Motor position"),
+                    ChannelCapability(min_value=0, max_value=135, name="Manual position"),
+                    ChannelCapability(min_value=136, max_value=255, name="Auto motion (not used)"),
                 ]
             ),
             ChannelConfig(

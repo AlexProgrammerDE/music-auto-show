@@ -717,6 +717,8 @@ class EffectsEngine:
                     self.dmx.set_channel(dmx_channel, ch.fixed_value)
                 else:
                     value = self._get_channel_value(state, ch, profile)
+                    # Clamp to channel's allowed range (respects min_value/max_value)
+                    value = max(ch.min_value, min(ch.max_value, value))
                     self.dmx.set_channel(dmx_channel, value)
     
     def _get_channel_value(self, state: FixtureState, ch: ChannelConfig, profile: Optional[FixtureProfile]) -> int:
