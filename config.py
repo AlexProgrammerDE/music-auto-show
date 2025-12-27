@@ -3,8 +3,16 @@ Configuration data models for fixtures, effects, and the show.
 Supports dynamic channel mapping with QLC+ compatible channel types.
 """
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, Tuple
 from pydantic import BaseModel, Field
+
+
+class ColorMixingType(str, Enum):
+    """How fixture mixes colors."""
+    STANDARD_RGB = "standard_rgb"  # Normal RGB channels
+    STANDARD_RGBW = "standard_rgbw"  # RGBW channels
+    COLOR_MACRO = "color_macro"  # Uses color macro/wheel selection
+    DUAL_COLOR_CHANNELS = "dual_color_channels"  # Each channel has two color LEDs
 
 
 class ChannelType(str, Enum):
@@ -311,6 +319,18 @@ class FixtureProfile(BaseModel):
     fixture_type: FixtureType = Field(default=FixtureType.OTHER, description="Fixture type classification")
     channel_count: int = Field(..., ge=1, le=512)
     channels: list[ChannelConfig] = Field(..., description="Channel definitions")
+    
+    # Color mixing type
+    color_mixing: ColorMixingType = Field(default=ColorMixingType.STANDARD_RGB, 
+                                          description="How this fixture mixes colors")
+    
+    # For DUAL_COLOR_CHANNELS: define which colors each channel produces
+    # Each tuple is (primary_hue, secondary_hue) where hue is 0-1 (red=0, green=0.33, blue=0.67)
+    # None means white/neutral
+    dual_color_map: List[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=list,
+        description="For dual-color fixtures: (primary_hue, secondary_hue) per color channel"
+    )
     
     # Physical properties (from QLC+)
     pan_max: int = Field(default=540, description="Max pan degrees")
@@ -664,18 +684,27 @@ def _create_lixada_dj_projektor() -> FixtureProfile:
     """
     Create profile for Lixada DJ Projektor (7 channel mode).
     
-    Note: Uses FixtureType.PAR because it has RGB-style intensity channels,
-    not color macro selection like Derby/Moonflower fixtures.
-    The color channels control paired LEDs:
-    - CH2: Red/Yellow LEDs
-    - CH3: Green/Violet LEDs  
-    - CH4: Blue/White LEDs
+    This fixture has dual-color LEDs per channel:
+    - CH2: Red + Yellow LEDs (warm colors) - hues ~0.0 and ~0.12
+    - CH3: Green + Violet LEDs (cool/purple colors) - hues ~0.33 and ~0.83
+    - CH4: Blue + White LEDs (cold colors) - hue ~0.67 and None for white
+    
+    The effects engine handles the color mapping specially for this fixture
+    to properly represent target colors using these dual-color channels.
     """
     return FixtureProfile(
         name="Lixada DJ Projektor 7ch",
         manufacturer="Lixada",
         model="DJ Projektor",
-        fixture_type=FixtureType.PAR,  # PAR-like behavior with RGB channels
+        fixture_type=FixtureType.EFFECT,
+        color_mixing=ColorMixingType.DUAL_COLOR_CHANNELS,
+        # Dual color map: (primary_hue, secondary_hue) for each color channel (CH2, CH3, CH4)
+        # Red=0.0, Yellow=0.12, Green=0.33, Violet=0.83, Blue=0.67, White=None
+        dual_color_map=[
+            (0.0, 0.12),    # CH2: Red + Yellow
+            (0.33, 0.83),   # CH3: Green + Violet  
+            (0.67, None),   # CH4: Blue + White
+        ],
         channel_count=7,
         channels=[
             ChannelConfig(

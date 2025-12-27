@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from config import (
     FixtureConfig, FixtureProfile, VisualizationMode, FixtureType,
     ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS, StrobeEffectMode,
-    RotationMode
+    RotationMode, ColorMixingType
 )
 from audio_analyzer import AnalysisData
 from dmx_controller import DMXController
@@ -320,8 +320,13 @@ class EffectsEngine:
             # Get current RGB from the visualization mode (already calculated)
             r, g, b = state.red, state.green, state.blue
             
-            # Channel 1: Color macro
-            state.color_macro = self._rgb_to_color_macro(r, g, b, data.features.energy)
+            # Handle color output based on fixture's color mixing type
+            if profile and profile.color_mixing == ColorMixingType.DUAL_COLOR_CHANNELS:
+                # Dual-color fixture: map target color to dual-color channels
+                self._apply_dual_color_mapping(state, profile, self._current_hue)
+            else:
+                # Standard color macro fixture (Derby, etc.)
+                state.color_macro = self._rgb_to_color_macro(r, g, b, data.features.energy)
             
             # Channel 2: Strobe speed
             state.strobe = self._get_strobe_value(data, beat_triggered)
@@ -594,6 +599,69 @@ class EffectsEngine:
         base_value = 10 + (effect_num - 1) * 10
         speed_offset = int(dynamic_speed * 9)
         return base_value + speed_offset
+    
+    def _apply_dual_color_mapping(self, state: FixtureState, profile: FixtureProfile, target_hue: float) -> None:
+        """
+        Map a target hue to dual-color channel fixtures.
+        
+        For fixtures where each color channel controls two different colored LEDs,
+        we calculate how much each channel should contribute based on how close
+        the target hue is to the colors that channel can produce.
+        
+        Args:
+            state: Fixture state to update (red, green, blue values)
+            profile: Fixture profile with dual_color_map
+            target_hue: Target hue (0-1, where 0=red, 0.33=green, 0.67=blue)
+        """
+        if not profile.dual_color_map or len(profile.dual_color_map) < 3:
+            return
+        
+        # Get the brightness/saturation from current state
+        max_brightness = max(state.red, state.green, state.blue, 1)
+        brightness = max_brightness / 255.0
+        
+        # Calculate contribution for each dual-color channel
+        channel_values = []
+        
+        for primary_hue, secondary_hue in profile.dual_color_map:
+            # Calculate how well this channel matches the target hue
+            contribution = 0.0
+            
+            # Check primary color match
+            if primary_hue is not None:
+                primary_dist = self._hue_distance(target_hue, primary_hue)
+                # Closer hue = higher contribution (use gaussian-like falloff)
+                primary_contrib = max(0, 1.0 - primary_dist * 3.0)
+                contribution = max(contribution, primary_contrib)
+            
+            # Check secondary color match
+            if secondary_hue is not None:
+                secondary_dist = self._hue_distance(target_hue, secondary_hue)
+                secondary_contrib = max(0, 1.0 - secondary_dist * 3.0)
+                contribution = max(contribution, secondary_contrib)
+            
+            # If secondary is None (white), it can contribute to any bright color
+            if secondary_hue is None:
+                # White contributes when we want high brightness/low saturation
+                # For now, give it a base contribution
+                contribution = max(contribution, 0.3)
+            
+            channel_values.append(contribution)
+        
+        # Normalize so at least one channel is at full brightness
+        max_contrib = max(channel_values) if channel_values else 1.0
+        if max_contrib > 0:
+            channel_values = [v / max_contrib for v in channel_values]
+        
+        # Apply brightness and convert to 0-255
+        state.red = int(channel_values[0] * brightness * 255) if len(channel_values) > 0 else 0
+        state.green = int(channel_values[1] * brightness * 255) if len(channel_values) > 1 else 0
+        state.blue = int(channel_values[2] * brightness * 255) if len(channel_values) > 2 else 0
+    
+    def _hue_distance(self, hue1: float, hue2: float) -> float:
+        """Calculate the shortest distance between two hues (0-1 scale, wraps around)."""
+        diff = abs(hue1 - hue2)
+        return min(diff, 1.0 - diff)
     
     def _rgb_to_color_macro(self, r: int, g: int, b: int, energy: float) -> int:
         """
