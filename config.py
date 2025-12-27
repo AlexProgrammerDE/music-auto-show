@@ -264,6 +264,18 @@ class MovementMode(str, Enum):
     CRAZY = "crazy"  # Wild full-range movement - showcases entire pan/tilt capability
 
 
+class EffectFixtureMode(str, Enum):
+    """
+    Show modes for effect fixtures (Derby, Moonflower, etc.).
+    Controls the balance between strobe/blinking effects and movement.
+    """
+    BALANCED = "balanced"  # Balance between strobe and movement
+    STROBE_FOCUS = "strobe_focus"  # More blinking, less movement
+    MOVEMENT_FOCUS = "movement_focus"  # More movement, less blinking
+    STROBE_ONLY = "strobe_only"  # Maximum strobe, minimal movement
+    MOVEMENT_ONLY = "movement_only"  # Movement only, no strobe
+
+
 class RotationMode(str, Enum):
     """
     Rotation modes for effect fixtures like Showtec Techno Derby.
@@ -421,8 +433,10 @@ class EffectsConfig(BaseModel):
     movement_speed: float = Field(default=0.5, ge=0.0, le=1.0)
     movement_mode: MovementMode = Field(default=MovementMode.STANDARD)
     # Effect fixture settings (for Derby, Moonflower, etc. like Techno Derby)
+    # Show mode - controls balance between strobe and movement
+    effect_fixture_mode: EffectFixtureMode = Field(default=EffectFixtureMode.BALANCED, description="Balance between strobe and movement for effect fixtures")
     # Rotation mode (Channel 3 on Techno Derby)
-    rotation_mode: RotationMode = Field(default=RotationMode.AUTO_MEDIUM, description="Pattern rotation mode for effect fixtures")
+    rotation_mode: RotationMode = Field(default=RotationMode.MANUAL_SLOW, description="Pattern rotation mode for effect fixtures")
     # Strobe effect settings (Channel 4 on Techno Derby)
     strobe_effect_enabled: bool = Field(default=True, description="Enable strobe effect patterns on effect fixtures")
     strobe_effect_mode: StrobeEffectMode = Field(default=StrobeEffectMode.AUTO, description="Strobe effect pattern mode")

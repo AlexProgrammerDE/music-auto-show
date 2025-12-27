@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from config import (
     FixtureConfig, FixtureProfile, VisualizationMode, FixtureType,
     ChannelType, ChannelConfig, ShowConfig, FIXTURE_PRESETS, StrobeEffectMode,
-    RotationMode, ColorMixingType
+    RotationMode, ColorMixingType, EffectFixtureMode
 )
 from audio_analyzer import AnalysisData
 from dmx_controller import DMXController
@@ -372,20 +372,52 @@ class EffectsEngine:
         """
         Get Channel 2 (Strobe) value.
         0-5: Off, 6-255: Strobe speed slow to fast.
+        
+        Respects effect_fixture_mode:
+        - STROBE_FOCUS / STROBE_ONLY: More aggressive strobe
+        - MOVEMENT_FOCUS / MOVEMENT_ONLY: Minimal or no strobe
+        - BALANCED: Normal behavior
         """
+        mode = self.config.effects.effect_fixture_mode
+        
+        # Movement-only mode: no strobe at all
+        if mode == EffectFixtureMode.MOVEMENT_ONLY:
+            return 0
+        
+        # Movement-focus mode: only strobe on drops
+        if mode == EffectFixtureMode.MOVEMENT_FOCUS:
+            if self._strobe_active:
+                return 150  # Reduced strobe on drops
+            return 0
+        
+        # Calculate base strobe value for BALANCED, STROBE_FOCUS, STROBE_ONLY
+        strobe_value = 0
+        
         if self._strobe_active:
             # Drop strobe - fast
-            return 200
-        
-        if beat_triggered and data.features.bass > 0.7:
+            strobe_value = 200
+        elif beat_triggered and data.features.bass > 0.7:
             # Strong beat = quick strobe burst
-            return int(100 + data.features.bass * 100)  # 100-200 range
+            strobe_value = int(100 + data.features.bass * 100)  # 100-200 range
+        elif data.features.energy > 0.6:
+            # Gentle strobe on high energy
+            strobe_value = int(6 + (data.features.energy - 0.6) * 100)  # 6-46 range
         
-        # Gentle strobe on high energy, otherwise off
-        if data.features.energy > 0.6:
-            return int(6 + (data.features.energy - 0.6) * 100)  # 6-46 range
+        # Apply mode multipliers
+        if mode == EffectFixtureMode.STROBE_ONLY:
+            # Maximum strobe - lower threshold, higher values
+            if strobe_value == 0 and data.features.energy > 0.3:
+                strobe_value = int(6 + data.features.energy * 80)
+            elif strobe_value > 0:
+                strobe_value = min(255, int(strobe_value * 1.3))
+        elif mode == EffectFixtureMode.STROBE_FOCUS:
+            # More strobe - lower threshold
+            if strobe_value == 0 and data.features.energy > 0.4:
+                strobe_value = int(6 + (data.features.energy - 0.4) * 60)
+            elif strobe_value > 0:
+                strobe_value = min(255, int(strobe_value * 1.15))
         
-        return 0  # Off
+        return strobe_value
     
     def _update_rotation_state(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
         """
@@ -395,11 +427,38 @@ class EffectsEngine:
         actual channel constraints when output. This allows different fixtures
         to have different ranges while sharing the same animation logic.
         
+        Movement speed is scaled by tempo (slower songs = slower movement).
+        
         - _rotation_phase: 0-1 cyclic value for position/animation
         - _rotation_intensity: 0-1 value for speed/intensity (used in auto modes)
         """
         mode = self.config.effects.rotation_mode
+        effect_mode = self.config.effects.effect_fixture_mode
         dt = 1.0 / max(1, self.config.dmx.fps)  # Time delta per frame
+        
+        # Calculate tempo scale for movement (same as moving heads)
+        # 60 BPM = 0.5x speed, 120 BPM = 1.0x, 180 BPM = 1.5x
+        tempo = data.features.tempo
+        if tempo > 0:
+            tempo_scale = max(0.4, min(1.8, tempo / 120.0))
+        else:
+            tempo_scale = 1.0
+        
+        # Effect fixture mode affects movement amount
+        # STROBE_ONLY: minimal movement, MOVEMENT_ONLY: maximum movement
+        if effect_mode == EffectFixtureMode.STROBE_ONLY:
+            movement_scale = 0.2  # Very slow movement
+        elif effect_mode == EffectFixtureMode.STROBE_FOCUS:
+            movement_scale = 0.5  # Reduced movement
+        elif effect_mode == EffectFixtureMode.MOVEMENT_FOCUS:
+            movement_scale = 1.3  # Enhanced movement
+        elif effect_mode == EffectFixtureMode.MOVEMENT_ONLY:
+            movement_scale = 1.5  # Maximum movement
+        else:  # BALANCED
+            movement_scale = 1.0
+        
+        # Combined scale factor
+        scale = tempo_scale * movement_scale
         
         if mode == RotationMode.OFF:
             self._rotation_phase = 0.0
@@ -407,43 +466,44 @@ class EffectsEngine:
             return
         
         if mode == RotationMode.MANUAL_SLOW:
-            # Slow continuous sweep - complete cycle every ~8 seconds
-            self._rotation_phase = (self._rotation_phase + dt / 8.0) % 1.0
+            # Slow continuous sweep - complete cycle every ~8 seconds at 120 BPM
+            base_cycle_time = 8.0
+            self._rotation_phase = (self._rotation_phase + dt / base_cycle_time * scale) % 1.0
             self._smoothed_rotation = self._rotation_phase * 127  # Legacy compatibility
         
         elif mode == RotationMode.MANUAL_BEAT:
             # Jump to new position on beats (8 discrete positions)
             if beat_triggered:
                 target_phase = (data.estimated_beat % 8) / 8.0
-                # Smooth transition to target
+                # Smooth transition to target - speed affected by tempo
                 diff = target_phase - self._rotation_phase
                 # Handle wrap-around
                 if diff > 0.5:
                     diff -= 1.0
                 elif diff < -0.5:
                     diff += 1.0
-                self._rotation_phase += diff * 0.15
+                self._rotation_phase += diff * 0.15 * scale
                 self._rotation_phase = self._rotation_phase % 1.0
             self._smoothed_rotation = self._rotation_phase * 127  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_SLOW:
             # Slow continuous phase for auto speed
-            self._rotation_phase = (self._rotation_phase + dt / 10.0) % 1.0
+            self._rotation_phase = (self._rotation_phase + dt / 10.0 * scale) % 1.0
             self._smoothed_rotation = 140  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_MEDIUM:
             # Medium continuous phase for auto speed
-            self._rotation_phase = (self._rotation_phase + dt / 6.0) % 1.0
+            self._rotation_phase = (self._rotation_phase + dt / 6.0 * scale) % 1.0
             self._smoothed_rotation = 180  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_FAST:
             # Fast continuous phase for auto speed
-            self._rotation_phase = (self._rotation_phase + dt / 3.0) % 1.0
+            self._rotation_phase = (self._rotation_phase + dt / 3.0 * scale) % 1.0
             self._smoothed_rotation = 230  # Legacy compatibility
         
         elif mode == RotationMode.AUTO_MUSIC:
-            # Phase speed follows music energy
-            base_speed = 0.05  # Base phase increment
+            # Phase speed follows music energy (also tempo-scaled)
+            base_speed = 0.05 * scale  # Base phase increment
             energy_boost = data.features.energy * 0.15
             tempo_factor = min(1.0, data.features.tempo / 150.0) * 0.05
             phase_speed = base_speed + energy_boost + tempo_factor
@@ -666,9 +726,12 @@ class EffectsEngine:
         """
         Map RGB values to Techno Derby color macro values.
         
+        IMPORTANT: Never returns 0-5 (no function/off). Effect fixtures should
+        always show a color - use strobe channel for brightness control instead.
+        
         Returns a value in the color macro range based on which colors are active.
         The Techno Derby has these color options on Channel 1:
-        0-5: No function
+        0-5: No function (NEVER USE - keep color on)
         6-20: Red
         21-35: Green
         36-50: Blue
@@ -686,16 +749,14 @@ class EffectsEngine:
         216-229: Slow color change
         230-255: Fast color change
         """
-        # Thresholds for considering a color "on"
-        threshold = 80
-        high_threshold = 180  # For detecting "white-like" brightness
+        # Use lower thresholds since we want to detect any color intent
+        threshold = 50  # Lower threshold to catch dim colors
         
         red_on = r > threshold
         green_on = g > threshold
         blue_on = b > threshold
         
         # Check for white-like appearance (all channels bright and balanced)
-        # White is when RGB values are similar and all high
         min_val = min(r, g, b)
         max_val = max(r, g, b)
         is_balanced = (max_val - min_val) < 60  # Colors are similar
@@ -720,7 +781,6 @@ class EffectsEngine:
             return 163  # RGB middle of 156-170
         elif red_on and green_on:
             # Red + Green (yellow-ish)
-            # Consider adding white for brighter scenes
             if (r + g) > 350:
                 return 178  # R+G+W middle of 171-185
             return 73   # R+G middle of 66-80
@@ -733,25 +793,25 @@ class EffectsEngine:
                 return 193  # G+B+W middle of 186-200
             return 118  # G+B middle of 111-125
         elif blue_on:
-            # Solo blue - consider adding white at high intensity
+            # Solo blue
             if b > 200:
                 return 148  # B+W middle of 141-155
             return 43   # Blue middle of 36-50
         elif green_on:
-            # Solo green - consider adding white at high intensity
+            # Solo green
             if g > 200:
                 return 133  # G+W middle of 126-140
             return 28   # Green middle of 21-35
         elif red_on:
-            # Solo red - consider adding white at high intensity
+            # Solo red
             if r > 200:
                 return 103  # R+W middle of 96-110
             return 13   # Red middle of 6-20
         else:
-            # Low/no color - use slow color change for some visual interest
-            if energy > 0.3:
-                return 222  # Slow color change
-            return 0  # No function
+            # No strong color detected - use slow color change to keep fixture visible
+            # This ensures the effect fixture never goes dark (0-5 range)
+            # The slow color change provides ambient light even at low energy
+            return 222  # Slow color change - always visible
     
     def _update_energy_tracking(self, data: AnalysisData) -> None:
         """Track energy for detecting drops and builds."""
