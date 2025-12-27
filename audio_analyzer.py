@@ -172,20 +172,22 @@ class AudioAnalyzer:
         if AUBIO_AVAILABLE:
             # hop_size must match buffer_size since that's what we receive from audio callback
             # win_size should be 2x hop_size for good frequency resolution
+            # Using "specflux" method - more accurate for complex polyphonic music
             hop_size = buffer_size
             win_size = buffer_size * 2
-            self._aubio_tempo = aubio.tempo("default", win_size, hop_size, sample_rate)
-            self._aubio_onset = aubio.onset("default", win_size, hop_size, sample_rate)
-            logger.info(f"Aubio initialized: method=default, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
+            self._aubio_tempo = aubio.tempo("specflux", win_size, hop_size, sample_rate)
+            self._aubio_onset = aubio.onset("specflux", win_size, hop_size, sample_rate)
+            logger.info(f"Aubio initialized: method=specflux, hop_size={hop_size}, win_size={win_size}, sr={sample_rate}")
         
         # Beat tracking state
         self._last_beat_time = 0.0
         self._beat_count = 0
-        self._tempo_history = deque(maxlen=32)  # Rolling tempo estimates (increased for stability)
-        self._onset_history = deque(maxlen=32)  # Recent onset times
+        self._tempo_history: deque[float] = deque(maxlen=32)  # Rolling tempo estimates
+        self._onset_history: deque[float] = deque(maxlen=32)  # Recent onset times
         self._current_tempo = 120.0  # Current estimated tempo
-        self._raw_tempo_history = deque(maxlen=64)  # Raw BPM values for octave error correction
-        self._beat_intervals: deque[float] = deque(maxlen=16)  # Recent beat intervals for validation
+        self._learning_beats: list[float] = []  # BPM values during learning phase
+        self._tempo_locked = False  # Whether we've locked onto a tempo
+        self._confidence_threshold = 0.2  # Minimum confidence to accept a beat
         
         # Onset detection state
         self._prev_onset_strength = 0.0
@@ -540,18 +542,40 @@ class AudioAnalyzer:
             # aubio.tempo returns 1 if beat detected, 0 otherwise
             is_beat = self._aubio_tempo(signal)
             if is_beat:
-                beat_detected = True
-                self._last_beat_time = current_time
-                self._beat_count += 1
+                # Get confidence - only process high-confidence beats
+                confidence = self._aubio_tempo.get_confidence()
                 
-                # Get BPM from aubio's native tempo tracker
-                bpm = self._aubio_tempo.get_bpm()
-                if 30 <= bpm <= 250:  # Sanity check
-                    # Apply octave error correction for extreme values
-                    corrected_bpm = self._correct_tempo_octave(bpm)
-                    self._tempo_history.append(corrected_bpm)
-                    if len(self._tempo_history) >= 2:
-                        self._current_tempo = float(np.median(list(self._tempo_history)))
+                if confidence > self._confidence_threshold:
+                    beat_detected = True
+                    self._last_beat_time = current_time
+                    self._beat_count += 1
+                    
+                    # Get BPM from aubio's native tempo tracker
+                    bpm = self._aubio_tempo.get_bpm()
+                    if 30 <= bpm <= 250:  # Sanity check
+                        # Apply octave error correction
+                        corrected_bpm = self._correct_tempo_octave(bpm, confidence)
+                        
+                        # Learning phase: collect initial beats before locking tempo
+                        if not self._tempo_locked:
+                            self._learning_beats.append(corrected_bpm)
+                            if len(self._learning_beats) >= 5:
+                                # Lock onto median of learning beats
+                                self._current_tempo = float(np.median(self._learning_beats))
+                                self._tempo_locked = True
+                                self._tempo_history.append(self._current_tempo)
+                                logger.debug(f"Tempo locked at {self._current_tempo:.1f} BPM")
+                        else:
+                            # Stable phase: use intelligent candidate selection
+                            # Consider original, half, and double - pick closest to current
+                            candidates = [corrected_bpm, corrected_bpm * 2, corrected_bpm / 2]
+                            best_candidate = min(candidates, key=lambda x: abs(x - self._current_tempo))
+                            
+                            # Only accept if within reasonable range of current tempo
+                            if abs(best_candidate - self._current_tempo) < self._current_tempo * 0.15:
+                                self._tempo_history.append(best_candidate)
+                                # EMA smoothing for responsive yet stable tempo
+                                self._current_tempo = self._current_tempo * 0.9 + best_candidate * 0.1
             
             # Onset detection
             if self._aubio_onset is not None:
@@ -757,28 +781,34 @@ class AudioAnalyzer:
         band_power = np.sum(fft_data[low_idx:high_idx] ** 2)
         return float(band_power)
     
-    def _correct_tempo_octave(self, raw_bpm: float) -> float:
+    def _correct_tempo_octave(self, raw_bpm: float, confidence: float = 0.0) -> float:
         """
         Correct octave errors in tempo estimation.
         
         Aubio's beat tracker can sometimes detect at half or double the actual tempo,
         especially when there are strong off-beat elements (like hi-hats or background drums
-        on every second beat). This function corrects only extreme cases.
+        on every second beat). This uses aggressive correction based on confidence.
         
         Args:
             raw_bpm: The raw BPM value from aubio
+            confidence: Beat detection confidence (0-1)
             
         Returns:
             Corrected BPM value
         """
         bpm = raw_bpm
         
-        # Only correct extreme values outside normal music range (60-200 BPM)
-        # This is conservative to avoid incorrectly "correcting" valid tempos
+        # Correct extreme values outside normal music range
         while bpm < 60:
             bpm *= 2
         while bpm > 200:
             bpm /= 2
+        
+        # Aggressive half-time correction: if BPM is low and confidence is high,
+        # it's likely detecting half-time (e.g., snare on 2 and 4 instead of every beat)
+        # Most popular music is 100-130 BPM, so double anything below 100 with high confidence
+        if bpm < 100 and confidence > 0.5:
+            bpm *= 2
         
         return bpm
     
