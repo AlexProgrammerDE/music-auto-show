@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.12
+  - python=3.11
   - aubio
   - numpy
   - pip
@@ -14,7 +14,7 @@ dependencies:
     - pyserial>=3.5
     - dearpygui>=1.10.0
     - Pillow>=10.0.0
-    # Windows media info (comment out on Linux/Mac)
+    # Windows media info
     - winrt-Windows.Media.Control>=2.0.0
     - winrt-Windows.Foundation>=2.0.0
     - winrt-Windows.Storage.Streams>=2.0.0
