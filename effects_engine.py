@@ -280,8 +280,11 @@ class EffectsEngine:
         elif mode == VisualizationMode.RANDOM_FLASH:
             apply_random_flash_mode(self, data, beat_triggered)
         
-        # Process effect lights separately (Derby, Moonflower, etc.)
+        # Process effect-type fixtures (Derby, Moonflower with color macros)
         self._process_effect_lights(data, beat_triggered, bar_triggered)
+        
+        # Process effect channels on ALL fixtures (motor position, etc.)
+        self._process_effect_channels(data, beat_triggered, bar_triggered)
         
         # Apply movement if enabled - only on specific beats, not constantly
         if self.config.effects.movement_enabled:
@@ -329,6 +332,33 @@ class EffectsEngine:
             
             # Channel 4: Strobe effects (light movement patterns)
             state.effect_speed = self._get_strobe_effect_value(data, beat_triggered, bar_triggered)
+    
+    def _process_effect_channels(self, data: AnalysisData, beat_triggered: bool, bar_triggered: bool) -> None:
+        """
+        Process EFFECT type channels on all fixtures (not just EFFECT type fixtures).
+        
+        This handles motor position, rotation, and other effect channels that may exist
+        on PAR lights, moving heads, or other fixture types.
+        """
+        # Update rotation state once (shared across all fixtures)
+        # Only update if not already updated by _process_effect_lights
+        effect_fixtures = self.get_effect_fixtures()
+        if not effect_fixtures:
+            # No EFFECT type fixtures, so we need to update rotation state here
+            self._update_rotation_state(data, beat_triggered, bar_triggered)
+        
+        for fixture in self.config.fixtures:
+            # Skip EFFECT type fixtures - they're handled by _process_effect_lights
+            if self._get_fixture_type(fixture) == FixtureType.EFFECT:
+                continue
+            
+            state = self._states[fixture.name]
+            profile = self._get_profile(fixture)
+            
+            # Check if this fixture has an EFFECT channel
+            effect_channel = self._get_channel_config(fixture, profile, ChannelType.EFFECT)
+            if effect_channel:
+                state.effect = self._get_rotation_value_for_channel(effect_channel)
     
     def _get_strobe_value(self, data: AnalysisData, beat_triggered: bool) -> int:
         """

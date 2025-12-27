@@ -661,12 +661,21 @@ def _create_showtec_techno_derby() -> FixtureProfile:
 
 
 def _create_lixada_dj_projektor() -> FixtureProfile:
-    """Create profile for Lixada DJ Projektor (7 channel mode)."""
+    """
+    Create profile for Lixada DJ Projektor (7 channel mode).
+    
+    Note: Uses FixtureType.PAR because it has RGB-style intensity channels,
+    not color macro selection like Derby/Moonflower fixtures.
+    The color channels control paired LEDs:
+    - CH2: Red/Yellow LEDs
+    - CH3: Green/Violet LEDs  
+    - CH4: Blue/White LEDs
+    """
     return FixtureProfile(
         name="Lixada DJ Projektor 7ch",
         manufacturer="Lixada",
         model="DJ Projektor",
-        fixture_type=FixtureType.EFFECT,
+        fixture_type=FixtureType.PAR,  # PAR-like behavior with RGB channels
         channel_count=7,
         channels=[
             ChannelConfig(
