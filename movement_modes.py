@@ -90,6 +90,11 @@ def apply_movement(engine: "EffectsEngine", data: "AnalysisData",
     bass = data.features.bass
     energy = data.features.energy
     
+    # Speed = 0 means stand still - no movement at all
+    # Fixtures stay at their current position
+    if speed <= 0.01:
+        return
+    
     for fixture in engine.config.fixtures:
         profile = engine._get_profile(fixture)
         channels = fixture.get_channels(profile)
@@ -907,9 +912,11 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     pan_rate *= tempo_scale
     tilt_rate *= tempo_scale
     
-    # Apply speed modifier (higher speed = faster interpolation)
-    pan_rate *= (0.5 + speed * 0.5)
-    tilt_rate *= (0.5 + speed * 0.5)
+    # Apply speed modifier - linear scaling from 0.2x to 1.0x
+    # speed=0.0 -> 0.2x (very slow), speed=1.0 -> 1.0x (full speed)
+    speed_multiplier = 0.2 + speed * 0.8
+    pan_rate *= speed_multiplier
+    tilt_rate *= speed_multiplier
     
     # Interpolate pan
     current_pan = state.pan
@@ -950,9 +957,10 @@ def _interpolate_position(engine: "EffectsEngine", fixture: "FixtureConfig",
     else:
         mode_offset = 0  # Neutral
     
-    # User speed setting: small adjustment (-25 to +25)
-    # speed=1.0 -> -25 (faster), speed=0.0 -> +25 (slower)
-    speed_offset = int((0.5 - speed) * 50)
+    # User speed setting: larger adjustment (-50 to +50)
+    # speed=1.0 -> -50 (faster motor), speed=0.0 -> +50 (slower motor)
+    # This gives users more control over motor speed
+    speed_offset = int((0.5 - speed) * 100)
     
     # Combine: start at 127, adjust based on tempo, mode, and user speed
     pt_speed_value = 127 + int(tempo_adjustment) + mode_offset + speed_offset
