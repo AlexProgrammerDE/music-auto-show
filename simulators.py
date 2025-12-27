@@ -106,6 +106,18 @@ class SimulatedAudioAnalyzer:
                 onset_history=list(self._data.onset_history) if hasattr(self._data, 'onset_history') else []
             )
     
+    def get_task_status(self) -> dict:
+        """Get status of background processing tasks (simulated)."""
+        return {
+            "madmom_status": "Simulated",
+            "madmom_processing": False,
+            "madmom_available": True,
+            "buffer_duration": 5.0,
+            "time_until_next": 0.0,
+            "progress": 1.0,
+            "current_tempo": 128.0,
+        }
+    
     def _simulation_loop(self) -> None:
         """Main simulation loop generating fake audio analysis data."""
         tempo = 128.0

@@ -85,6 +85,67 @@ class MusicAutoShowGUI:
                 self._update_gui(data)
             except Exception:
                 pass
+        
+        # Update background task status
+        try:
+            self._update_task_status()
+        except Exception:
+            pass
+    
+    def _update_task_status(self) -> None:
+        """Update the background task status display."""
+        if not self.audio_analyzer:
+            return
+        
+        # Get task status from audio analyzer
+        status = self.audio_analyzer.get_task_status()
+        
+        # Update madmom status
+        if dpg.does_item_exist("madmom_status"):
+            status_text = status.get("madmom_status", "Unknown")
+            if status.get("madmom_processing"):
+                color = (255, 200, 100)  # Yellow when processing
+            elif status.get("madmom_available"):
+                color = (100, 255, 100)  # Green when ready
+            else:
+                color = (255, 100, 100)  # Red when unavailable
+            dpg.set_value("madmom_status", f"  Status: {status_text}")
+            dpg.configure_item("madmom_status", color=color)
+        
+        if dpg.does_item_exist("madmom_progress"):
+            dpg.set_value("madmom_progress", status.get("progress", 0))
+        
+        if dpg.does_item_exist("madmom_buffer"):
+            buffer_dur = status.get("buffer_duration", 0)
+            dpg.set_value("madmom_buffer", f"  Audio buffer: {buffer_dur:.1f}s")
+        
+        if dpg.does_item_exist("madmom_next_run"):
+            time_until = status.get("time_until_next", 0)
+            if status.get("madmom_processing"):
+                dpg.set_value("madmom_next_run", "  Next run: Processing...")
+            elif time_until > 0:
+                dpg.set_value("madmom_next_run", f"  Next run: {time_until:.1f}s")
+            else:
+                dpg.set_value("madmom_next_run", "  Next run: Ready")
+        
+        # Update effects FPS (calculate from effects thread)
+        if dpg.does_item_exist("effects_fps"):
+            if hasattr(self, '_effects_frame_count'):
+                if not hasattr(self, '_effects_fps_time'):
+                    self._effects_fps_time = time.time()
+                    self._effects_fps_count = 0
+                    self._effects_fps_display = 0
+                
+                current_time = time.time()
+                elapsed = current_time - self._effects_fps_time
+                if elapsed >= 1.0:
+                    self._effects_fps_display = self._effects_fps_count / elapsed
+                    self._effects_fps_time = current_time
+                    self._effects_fps_count = 0
+                
+                dpg.set_value("effects_fps", f"  FPS: {self._effects_fps_display:.0f}")
+            else:
+                dpg.set_value("effects_fps", "  FPS: --")
     
     def _get_last_used_channel(self) -> int:
         """Calculate the last DMX channel used by any fixture."""
@@ -369,6 +430,18 @@ class MusicAutoShowGUI:
                     dpg.add_progress_bar(tag="dance_bar", default_value=0.5, width=-1)
                     dpg.add_text("Valence:")
                     dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
+                
+                with dpg.child_window(width=300, height=180, border=True):
+                    dpg.add_text("Background Tasks:", color=(180, 180, 220))
+                    dpg.add_separator()
+                    dpg.add_text("Madmom Beat Detection:", color=(150, 150, 180))
+                    dpg.add_text("  Status: Idle", tag="madmom_status")
+                    dpg.add_progress_bar(tag="madmom_progress", default_value=0.0, width=-1)
+                    dpg.add_text("  Audio buffer: 0.0s", tag="madmom_buffer")
+                    dpg.add_text("  Next run: --", tag="madmom_next_run")
+                    dpg.add_spacer(height=5)
+                    dpg.add_text("Effects Engine:", color=(150, 150, 180))
+                    dpg.add_text("  FPS: 0", tag="effects_fps")
         
         dpg.add_spacer(height=10)
         
@@ -620,6 +693,10 @@ class MusicAutoShowGUI:
         """
         frame_count = 0
         last_debug_time = time.time()
+        self._effects_frame_count = 0
+        self._effects_fps_time = time.time()
+        self._effects_fps_count = 0
+        self._effects_fps_display = 0.0
         
         while self._running:
             if self.effects_engine and self.audio_analyzer:
@@ -635,6 +712,7 @@ class MusicAutoShowGUI:
                     self._fixture_states = fixture_states
                 
                 frame_count += 1
+                self._effects_fps_count += 1
                 
                 # Debug logging every 5 seconds
                 now = time.time()

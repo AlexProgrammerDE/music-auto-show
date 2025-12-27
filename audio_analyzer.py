@@ -1027,6 +1027,45 @@ class AudioAnalyzer:
                 is_playing=self._is_playing,
                 album_colors=list(self._album_colors)
             )
+    
+    def get_task_status(self) -> dict:
+        """
+        Get status of background processing tasks.
+        Returns dict with madmom task info for GUI display.
+        """
+        current_time = time.time()
+        
+        # Calculate buffer duration
+        with self._madmom_lock:
+            buffer_samples = len(self._madmom_audio_accumulator)
+        buffer_duration = buffer_samples / self.sample_rate if self.sample_rate > 0 else 0
+        
+        # Calculate time until next madmom run
+        time_since_last = current_time - self._madmom_last_process_time
+        time_until_next = max(0, self._madmom_process_interval - time_since_last)
+        
+        # Calculate progress (0-1) towards next run
+        progress = min(1.0, time_since_last / self._madmom_process_interval) if self._madmom_process_interval > 0 else 0
+        
+        # Determine status
+        if not MADMOM_AVAILABLE:
+            status = "Unavailable"
+        elif self._madmom_processing:
+            status = "Processing..."
+        elif buffer_duration < 2.0:
+            status = f"Buffering ({buffer_duration:.1f}s)"
+        else:
+            status = "Ready"
+        
+        return {
+            "madmom_status": status,
+            "madmom_processing": self._madmom_processing,
+            "madmom_available": MADMOM_AVAILABLE,
+            "buffer_duration": buffer_duration,
+            "time_until_next": time_until_next,
+            "progress": progress,
+            "current_tempo": self._current_tempo,
+        }
 
 
 def create_audio_analyzer(
