@@ -4,6 +4,7 @@ Provides fixture configuration, live visualization, and effect controls.
 """
 import json
 import logging
+import os
 import threading
 import time
 from typing import Optional
@@ -14,6 +15,144 @@ try:
     DEARPYGUI_AVAILABLE = True
 except ImportError:
     DEARPYGUI_AVAILABLE = False
+
+
+# Global DPI scale factor - will be set after DearPyGui context is created
+_dpi_scale: float = 1.0
+
+
+def get_dpi_scale() -> float:
+    """Get the current DPI scale factor."""
+    return _dpi_scale
+
+
+def scaled(value: int | float) -> int:
+    """Scale a pixel value by the DPI scale factor."""
+    return int(value * _dpi_scale)
+
+
+def _detect_dpi_scale() -> float:
+    """
+    Detect the system DPI scale factor.
+    Returns a scale factor (1.0 = 96 DPI, 2.0 = 192 DPI, etc.)
+    """
+    scale = 1.0
+    
+    # Try to get DPI from DearPyGui viewport (available after viewport creation)
+    # Note: This won't work before viewport is created, so we also check environment
+    
+    # Check environment variable for manual override
+    env_scale = os.environ.get('MUSIC_AUTO_SHOW_SCALE')
+    if env_scale:
+        try:
+            scale = float(env_scale)
+            logger.info(f"Using DPI scale from MUSIC_AUTO_SHOW_SCALE: {scale}")
+            return scale
+        except ValueError:
+            pass
+    
+    # Try platform-specific detection
+    try:
+        import platform
+        system = platform.system()
+        
+        if system == 'Linux':
+            # Try Wayland first (GDK_SCALE)
+            gdk_scale = os.environ.get('GDK_SCALE')
+            if gdk_scale:
+                try:
+                    scale = float(gdk_scale)
+                    logger.info(f"Using GDK_SCALE: {scale}")
+                    return scale
+                except ValueError:
+                    pass
+            
+            # Try Qt scale factor
+            qt_scale = os.environ.get('QT_SCALE_FACTOR')
+            if qt_scale:
+                try:
+                    scale = float(qt_scale)
+                    logger.info(f"Using QT_SCALE_FACTOR: {scale}")
+                    return scale
+                except ValueError:
+                    pass
+            
+            # Try Xft.dpi from Xresources
+            try:
+                import subprocess
+                result = subprocess.run(['xrdb', '-query'], capture_output=True, text=True, timeout=2)
+                for line in result.stdout.split('\n'):
+                    if 'Xft.dpi:' in line:
+                        dpi = float(line.split(':')[1].strip())
+                        scale = dpi / 96.0
+                        logger.info(f"Using Xft.dpi: {dpi} (scale: {scale:.2f})")
+                        return scale
+            except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+                pass
+            
+            # Try xdpyinfo for DPI
+            try:
+                import subprocess
+                result = subprocess.run(['xdpyinfo'], capture_output=True, text=True, timeout=2)
+                for line in result.stdout.split('\n'):
+                    if 'resolution:' in line and 'x' in line:
+                        # Extract DPI like "192x192 dots per inch"
+                        parts = line.split()
+                        for part in parts:
+                            if 'x' in part and part[0].isdigit():
+                                dpi = float(part.split('x')[0])
+                                scale = dpi / 96.0
+                                logger.info(f"Using xdpyinfo DPI: {dpi} (scale: {scale:.2f})")
+                                return scale
+            except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+                pass
+                
+        elif system == 'Windows':
+            # Windows DPI detection via ctypes
+            try:
+                import ctypes
+                user32 = ctypes.WinDLL('user32', use_last_error=True)  # type: ignore[attr-defined]
+                user32.SetProcessDPIAware()
+                dc = user32.GetDC(0)
+                gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)  # type: ignore[attr-defined]
+                dpi = gdi32.GetDeviceCaps(dc, 88)  # LOGPIXELSX
+                user32.ReleaseDC(0, dc)
+                scale = dpi / 96.0
+                logger.info(f"Using Windows DPI: {dpi} (scale: {scale:.2f})")
+                return scale
+            except Exception:
+                pass
+                
+        elif system == 'Darwin':
+            # macOS - typically retina is 2x
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['system_profiler', 'SPDisplaysDataType'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if 'Retina' in result.stdout:
+                    scale = 2.0
+                    logger.info("Detected macOS Retina display, using scale: 2.0")
+                    return scale
+            except (subprocess.SubprocessError, FileNotFoundError):
+                pass
+    except Exception as e:
+        logger.debug(f"DPI detection error: {e}")
+    
+    # Default: check if we have a high-resolution display hint
+    # Some desktop environments set GDK_DPI_SCALE
+    gdk_dpi_scale = os.environ.get('GDK_DPI_SCALE')
+    if gdk_dpi_scale:
+        try:
+            scale = float(gdk_dpi_scale)
+            logger.info(f"Using GDK_DPI_SCALE: {scale}")
+            return scale
+        except ValueError:
+            pass
+    
+    logger.info(f"Using default DPI scale: {scale}")
+    return scale
 
 from config import (
     ShowConfig, FixtureConfig, FixtureProfile, ChannelConfig,
@@ -59,11 +198,8 @@ class MusicAutoShowGUI:
             on_fixture_changed=self._refresh_fixture_list,
             on_config_updated=self._update_effects_config
         )
-        self._stage_visualizer = StageVisualizer(
-            visualizer_id="visualizer",
-            width=940,
-            height=400
-        )
+        # Stage visualizer will be initialized in run() after DPI detection
+        self._stage_visualizer: Optional[StageVisualizer] = None
     
     def _update_effects_config(self) -> None:
         """Update effects engine with current config."""
@@ -213,7 +349,7 @@ class MusicAutoShowGUI:
                     else:
                         color = (150, 150, 150)  # Gray for unused
                     dpg.add_text(f"{i}", color=color)
-                    dpg.add_progress_bar(tag=f"dmx_ch_{i}", default_value=0.0, width=20)
+                    dpg.add_progress_bar(tag=f"dmx_ch_{i}", default_value=0.0, width=scaled(20))
         
         # Add legend
         dpg.add_spacer(height=5, parent="dmx_universe_container")
@@ -221,15 +357,35 @@ class MusicAutoShowGUI:
                     parent="dmx_universe_container", color=(120, 120, 150))
     
     def run(self) -> None:
+        global _dpi_scale
+        
         if not DEARPYGUI_AVAILABLE:
             logger.error("Dear PyGui not available. Install with: pip install dearpygui")
             return
         
-        dpg.create_context()
-        dpg.create_viewport(title="Music Auto Show", width=1400, height=900)
+        # Detect DPI scale before creating context
+        _dpi_scale = _detect_dpi_scale()
+        logger.info(f"DPI scale factor: {_dpi_scale}")
         
+        dpg.create_context()
+        
+        # Create viewport with scaled dimensions
+        viewport_width = scaled(1400)
+        viewport_height = scaled(900)
+        dpg.create_viewport(title="Music Auto Show", width=viewport_width, height=viewport_height)
+        
+        # Set up scaled font
+        self._setup_font()
         self._setup_theme()
         self._create_main_window()
+        
+        # Update the stage visualizer with scaled dimensions
+        self._stage_visualizer = StageVisualizer(
+            visualizer_id="visualizer",
+            width=scaled(940),
+            height=scaled(400),
+            scale=_dpi_scale
+        )
         
         dpg.setup_dearpygui()
         dpg.show_viewport()
@@ -247,12 +403,46 @@ class MusicAutoShowGUI:
         self._stop_show()
         dpg.destroy_context()
     
+    def _setup_font(self) -> None:
+        """Set up scaled fonts for HiDPI displays."""
+        # Base font size (at 1x scale)
+        base_font_size = 13
+        font_size = scaled(base_font_size)
+        
+        with dpg.font_registry():
+            # Try to load a system font, fall back to default
+            font_paths = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",  # Arch Linux
+                "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",  # Fedora
+                "C:/Windows/Fonts/segoeui.ttf",  # Windows
+                "/System/Library/Fonts/SFNS.ttf",  # macOS
+                "/System/Library/Fonts/Helvetica.ttc",  # macOS fallback
+            ]
+            
+            font_loaded = False
+            for font_path in font_paths:
+                if os.path.exists(font_path):
+                    try:
+                        default_font = dpg.add_font(font_path, font_size)
+                        dpg.bind_font(default_font)
+                        font_loaded = True
+                        logger.info(f"Loaded font: {font_path} at size {font_size}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Failed to load font {font_path}: {e}")
+            
+            if not font_loaded:
+                logger.info(f"Using default font with global scale")
+                # Fall back to scaling the default font
+                dpg.set_global_font_scale(_dpi_scale)
+    
     def _setup_theme(self) -> None:
         with dpg.theme() as global_theme:
             with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
-                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 5)
-                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 8, 4)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, scaled(5))
+                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, scaled(5))
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, scaled(8), scaled(4))
                 dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (30, 30, 40))
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (45, 45, 60))
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (70, 70, 100))
@@ -272,7 +462,7 @@ class MusicAutoShowGUI:
                     dpg.add_menu_item(label="Exit", callback=lambda: dpg.stop_dearpygui())
             
             with dpg.group(horizontal=True):
-                with dpg.child_window(width=400, height=-1, border=True):
+                with dpg.child_window(width=scaled(400), height=-1, border=True):
                     self._create_config_panel()
                 
                 with dpg.child_window(width=-1, height=-1, border=True):
@@ -284,22 +474,22 @@ class MusicAutoShowGUI:
         
         with dpg.group(horizontal=True):
             dpg.add_text("Show Name:")
-            dpg.add_input_text(default_value=self.config.name, width=200,
+            dpg.add_input_text(default_value=self.config.name, width=scaled(200),
                               callback=lambda s, a: setattr(self.config, 'name', a),
                               tag="show_name_input")
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="DMX Settings", default_open=True):
             with dpg.group(horizontal=True):
                 dpg.add_text("Port:")
-                dpg.add_input_text(default_value=self.config.dmx.port, width=200,
+                dpg.add_input_text(default_value=self.config.dmx.port, width=scaled(200),
                                   hint="Auto-detect if empty",
                                   callback=lambda s, a: setattr(self.config.dmx, 'port', a))
             
             dpg.add_checkbox(label="Simulate DMX (no hardware)", tag="simulate_dmx")
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Audio Input", default_open=True):
             # Audio input mode selector
@@ -311,12 +501,12 @@ class MusicAutoShowGUI:
             audio_mode_names = [m[0] for m in audio_modes]
             dpg.add_combo(label="Input Source", items=audio_mode_names, 
                          default_value=audio_mode_names[2],  # Auto-detect
-                         tag="audio_input_mode", width=200)
+                         tag="audio_input_mode", width=scaled(200))
             dpg.add_text("Loopback captures what you hear, Microphone captures live audio",
                         color=(150, 150, 150))
             dpg.add_checkbox(label="Simulate Audio (no capture)", tag="simulate_audio")
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Fixtures", default_open=True):
             with dpg.group(horizontal=True):
@@ -325,11 +515,11 @@ class MusicAutoShowGUI:
             
             dpg.add_separator()
             
-            with dpg.child_window(height=200, border=True, tag="fixture_list_container"):
+            with dpg.child_window(height=scaled(200), border=True, tag="fixture_list_container"):
                 self._fixture_list_id = dpg.add_group(tag="fixture_list")
                 self._refresh_fixture_list()
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Effects", default_open=True):
             modes = [m.value for m in VisualizationMode]
@@ -337,20 +527,20 @@ class MusicAutoShowGUI:
                          callback=self._on_mode_changed, tag="effect_mode")
             
             dpg.add_slider_float(label="Intensity", default_value=self.config.effects.intensity,
-                                min_value=0.0, max_value=1.0, width=200,
+                                min_value=0.0, max_value=1.0, width=scaled(200),
                                 callback=lambda s, a: setattr(self.config.effects, 'intensity', a))
             
             dpg.add_slider_float(label="Audio Gain", default_value=self.config.effects.audio_gain,
-                                min_value=0.1, max_value=5.0, width=200,
+                                min_value=0.1, max_value=5.0, width=scaled(200),
                                 callback=self._on_audio_gain_changed, tag="audio_gain_slider")
             dpg.add_text("Adjusts sensitivity to audio input", color=(130, 130, 160))
             
             dpg.add_slider_float(label="Color Speed", default_value=self.config.effects.color_speed,
-                                min_value=0.1, max_value=10.0, width=200,
+                                min_value=0.1, max_value=10.0, width=scaled(200),
                                 callback=lambda s, a: setattr(self.config.effects, 'color_speed', a))
             
             dpg.add_slider_float(label="Smoothing", default_value=self.config.effects.smooth_factor,
-                                min_value=0.0, max_value=1.0, width=200,
+                                min_value=0.0, max_value=1.0, width=scaled(200),
                                 callback=lambda s, a: setattr(self.config.effects, 'smooth_factor', a))
             
             dpg.add_checkbox(label="Strobe on Drop", default_value=self.config.effects.strobe_on_drop,
@@ -363,12 +553,12 @@ class MusicAutoShowGUI:
             movement_modes = [m.value for m in MovementMode]
             dpg.add_combo(label="Movement Mode", items=movement_modes, 
                          default_value=self.config.effects.movement_mode.value,
-                         callback=self._on_movement_mode_changed, tag="movement_mode", width=200)
+                         callback=self._on_movement_mode_changed, tag="movement_mode", width=scaled(200))
             dpg.add_text("", tag="movement_mode_hint", color=(130, 130, 160))
             self._update_movement_mode_hint(self.config.effects.movement_mode.value)
             
             dpg.add_slider_float(label="Movement Speed", default_value=self.config.effects.movement_speed,
-                                min_value=0.0, max_value=1.0, width=200,
+                                min_value=0.0, max_value=1.0, width=scaled(200),
                                 callback=lambda s, a: setattr(self.config.effects, 'movement_speed', a))
             
             dpg.add_separator()
@@ -378,7 +568,7 @@ class MusicAutoShowGUI:
             effect_fixture_modes = [m.value for m in EffectFixtureMode]
             dpg.add_combo(label="Show Mode", items=effect_fixture_modes, 
                          default_value=self.config.effects.effect_fixture_mode.value,
-                         callback=self._on_effect_fixture_mode_changed, tag="effect_fixture_mode", width=200)
+                         callback=self._on_effect_fixture_mode_changed, tag="effect_fixture_mode", width=scaled(200))
             dpg.add_text("", tag="effect_fixture_mode_hint", color=(130, 130, 160))
             self._update_effect_fixture_mode_hint(self.config.effects.effect_fixture_mode.value)
             
@@ -386,7 +576,7 @@ class MusicAutoShowGUI:
             rotation_modes = [m.value for m in RotationMode]
             dpg.add_combo(label="Rotation Mode", items=rotation_modes, 
                          default_value=self.config.effects.rotation_mode.value,
-                         callback=self._on_rotation_mode_changed, tag="rotation_mode", width=200)
+                         callback=self._on_rotation_mode_changed, tag="rotation_mode", width=scaled(200))
             dpg.add_text("", tag="rotation_mode_hint", color=(130, 130, 160))
             self._update_rotation_mode_hint(self.config.effects.rotation_mode.value)
             
@@ -397,23 +587,23 @@ class MusicAutoShowGUI:
             strobe_effect_modes = [m.value for m in StrobeEffectMode]
             dpg.add_combo(label="Strobe Effect Pattern", items=strobe_effect_modes, 
                          default_value=self.config.effects.strobe_effect_mode.value,
-                         callback=self._on_strobe_effect_mode_changed, tag="strobe_effect_mode", width=200)
+                         callback=self._on_strobe_effect_mode_changed, tag="strobe_effect_mode", width=scaled(200))
             dpg.add_text("", tag="strobe_effect_mode_hint", color=(130, 130, 160))
             self._update_strobe_effect_mode_hint(self.config.effects.strobe_effect_mode.value)
             
             dpg.add_slider_float(label="Effect Speed", default_value=self.config.effects.strobe_effect_speed,
-                                min_value=0.0, max_value=1.0, width=200,
+                                min_value=0.0, max_value=1.0, width=scaled(200),
                                 callback=lambda s, a: setattr(self.config.effects, 'strobe_effect_speed', a))
     
     def _create_visualization_panel(self) -> None:
         with dpg.group(horizontal=True):
-            dpg.add_button(label="Start Show", callback=self._start_show, width=120, height=40)
-            dpg.add_button(label="Stop Show", callback=self._stop_show, width=120, height=40)
-            dpg.add_button(label="Blackout", callback=self._blackout, width=100, height=40)
-            dpg.add_spacer(width=20)
+            dpg.add_button(label="Start Show", callback=self._start_show, width=scaled(120), height=scaled(40))
+            dpg.add_button(label="Stop Show", callback=self._stop_show, width=scaled(120), height=scaled(40))
+            dpg.add_button(label="Blackout", callback=self._blackout, width=scaled(100), height=scaled(40))
+            dpg.add_spacer(width=scaled(20))
             self._status_text_id = dpg.add_text("Status: Stopped", color=(255, 200, 100))
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         dpg.add_separator()
         
         dpg.add_text("Now Playing:", color=(200, 200, 255))
@@ -422,23 +612,23 @@ class MusicAutoShowGUI:
         # Album color palette and audio visualization display
         with dpg.group(horizontal=True):
             dpg.add_text("Album Colors:", color=(150, 150, 180))
-            dpg.add_spacer(width=10)
+            dpg.add_spacer(width=scaled(10))
             # Create 5 color swatches using drawlist
-            with dpg.drawlist(width=200, height=20, tag="color_palette"):
+            with dpg.drawlist(width=scaled(200), height=scaled(20), tag="color_palette"):
                 # Will be drawn in _update_gui
                 pass
             
-            dpg.add_spacer(width=20)
+            dpg.add_spacer(width=scaled(20))
             # Audio analysis visualization (spectrum, beats, onset detection)
-            with dpg.drawlist(width=500, height=80, tag="audio_viz_display"):
+            with dpg.drawlist(width=scaled(500), height=scaled(80), tag="audio_viz_display"):
                 # Will be drawn in _update_gui - shows how BPM/energy/etc are calculated
                 pass
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Audio Analysis", default_open=True):
             with dpg.group(horizontal=True):
-                with dpg.child_window(width=300, height=180, border=True):
+                with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Energy:")
                     dpg.add_progress_bar(tag="energy_bar", default_value=0.0, width=-1)
                     dpg.add_text("Bass:")
@@ -448,7 +638,7 @@ class MusicAutoShowGUI:
                     dpg.add_text("High:")
                     dpg.add_progress_bar(tag="high_bar", default_value=0.0, width=-1)
                 
-                with dpg.child_window(width=300, height=180, border=True):
+                with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Tempo:", tag="tempo_text")
                     dpg.add_progress_bar(tag="tempo_bar", default_value=0.5, width=-1)
                     dpg.add_text("Beat Position:")
@@ -458,7 +648,7 @@ class MusicAutoShowGUI:
                     dpg.add_text("Valence:")
                     dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
                 
-                with dpg.child_window(width=300, height=180, border=True):
+                with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Background Tasks:", color=(180, 180, 220))
                     dpg.add_separator()
                     dpg.add_text("Madmom Beat Detection:", color=(150, 150, 180))
@@ -466,22 +656,25 @@ class MusicAutoShowGUI:
                     dpg.add_progress_bar(tag="madmom_progress", default_value=0.0, width=-1)
                     dpg.add_text("  Audio buffer: 0.0s", tag="madmom_buffer")
                     dpg.add_text("  Next run: --", tag="madmom_next_run")
-                    dpg.add_spacer(height=5)
+                    dpg.add_spacer(height=scaled(5))
                     dpg.add_text("Effects Engine:", color=(150, 150, 180))
                     dpg.add_text("  FPS: 0", tag="effects_fps")
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Stage View", default_open=True):
-            with dpg.drawlist(width=940, height=400, tag="visualizer"):
+            visualizer_width = scaled(940)
+            visualizer_height = scaled(400)
+            with dpg.drawlist(width=visualizer_width, height=visualizer_height, tag="visualizer"):
                 self._visualizer_id = "visualizer"
-                dpg.draw_rectangle((0, 0), (940, 400), fill=(10, 10, 15))
-                dpg.draw_text((420, 190), "Start show to see visualization", size=18, color=(60, 60, 80))
+                dpg.draw_rectangle((0, 0), (visualizer_width, visualizer_height), fill=(10, 10, 15))
+                dpg.draw_text((visualizer_width // 2 - scaled(100), visualizer_height // 2 - scaled(10)), 
+                             "Start show to see visualization", size=scaled(18), color=(60, 60, 80))
         
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="DMX Universe", default_open=False):
-            with dpg.child_window(height=120, border=True, horizontal_scrollbar=True, tag="dmx_universe_container"):
+            with dpg.child_window(height=scaled(120), border=True, horizontal_scrollbar=True, tag="dmx_universe_container"):
                 dpg.add_text("Add fixtures to see DMX channels", tag="dmx_no_fixtures_text", color=(100, 100, 120))
     
     def _refresh_fixture_list(self) -> None:
@@ -493,7 +686,7 @@ class MusicAutoShowGUI:
                 with dpg.group(horizontal=True, parent=self._fixture_list_id):
                     dpg.add_selectable(
                         label=f"{fixture.name} [{profile_text}] (Ch {fixture.start_channel})",
-                        width=350, tag=f"fixture_sel_{i}",
+                        width=scaled(350), tag=f"fixture_sel_{i}",
                         callback=self._on_fixture_selected,
                         user_data=fixture
                     )
@@ -1123,11 +1316,12 @@ class MusicAutoShowGUI:
                     dpg.set_value(f"dmx_ch_{i+1}", channels[i] / 255.0)
         
         # Draw the stage visualizer
-        self._stage_visualizer.draw(
-            self.config.fixtures,
-            self._fixture_states,
-            self._current_analysis
-        )
+        if self._stage_visualizer:
+            self._stage_visualizer.draw(
+                self.config.fixtures,
+                self._fixture_states,
+                self._current_analysis
+            )
     
     def _new_config(self) -> None:
         self.config = ShowConfig()
@@ -1137,7 +1331,8 @@ class MusicAutoShowGUI:
             dpg.set_value("show_name_input", self.config.name)
     
     def _load_config_dialog(self) -> None:
-        with dpg.file_dialog(directory_selector=False, show=True, callback=self._load_config_callback, width=600, height=400):
+        with dpg.file_dialog(directory_selector=False, show=True, callback=self._load_config_callback, 
+                            width=scaled(600), height=scaled(400)):
             dpg.add_file_extension(".json", color=(0, 255, 0))
     
     def _load_config_callback(self, sender, app_data) -> None:
@@ -1153,7 +1348,7 @@ class MusicAutoShowGUI:
     
     def _save_config_dialog(self) -> None:
         with dpg.file_dialog(directory_selector=False, show=True, callback=self._save_config_callback,
-                            default_filename="show_config.json", width=600, height=400):
+                            default_filename="show_config.json", width=scaled(600), height=scaled(400)):
             dpg.add_file_extension(".json", color=(0, 255, 0))
     
     def _save_config_callback(self, sender, app_data) -> None:

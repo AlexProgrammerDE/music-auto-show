@@ -24,19 +24,26 @@ class StageVisualizer:
     def __init__(self, 
                  visualizer_id: str = "visualizer",
                  width: int = 940, 
-                 height: int = 400):
+                 height: int = 400,
+                 scale: float = 1.0):
         """
         Initialize the stage visualizer.
         
         Args:
             visualizer_id: DearPyGui tag for the drawlist
-            width: Width of the visualization area
-            height: Height of the visualization area
+            width: Width of the visualization area (already scaled)
+            height: Height of the visualization area (already scaled)
+            scale: DPI scale factor for text and detail elements
         """
         self.visualizer_id = visualizer_id
         self.width = width
         self.height = height
+        self.scale = scale
         self._profiles_cache: dict[str, 'FixtureProfile'] = {}
+    
+    def _scaled(self, value: int | float) -> int:
+        """Scale a value by the DPI scale factor."""
+        return int(value * self.scale)
     
     def _get_fixture_type(self, fixture: 'FixtureConfig') -> FixtureType:
         """Get the fixture type for a fixture."""
@@ -78,8 +85,8 @@ class StageVisualizer:
         # Stage background - dark with subtle gradient effect
         dpg.draw_rectangle((0, 0), (self.width, self.height), fill=(8, 8, 12), parent=self.visualizer_id)
         
-        # Draw stage floor with perspective
-        floor_top = 320
+        # Draw stage floor with perspective (scale floor position relative to height)
+        floor_top = int(self.height * 0.8)  # 80% down
         floor_color = (25, 25, 35)
         dpg.draw_quad(
             (0, floor_top), (self.width, floor_top), (self.width, self.height), (0, self.height),
@@ -87,34 +94,40 @@ class StageVisualizer:
         )
         
         # Draw floor grid lines for perspective
-        for i in range(0, self.width + 1, 80):
+        grid_spacing_x = self._scaled(80)
+        grid_spacing_y = self._scaled(20)
+        for i in range(0, self.width + 1, grid_spacing_x):
             alpha = 30
             dpg.draw_line((i, floor_top), (i, self.height), color=(50, 50, 60, alpha), thickness=1, parent=self.visualizer_id)
-        for i in range(floor_top, self.height + 1, 20):
+        for i in range(floor_top, self.height + 1, grid_spacing_y):
             alpha = 20
             dpg.draw_line((0, i), (self.width, i), color=(50, 50, 60, alpha), thickness=1, parent=self.visualizer_id)
         
         # Draw truss at top
-        truss_y = 25
-        truss_height = 12
-        dpg.draw_rectangle((20, truss_y), (self.width - 20, truss_y + truss_height), 
+        truss_y = self._scaled(25)
+        truss_height = self._scaled(12)
+        margin = self._scaled(20)
+        dpg.draw_rectangle((margin, truss_y), (self.width - margin, truss_y + truss_height), 
                           fill=(50, 50, 55), color=(70, 70, 80), thickness=2, parent=self.visualizer_id)
         # Truss detail lines
-        for i in range(40, self.width - 20, 30):
-            dpg.draw_line((i, truss_y), (i + 15, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self.visualizer_id)
-            dpg.draw_line((i + 15, truss_y), (i, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self.visualizer_id)
+        truss_detail_spacing = self._scaled(30)
+        for i in range(margin * 2, self.width - margin, truss_detail_spacing):
+            offset = self._scaled(15)
+            dpg.draw_line((i, truss_y), (i + offset, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self.visualizer_id)
+            dpg.draw_line((i + offset, truss_y), (i, truss_y + truss_height), color=(40, 40, 45), thickness=1, parent=self.visualizer_id)
         
         if not fixtures:
-            dpg.draw_text((self.width // 2 - 100, self.height // 2 - 10), "No fixtures configured", 
-                         size=18, color=(80, 80, 100), parent=self.visualizer_id)
+            text_size = self._scaled(18)
+            dpg.draw_text((self.width // 2 - self._scaled(100), self.height // 2 - self._scaled(10)), "No fixtures configured", 
+                         size=text_size, color=(80, 80, 100), parent=self.visualizer_id)
             return
         
         num_fixtures = len(fixtures)
         sorted_fixtures = sorted(fixtures, key=lambda f: f.position)
         
         # Calculate fixture positions along the truss
-        margin = 80
-        available_width = self.width - 2 * margin
+        fixture_margin = self._scaled(80)
+        available_width = self.width - 2 * fixture_margin
         if num_fixtures > 1:
             spacing = available_width / (num_fixtures - 1)
         else:
@@ -129,10 +142,10 @@ class StageVisualizer:
             fixture_type = self._get_fixture_type(fixture)
             
             if num_fixtures > 1:
-                fixture_x = margin + i * spacing
+                fixture_x = fixture_margin + i * spacing
             else:
                 fixture_x = self.width / 2
-            fixture_y = truss_y + truss_height + 5
+            fixture_y = truss_y + truss_height + self._scaled(5)
             
             # Draw different effects based on fixture type
             if fixture_type == FixtureType.EFFECT:
@@ -146,10 +159,10 @@ class StageVisualizer:
             fixture_type = self._get_fixture_type(fixture)
             
             if num_fixtures > 1:
-                fixture_x = margin + i * spacing
+                fixture_x = fixture_margin + i * spacing
             else:
                 fixture_x = self.width / 2
-            fixture_y = truss_y + truss_height + 5
+            fixture_y = truss_y + truss_height + self._scaled(5)
             
             # Draw different fixture bodies based on type
             if fixture_type == FixtureType.EFFECT:
@@ -169,12 +182,12 @@ class StageVisualizer:
         pan_normalized = (state.pan - 128) / 128  # -1 to 1
         tilt_normalized = state.tilt / 255  # 0 to 1 (0=up, 1=down)
         
-        # Beam end position
-        beam_length = 250 + tilt_normalized * 80  # Longer beam when pointing down
-        beam_spread = 60 + tilt_normalized * 40  # Wider spread when pointing down
+        # Beam end position (scaled)
+        beam_length = self._scaled(250) + tilt_normalized * self._scaled(80)
+        beam_spread = self._scaled(60) + tilt_normalized * self._scaled(40)
         
-        beam_end_x = fixture_x + pan_normalized * 200
-        beam_end_y = fixture_y + 40 + beam_length * tilt_normalized
+        beam_end_x = fixture_x + pan_normalized * self._scaled(200)
+        beam_end_y = fixture_y + self._scaled(40) + beam_length * tilt_normalized
         
         # Only draw beam if there's some brightness
         brightness = (state.red + state.green + state.blue) / 3
@@ -185,13 +198,16 @@ class StageVisualizer:
             # Draw multiple beam layers for glow effect
             for layer in range(3):
                 layer_alpha = alpha // (layer + 1)
-                layer_spread = beam_spread + layer * 15
+                layer_spread = beam_spread + layer * self._scaled(15)
                 layer_color = (state.red, state.green, state.blue, layer_alpha)
+                
+                beam_top_offset = self._scaled(8) + layer * self._scaled(3)
+                beam_top_y = fixture_y + self._scaled(45)
                 
                 # Draw beam as a quad (trapezoid shape)
                 dpg.draw_quad(
-                    (fixture_x - 8 - layer * 3, fixture_y + 45),  # Top left
-                    (fixture_x + 8 + layer * 3, fixture_y + 45),  # Top right
+                    (fixture_x - beam_top_offset, beam_top_y),  # Top left
+                    (fixture_x + beam_top_offset, beam_top_y),  # Top right
                     (beam_end_x + layer_spread / 2, beam_end_y),  # Bottom right
                     (beam_end_x - layer_spread / 2, beam_end_y),  # Bottom left
                     fill=layer_color, parent=self.visualizer_id
@@ -199,10 +215,10 @@ class StageVisualizer:
             
             # Draw floor spot (where beam hits)
             if tilt_normalized > 0.3:
-                spot_size = 30 + tilt_normalized * 40
+                spot_size = self._scaled(30) + tilt_normalized * self._scaled(40)
                 spot_alpha = min(100, int(brightness * 0.4))
                 spot_color = (state.red, state.green, state.blue, spot_alpha)
-                spot_y = min(beam_end_y, self.height - 20)
+                spot_y = min(beam_end_y, self.height - self._scaled(20))
                 dpg.draw_ellipse(
                     (beam_end_x - spot_size, spot_y - spot_size / 3),
                     (beam_end_x + spot_size, spot_y + spot_size / 3),
@@ -214,26 +230,31 @@ class StageVisualizer:
                       truss_y: int, truss_height: int) -> None:
         """Draw a fixture body on the truss."""
         # Draw fixture mount (connection to truss)
+        mount_half_width = self._scaled(4)
         dpg.draw_rectangle(
-            (fixture_x - 4, truss_y + truss_height - 2), 
-            (fixture_x + 4, fixture_y + 10),
+            (fixture_x - mount_half_width, truss_y + truss_height - self._scaled(2)), 
+            (fixture_x + mount_half_width, fixture_y + self._scaled(10)),
             fill=(60, 60, 65), parent=self.visualizer_id
         )
         
         # Draw fixture body (yoke)
         yoke_color = (70, 70, 80)
+        yoke_half_width = self._scaled(12)
         dpg.draw_rectangle(
-            (fixture_x - 12, fixture_y + 8),
-            (fixture_x + 12, fixture_y + 45),
-            fill=yoke_color, color=(90, 90, 100), thickness=1, rounding=3, parent=self.visualizer_id
+            (fixture_x - yoke_half_width, fixture_y + self._scaled(8)),
+            (fixture_x + yoke_half_width, fixture_y + self._scaled(45)),
+            fill=yoke_color, color=(90, 90, 100), thickness=1, rounding=self._scaled(3), parent=self.visualizer_id
         )
         
         # Draw fixture head (rotated based on tilt)
         head_color = (50, 50, 60)
-        tilt_offset = (state.tilt - 128) / 255 * 15  # Visual tilt indication
+        tilt_offset = (state.tilt - 128) / 255 * self._scaled(15)  # Visual tilt indication
+        head_half_width = self._scaled(10)
+        head_half_height = self._scaled(8)
+        head_center_y = fixture_y + self._scaled(25) + tilt_offset
         dpg.draw_ellipse(
-            (fixture_x - 10, fixture_y + 25 + tilt_offset - 8),
-            (fixture_x + 10, fixture_y + 25 + tilt_offset + 8),
+            (fixture_x - head_half_width, head_center_y - head_half_height),
+            (fixture_x + head_half_width, head_center_y + head_half_height),
             fill=head_color, color=(80, 80, 90), thickness=1, parent=self.visualizer_id
         )
         
@@ -241,7 +262,7 @@ class StageVisualizer:
         brightness = (state.red + state.green + state.blue) / 3
         if brightness > 10:
             # Glowing lens
-            glow_size = 8 + (brightness / 255) * 4
+            glow_size = self._scaled(8) + (brightness / 255) * self._scaled(4)
             glow_color = (
                 min(255, state.red + 50),
                 min(255, state.green + 50),
@@ -249,31 +270,31 @@ class StageVisualizer:
                 200
             )
             dpg.draw_circle(
-                (fixture_x, fixture_y + 25 + tilt_offset), glow_size,
+                (fixture_x, head_center_y), glow_size,
                 fill=glow_color, parent=self.visualizer_id
             )
         
         # Lens center
         lens_color = (state.red, state.green, state.blue, 255) if brightness > 0 else (30, 30, 35, 255)
         dpg.draw_circle(
-            (fixture_x, fixture_y + 25 + tilt_offset), 6,
+            (fixture_x, head_center_y), self._scaled(6),
             fill=lens_color, color=(100, 100, 110), thickness=1, parent=self.visualizer_id
         )
         
         # Draw fixture label
-        label_y = fixture_y + 52
+        label_y = fixture_y + self._scaled(52)
         name_short = fixture.name[:10] if len(fixture.name) > 10 else fixture.name
         # Center the text approximately
-        text_offset = len(name_short) * 3
+        text_offset = len(name_short) * self._scaled(3)
         dpg.draw_text(
             (fixture_x - text_offset, label_y), name_short,
-            size=11, color=(160, 160, 180), parent=self.visualizer_id
+            size=self._scaled(11), color=(160, 160, 180), parent=self.visualizer_id
         )
         
         # Draw channel info below
         dpg.draw_text(
-            (fixture_x - 15, label_y + 14), f"Ch {fixture.start_channel}",
-            size=10, color=(100, 100, 120), parent=self.visualizer_id
+            (fixture_x - self._scaled(15), label_y + self._scaled(14)), f"Ch {fixture.start_channel}",
+            size=self._scaled(10), color=(100, 100, 120), parent=self.visualizer_id
         )
     
     def _draw_effect_light_beams(self, fixture_x: float, fixture_y: float, state: 'FixtureState') -> None:
@@ -306,7 +327,7 @@ class StageVisualizer:
         
         # Draw 4-6 scattered beams (Derby style)
         num_beams = 5
-        beam_length = 180
+        beam_length = self._scaled(180)
         
         for i in range(num_beams):
             # Each beam at a different angle
@@ -314,13 +335,13 @@ class StageVisualizer:
             angle = base_angle + rotation_offset
             
             # Vary beam properties
-            beam_spread = 25 + (i % 3) * 10
-            length_var = beam_length + (i % 2) * 30
+            beam_spread = self._scaled(25) + (i % 3) * self._scaled(10)
+            length_var = beam_length + (i % 2) * self._scaled(30)
             
             # Calculate beam end position
             # Beams go downward and outward
-            end_x = fixture_x + math.sin(angle) * 120
-            end_y = fixture_y + 50 + length_var + abs(math.cos(angle)) * 50
+            end_x = fixture_x + math.sin(angle) * self._scaled(120)
+            end_y = fixture_y + self._scaled(50) + length_var + abs(math.cos(angle)) * self._scaled(50)
             
             # Alpha based on strobe (if strobe is active, flash the beams)
             alpha = min(150, int(brightness * 0.6))
@@ -334,10 +355,13 @@ class StageVisualizer:
             
             beam_color = (r, g, b, alpha)
             
+            beam_top_offset = self._scaled(5)
+            beam_top_y = fixture_y + self._scaled(50)
+            
             # Draw beam as narrow cone
             dpg.draw_quad(
-                (fixture_x - 5, fixture_y + 50),  # Top left
-                (fixture_x + 5, fixture_y + 50),  # Top right  
+                (fixture_x - beam_top_offset, beam_top_y),  # Top left
+                (fixture_x + beam_top_offset, beam_top_y),  # Top right  
                 (end_x + beam_spread / 2, end_y),  # Bottom right
                 (end_x - beam_spread / 2, end_y),  # Bottom left
                 fill=beam_color, parent=self.visualizer_id
@@ -348,9 +372,9 @@ class StageVisualizer:
             base_angle = (i / num_beams) * 2 * math.pi
             angle = base_angle + rotation_offset
             
-            spot_x = fixture_x + math.sin(angle) * 100
-            spot_y = self.height - 60 + abs(math.cos(angle)) * 30
-            spot_size = 20 + (i % 3) * 8
+            spot_x = fixture_x + math.sin(angle) * self._scaled(100)
+            spot_y = self.height - self._scaled(60) + abs(math.cos(angle)) * self._scaled(30)
+            spot_size = self._scaled(20) + (i % 3) * self._scaled(8)
             
             spot_alpha = min(80, int(brightness * 0.3))
             spot_color = (r, g, b, spot_alpha)
@@ -366,18 +390,20 @@ class StageVisualizer:
                                     truss_y: int, truss_height: int) -> None:
         """Draw an effect light fixture body (Derby, Moonflower style)."""
         # Draw fixture mount
+        mount_half_width = self._scaled(4)
         dpg.draw_rectangle(
-            (fixture_x - 4, truss_y + truss_height - 2),
-            (fixture_x + 4, fixture_y + 10),
+            (fixture_x - mount_half_width, truss_y + truss_height - self._scaled(2)),
+            (fixture_x + mount_half_width, fixture_y + self._scaled(10)),
             fill=(60, 60, 65), parent=self.visualizer_id
         )
         
         # Effect light body - wider and shorter than moving head
         body_color = (55, 55, 65)
+        body_half_width = self._scaled(18)
         dpg.draw_rectangle(
-            (fixture_x - 18, fixture_y + 8),
-            (fixture_x + 18, fixture_y + 48),
-            fill=body_color, color=(75, 75, 85), thickness=1, rounding=5, parent=self.visualizer_id
+            (fixture_x - body_half_width, fixture_y + self._scaled(8)),
+            (fixture_x + body_half_width, fixture_y + self._scaled(48)),
+            fill=body_color, color=(75, 75, 85), thickness=1, rounding=self._scaled(5), parent=self.visualizer_id
         )
         
         # Dome/lens area - characteristic of derby lights
@@ -389,16 +415,16 @@ class StageVisualizer:
         if brightness > 10:
             glow_color = (min(255, r + 30), min(255, g + 30), min(255, b + 30), 180)
             dpg.draw_ellipse(
-                (fixture_x - 14, fixture_y + 18),
-                (fixture_x + 14, fixture_y + 44),
+                (fixture_x - self._scaled(14), fixture_y + self._scaled(18)),
+                (fixture_x + self._scaled(14), fixture_y + self._scaled(44)),
                 fill=glow_color, parent=self.visualizer_id
             )
         
         # Inner lens/mirror
         lens_color = (r, g, b, 255) if brightness > 0 else (25, 25, 30, 255)
         dpg.draw_ellipse(
-            (fixture_x - 10, fixture_y + 22),
-            (fixture_x + 10, fixture_y + 40),
+            (fixture_x - self._scaled(10), fixture_y + self._scaled(22)),
+            (fixture_x + self._scaled(10), fixture_y + self._scaled(40)),
             fill=lens_color, color=(90, 90, 100), thickness=1, parent=self.visualizer_id
         )
         
@@ -413,23 +439,23 @@ class StageVisualizer:
                 200
             )
             dpg.draw_circle(
-                (fixture_x + dx, fixture_y + dy), 3,
+                (fixture_x + self._scaled(dx), fixture_y + self._scaled(dy)), self._scaled(3),
                 fill=dot_color, parent=self.visualizer_id
             )
         
         # Label
-        label_y = fixture_y + 52
+        label_y = fixture_y + self._scaled(52)
         name_short = fixture.name[:10] if len(fixture.name) > 10 else fixture.name
-        text_offset = len(name_short) * 3
+        text_offset = len(name_short) * self._scaled(3)
         dpg.draw_text(
             (fixture_x - text_offset, label_y), name_short,
-            size=11, color=(160, 160, 180), parent=self.visualizer_id
+            size=self._scaled(11), color=(160, 160, 180), parent=self.visualizer_id
         )
         
         # Type indicator
         dpg.draw_text(
-            (fixture_x - 20, label_y + 14), f"Effect Ch{fixture.start_channel}",
-            size=9, color=(120, 100, 140), parent=self.visualizer_id
+            (fixture_x - self._scaled(20), label_y + self._scaled(14)), f"Effect Ch{fixture.start_channel}",
+            size=self._scaled(9), color=(120, 100, 140), parent=self.visualizer_id
         )
     
     def _color_macro_to_rgb(self, color_macro: int) -> tuple[int, int, int]:
@@ -479,13 +505,14 @@ class StageVisualizer:
     
     def _draw_audio_bar(self, data: 'AnalysisData') -> None:
         """Draw the audio visualization bar at the bottom of the stage."""
-        bar_y = self.height - 25
-        bar_height = 15
-        bar_width = self.width - 40
+        bar_margin = self._scaled(20)
+        bar_y = self.height - self._scaled(25)
+        bar_height = self._scaled(15)
+        bar_width = self.width - bar_margin * 2
         
         # Background bar
         dpg.draw_rectangle(
-            (20, bar_y), (20 + bar_width, bar_y + bar_height),
+            (bar_margin, bar_y), (bar_margin + bar_width, bar_y + bar_height),
             fill=(30, 30, 40), color=(50, 50, 60), thickness=1, parent=self.visualizer_id
         )
         
@@ -497,19 +524,19 @@ class StageVisualizer:
             g = int(100 + data.features.mid * 100)
             b = int(100 + data.features.high * 155)
             dpg.draw_rectangle(
-                (20, bar_y), (20 + energy_width, bar_y + bar_height),
+                (bar_margin, bar_y), (bar_margin + energy_width, bar_y + bar_height),
                 fill=(r, g, b, 180), parent=self.visualizer_id
             )
         
         # Beat indicator
-        beat_x = 20 + int(data.beat_position * bar_width)
+        beat_x = bar_margin + int(data.beat_position * bar_width)
         dpg.draw_line(
-            (beat_x, bar_y - 3), (beat_x, bar_y + bar_height + 3),
+            (beat_x, bar_y - self._scaled(3)), (beat_x, bar_y + bar_height + self._scaled(3)),
             color=(255, 255, 255, 150), thickness=2, parent=self.visualizer_id
         )
         
         # BPM text
         dpg.draw_text(
-            (self.width - 80, bar_y + 1), f"{data.features.tempo:.0f} BPM",
-            size=12, color=(180, 180, 200), parent=self.visualizer_id
+            (self.width - self._scaled(80), bar_y + 1), f"{data.features.tempo:.0f} BPM",
+            size=self._scaled(12), color=(180, 180, 200), parent=self.visualizer_id
         )

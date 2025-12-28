@@ -15,6 +15,19 @@ from config import (
     get_available_presets, get_preset, get_channel_type_display_name
 )
 
+# Import scaling function from gui module
+def _get_scale() -> float:
+    """Get the DPI scale factor from the main GUI module."""
+    try:
+        from gui import get_dpi_scale
+        return get_dpi_scale()
+    except ImportError:
+        return 1.0
+
+def scaled(value: int | float) -> int:
+    """Scale a pixel value by the DPI scale factor."""
+    return int(value * _get_scale())
+
 if TYPE_CHECKING:
     from config import ShowConfig, FixtureProfile
 
@@ -85,24 +98,24 @@ class FixtureDialogs:
         next_position = self._get_next_position()
         
         with dpg.window(label="Add Fixture", modal=True, tag="add_fixture_window",
-                       width=750, height=650, pos=(250, 30)):
+                       width=scaled(750), height=scaled(650), pos=(scaled(250), scaled(30))):
             
             # Basic settings
             with dpg.collapsing_header(label="Basic Settings", default_open=True):
-                dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=250)
+                dpg.add_input_text(label="Name", tag="new_fixture_name", default_value="New Fixture", width=scaled(250))
                 dpg.add_input_int(label="Start Channel", tag="new_fixture_start", default_value=next_start_channel,
-                                 min_value=1, max_value=512, width=100)
+                                 min_value=1, max_value=512, width=scaled(100))
                 dpg.add_input_int(label="Position", tag="new_fixture_position", 
-                                 default_value=next_position, width=100)
+                                 default_value=next_position, width=scaled(100))
                 dpg.add_slider_float(label="Intensity Scale", tag="new_fixture_intensity",
-                                    default_value=1.0, min_value=0.0, max_value=1.0, width=200)
+                                    default_value=1.0, min_value=0.0, max_value=1.0, width=scaled(200))
             
             # Profile selection
             with dpg.collapsing_header(label="Profile", default_open=True):
                 preset_names = ["(Custom)"] + get_available_presets()
                 dpg.add_combo(label="Select Profile", items=preset_names, 
                              default_value=preset_names[1] if len(preset_names) > 1 else "(Custom)",
-                             tag="new_fixture_profile", width=300,
+                             tag="new_fixture_profile", width=scaled(300),
                              callback=self._on_add_profile_changed)
                 dpg.add_text("Select a profile to auto-configure channels for your fixture type.", 
                             color=(150, 150, 150))
@@ -110,11 +123,11 @@ class FixtureDialogs:
             # Movement limits
             with dpg.collapsing_header(label="Movement Limits", default_open=False):
                 with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=80)
-                    dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=80)
+                    dpg.add_input_int(label="Pan Min", tag="new_pan_min", default_value=0, width=scaled(80))
+                    dpg.add_input_int(label="Pan Max", tag="new_pan_max", default_value=255, width=scaled(80))
                 with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=80)
-                    dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=80)
+                    dpg.add_input_int(label="Tilt Min", tag="new_tilt_min", default_value=0, width=scaled(80))
+                    dpg.add_input_int(label="Tilt Max", tag="new_tilt_max", default_value=255, width=scaled(80))
             
             # Channels preview
             with dpg.collapsing_header(label="Channels Preview", default_open=True):
@@ -123,13 +136,13 @@ class FixtureDialogs:
                 dpg.add_text("You can customize channels after adding the fixture.", 
                             color=(150, 150, 150))
                 dpg.add_separator()
-                with dpg.child_window(height=200, border=True, tag="new_channel_preview"):
+                with dpg.child_window(height=scaled(200), border=True, tag="new_channel_preview"):
                     self._refresh_add_channel_preview()
             
             dpg.add_separator()
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Add Fixture", callback=self._add_fixture_confirm, width=120)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_fixture_window"), width=100)
+                dpg.add_button(label="Add Fixture", callback=self._add_fixture_confirm, width=scaled(120))
+                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_fixture_window"), width=scaled(100))
     
     def _on_add_profile_changed(self, sender, app_data) -> None:
         """Update channel preview when profile is changed in add dialog."""
@@ -161,11 +174,11 @@ class FixtureDialogs:
         # Header
         with dpg.group(horizontal=True, parent="new_channel_preview"):
             dpg.add_text("DMX Ch", color=(150, 150, 150))
-            dpg.add_spacer(width=20)
+            dpg.add_spacer(width=scaled(20))
             dpg.add_text("Name", color=(150, 150, 150))
-            dpg.add_spacer(width=100)
+            dpg.add_spacer(width=scaled(100))
             dpg.add_text("Type", color=(150, 150, 150))
-            dpg.add_spacer(width=80)
+            dpg.add_spacer(width=scaled(80))
             dpg.add_text("Default", color=(150, 150, 150))
         
         dpg.add_separator(parent="new_channel_preview")
@@ -177,11 +190,11 @@ class FixtureDialogs:
             
             with dpg.group(horizontal=True, parent="new_channel_preview"):
                 dpg.add_text(f"{dmx_ch:3d}", color=(100, 150, 200))
-                dpg.add_spacer(width=30)
+                dpg.add_spacer(width=scaled(30))
                 dpg.add_text(f"{ch.name[:15]:<15}", color=(200, 200, 200))
-                dpg.add_spacer(width=20)
+                dpg.add_spacer(width=scaled(20))
                 dpg.add_text(f"{type_name[:12]:<12}", color=(150, 200, 150))
-                dpg.add_spacer(width=20)
+                dpg.add_spacer(width=scaled(20))
                 dpg.add_text(f"{ch.default_value:3d}", color=(150, 150, 150))
     
     def _add_fixture_confirm(self) -> None:
@@ -230,18 +243,18 @@ class FixtureDialogs:
             dpg.delete_item("edit_fixture_window")
         
         with dpg.window(label=f"Edit Fixture: {fixture.name}", modal=True, 
-                       tag="edit_fixture_window", width=750, height=650, pos=(250, 30)):
+                       tag="edit_fixture_window", width=scaled(750), height=scaled(650), pos=(scaled(250), scaled(30))):
             
             # Basic settings
             with dpg.collapsing_header(label="Basic Settings", default_open=True):
                 dpg.add_input_text(label="Name", default_value=fixture.name, 
-                                  tag="edit_fixture_name", width=250)
+                                  tag="edit_fixture_name", width=scaled(250))
                 dpg.add_input_int(label="Start Channel", default_value=fixture.start_channel,
-                                 tag="edit_fixture_start", min_value=1, max_value=512, width=100)
+                                 tag="edit_fixture_start", min_value=1, max_value=512, width=scaled(100))
                 dpg.add_input_int(label="Position", default_value=fixture.position,
-                                 tag="edit_fixture_position", width=100)
+                                 tag="edit_fixture_position", width=scaled(100))
                 dpg.add_slider_float(label="Intensity Scale", default_value=fixture.intensity_scale,
-                                    tag="edit_fixture_intensity", min_value=0.0, max_value=1.0, width=200)
+                                    tag="edit_fixture_intensity", min_value=0.0, max_value=1.0, width=scaled(200))
             
             # Profile info
             with dpg.collapsing_header(label="Profile", default_open=True):
@@ -250,32 +263,32 @@ class FixtureDialogs:
                 
                 preset_names = ["(Custom)"] + get_available_presets()
                 dpg.add_combo(label="Change Profile", items=preset_names, default_value=profile_text,
-                             tag="edit_fixture_profile", width=300,
+                             tag="edit_fixture_profile", width=scaled(300),
                              callback=self._on_edit_profile_changed)
                 dpg.add_text("Changing profile will reset channel settings!", color=(255, 200, 100))
             
             # Movement limits
             with dpg.collapsing_header(label="Movement Limits", default_open=False):
                 with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Pan Min", default_value=fixture.pan_min, tag="edit_pan_min", width=80)
-                    dpg.add_input_int(label="Pan Max", default_value=fixture.pan_max, tag="edit_pan_max", width=80)
+                    dpg.add_input_int(label="Pan Min", default_value=fixture.pan_min, tag="edit_pan_min", width=scaled(80))
+                    dpg.add_input_int(label="Pan Max", default_value=fixture.pan_max, tag="edit_pan_max", width=scaled(80))
                 with dpg.group(horizontal=True):
-                    dpg.add_input_int(label="Tilt Min", default_value=fixture.tilt_min, tag="edit_tilt_min", width=80)
-                    dpg.add_input_int(label="Tilt Max", default_value=fixture.tilt_max, tag="edit_tilt_max", width=80)
+                    dpg.add_input_int(label="Tilt Min", default_value=fixture.tilt_min, tag="edit_tilt_min", width=scaled(80))
+                    dpg.add_input_int(label="Tilt Max", default_value=fixture.tilt_max, tag="edit_tilt_max", width=scaled(80))
             
             # Channels - show all from profile/fixture
             with dpg.collapsing_header(label="Channels", default_open=True):
                 dpg.add_text("Configure each channel. Set 'Fixed Value' to force a specific DMX value.", color=(150, 150, 150))
                 dpg.add_separator()
                 
-                with dpg.child_window(height=280, border=True, tag="channel_list_container"):
+                with dpg.child_window(height=scaled(280), border=True, tag="channel_list_container"):
                     self._refresh_channel_list(fixture)
             
             dpg.add_separator()
             
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Save", callback=self._save_fixture_edit, width=100)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("edit_fixture_window"), width=100)
+                dpg.add_button(label="Save", callback=self._save_fixture_edit, width=scaled(100))
+                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("edit_fixture_window"), width=scaled(100))
     
     def _on_edit_profile_changed(self, sender, app_data) -> None:
         """Handle profile change - reload channels from new profile."""
@@ -318,12 +331,12 @@ class FixtureDialogs:
                        borders_innerV=True, borders_outerV=True, row_background=True,
                        parent="channel_list_container", resizable=True):
             
-            dpg.add_table_column(label="DMX", width_fixed=True, init_width_or_weight=40)
-            dpg.add_table_column(label="Name", width_fixed=True, init_width_or_weight=100)
-            dpg.add_table_column(label="Type", width_fixed=True, init_width_or_weight=140)
-            dpg.add_table_column(label="Fixed", width_fixed=True, init_width_or_weight=40)
-            dpg.add_table_column(label="Value", width_fixed=True, init_width_or_weight=60)
-            dpg.add_table_column(label="On", width_fixed=True, init_width_or_weight=40)
+            dpg.add_table_column(label="DMX", width_fixed=True, init_width_or_weight=scaled(40))
+            dpg.add_table_column(label="Name", width_fixed=True, init_width_or_weight=scaled(100))
+            dpg.add_table_column(label="Type", width_fixed=True, init_width_or_weight=scaled(140))
+            dpg.add_table_column(label="Fixed", width_fixed=True, init_width_or_weight=scaled(40))
+            dpg.add_table_column(label="Value", width_fixed=True, init_width_or_weight=scaled(60))
+            dpg.add_table_column(label="On", width_fixed=True, init_width_or_weight=scaled(40))
             
             # Channel rows
             for i, ch in enumerate(channels):
@@ -364,7 +377,7 @@ class FixtureDialogs:
                                     callback=lambda s, a, u: self._update_channel_enabled(u, a),
                                     user_data=i)
         
-        dpg.add_spacer(height=5, parent="channel_list_container")
+        dpg.add_spacer(height=scaled(5), parent="channel_list_container")
         dpg.add_button(label="Add Channel", callback=self._add_channel_dialog, parent="channel_list_container")
     
     def _update_channel_name(self, idx: int, name: str) -> None:
@@ -425,22 +438,22 @@ class FixtureDialogs:
             next_offset = max(ch.offset for ch in self._editing_fixture.channels) + 1
         
         with dpg.window(label="Add Channel", modal=True, tag="add_channel_window",
-                       width=400, height=250, pos=(450, 200)):
+                       width=scaled(400), height=scaled(250), pos=(scaled(450), scaled(200))):
             dpg.add_input_int(label="Channel Offset", tag="new_ch_offset", default_value=next_offset,
-                             min_value=1, max_value=512, width=100)
-            dpg.add_input_text(label="Name", tag="new_ch_name", default_value="New Channel", width=200)
+                             min_value=1, max_value=512, width=scaled(100))
+            dpg.add_input_text(label="Name", tag="new_ch_name", default_value="New Channel", width=scaled(200))
             
             type_names = [get_channel_type_display_name(ct) for ct in ChannelType]
             dpg.add_combo(label="Type", items=type_names, default_value=type_names[0],
-                         tag="new_ch_type", width=200)
+                         tag="new_ch_type", width=scaled(200))
             
             dpg.add_input_int(label="Default Value", tag="new_ch_default", default_value=0,
-                             min_value=0, max_value=255, width=100)
+                             min_value=0, max_value=255, width=scaled(100))
             
             dpg.add_separator()
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Add", callback=self._confirm_add_channel, width=80)
-                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_channel_window"), width=80)
+                dpg.add_button(label="Add", callback=self._confirm_add_channel, width=scaled(80))
+                dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_channel_window"), width=scaled(80))
     
     def _confirm_add_channel(self) -> None:
         """Confirm adding a new channel."""
