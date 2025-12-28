@@ -29,6 +29,36 @@ A cross-platform Python application that automatically visualizes system audio t
 
 ## Installation
 
+### System Dependencies
+
+Before installing with pip, you need Python development headers and audio libraries. These are required to compile PyAudio and madmom from source.
+
+**Fedora / RHEL / CentOS:**
+```bash
+sudo dnf install python3-devel portaudio-devel gcc
+```
+
+**Debian / Ubuntu:**
+```bash
+sudo apt install python3-dev portaudio19-dev gcc
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S python portaudio gcc
+```
+
+**Windows:**
+
+No additional system dependencies required - pre-built wheels are available. Just ensure you have:
+- Python 3.10-3.12 (3.13+ may have compatibility issues)
+- [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (usually already installed)
+
+**macOS:**
+```bash
+brew install portaudio
+```
+
 ### Option 1: Conda (Recommended)
 
 Conda is recommended because `aubio` (the beat detection library) requires pre-compiled binaries that aren't available via pip for all Python versions.

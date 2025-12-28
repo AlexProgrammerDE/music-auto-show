@@ -3,7 +3,8 @@ pydantic>=2.0.0
 numpy>=1.24.0
 
 # Real-time Audio Analysis (required)
-PyAudioWPatch>=0.2.12  # WASAPI loopback support on Windows
+PyAudioWPatch>=0.2.12; sys_platform == 'win32'  # WASAPI loopback support on Windows
+PyAudio>=0.2.14; sys_platform == 'linux'  # Audio capture on Linux
 madmom @ git+https://github.com/CPJKU/madmom.git  # Neural network beat/tempo detection (RNN + DBN)
 
 # DMX Control
