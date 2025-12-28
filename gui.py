@@ -340,6 +340,11 @@ class MusicAutoShowGUI:
                                 min_value=0.0, max_value=1.0, width=200,
                                 callback=lambda s, a: setattr(self.config.effects, 'intensity', a))
             
+            dpg.add_slider_float(label="Audio Gain", default_value=self.config.effects.audio_gain,
+                                min_value=0.1, max_value=5.0, width=200,
+                                callback=self._on_audio_gain_changed, tag="audio_gain_slider")
+            dpg.add_text("Adjusts sensitivity to audio input", color=(130, 130, 160))
+            
             dpg.add_slider_float(label="Color Speed", default_value=self.config.effects.color_speed,
                                 min_value=0.1, max_value=10.0, width=200,
                                 callback=lambda s, a: setattr(self.config.effects, 'color_speed', a))
@@ -518,6 +523,12 @@ class MusicAutoShowGUI:
         if self.effects_engine:
             self.effects_engine.update_config(self.config)
     
+    def _on_audio_gain_changed(self, sender, app_data) -> None:
+        """Handle audio gain slider change."""
+        self.config.effects.audio_gain = app_data
+        if self.audio_analyzer:
+            self.audio_analyzer.set_gain(app_data)
+    
     def _on_movement_mode_changed(self, sender, app_data) -> None:
         self.config.effects.movement_mode = MovementMode(app_data)
         self._update_movement_mode_hint(app_data)
@@ -679,6 +690,9 @@ class MusicAutoShowGUI:
             self.dmx_controller.stop()
             self.dmx_interface.close()
             return
+        
+        # Apply audio gain from config
+        self.audio_analyzer.set_gain(self.config.effects.audio_gain)
         
         logger.info("Creating effects engine...")
         self.effects_engine = EffectsEngine(self.dmx_controller, self.config)

@@ -45,6 +45,14 @@ class SimulatedAudioAnalyzer:
         if callback in self._callbacks:
             self._callbacks.remove(callback)
     
+    def set_gain(self, gain: float) -> None:
+        """Set the audio input gain (no-op for simulation)."""
+        pass  # Simulation doesn't use gain
+    
+    def get_gain(self) -> float:
+        """Get the current audio input gain."""
+        return 1.0  # Always return default for simulation
+    
     def start(self) -> bool:
         """Start simulated audio analysis."""
         if self._running:

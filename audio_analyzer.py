@@ -218,15 +218,16 @@ class AudioAnalyzer:
         self._onset_strength_history: deque[float] = deque(maxlen=64)  # For visualization
         self._onset_threshold = 0.3  # Threshold for onset detection from activations
         
-        # Adaptive energy scaling (auto-gain)
-        self._max_rms_observed = 0.01  # Start with small value, will grow
-        self._rms_decay = 0.9995  # Slowly decay max to adapt to quieter sections
+        # Audio gain (sensitivity multiplier, can be adjusted via set_gain())
+        self._gain = 1.0
         
-        # Per-band adaptive scaling (each band normalized independently)
-        self._max_bass = 0.01
-        self._max_mid = 0.01
-        self._max_high = 0.01
-        self._band_decay = 0.999  # Decay rate for band maxes
+        # Fixed reference values for absolute normalization
+        # These are based on typical audio levels from system audio capture
+        # Gain slider allows users to adjust sensitivity without changing these
+        self._ref_rms = 0.15  # Reference RMS for "normal" audio level
+        self._ref_bass = 0.02  # Reference bass power (20-250 Hz)
+        self._ref_mid = 0.01   # Reference mid power (250-4000 Hz)
+        self._ref_high = 0.002 # Reference high power (4000-16000 Hz)
         
         # Media info provider (for track name/artist display)
         self._media_info_provider = None
@@ -260,6 +261,14 @@ class AudioAnalyzer:
         """Remove a callback."""
         if callback in self._callbacks:
             self._callbacks.remove(callback)
+    
+    def set_gain(self, gain: float) -> None:
+        """Set the audio input gain/sensitivity multiplier (0.1 to 5.0)."""
+        self._gain = max(0.1, min(5.0, gain))
+    
+    def get_gain(self) -> float:
+        """Get the current audio input gain."""
+        return self._gain
     
     def get_loopback_device(self) -> Optional[dict]:
         """Find the default WASAPI loopback device."""
@@ -554,13 +563,6 @@ class AudioAnalyzer:
         # Calculate RMS energy first
         rms = np.sqrt(np.mean(audio_data ** 2))
         
-        # Update adaptive scaling - track max RMS with slow decay
-        if rms > self._max_rms_observed:
-            self._max_rms_observed = rms
-        else:
-            self._max_rms_observed *= self._rms_decay  # Slowly decay to adapt to quieter sections
-        self._max_rms_observed = max(0.01, self._max_rms_observed)  # Prevent division by zero
-        
         # Beat and onset detection
         beat_detected = False
         onset_detected = False
@@ -611,7 +613,7 @@ class AudioAnalyzer:
                 self._onset_history.append(current_time)
         else:
             # Fallback: simple energy-based detection if madmom not processing yet
-            normalized_rms = rms / self._max_rms_observed
+            normalized_rms = min(1.0, (rms / self._ref_rms) * self._gain)
             self._onset_strength_history.append(normalized_rms)
             self._prev_onset_strength = normalized_rms
         
@@ -639,12 +641,12 @@ class AudioAnalyzer:
         with self._lock:
             features = self._data.features
             
-            # Smooth energy with adaptive normalization
+            # Normalize energy with fixed reference and gain
             avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            # Normalize energy relative to observed max (adaptive auto-gain)
-            normalized_energy = avg_energy / self._max_rms_observed
-            features.energy = min(1.0, normalized_energy * 1.2)  # Slight boost, cap at 1.0
+            # Absolute normalization: compare to fixed reference, apply gain
+            normalized_energy = (avg_energy / self._ref_rms) * self._gain
+            features.energy = min(1.0, normalized_energy)  # Cap at 1.0
             
             # Smooth frequency bands
             features.bass = np.mean(list(self._bass_history)) if self._bass_history else 0
@@ -726,8 +728,8 @@ class AudioAnalyzer:
                 max_val = float(np.max(np.abs(chunk)))
                 # Apply some compression for better visibility
                 if max_val > 0:
-                    # Normalize and apply slight compression
-                    normalized = min(1.0, max_val / max(0.01, self._max_rms_observed * 3))
+                    # Normalize with fixed reference and gain
+                    normalized = min(1.0, (max_val / (self._ref_rms * 3)) * self._gain)
                     waveform.append(normalized)
                 else:
                     waveform.append(0.0)
@@ -772,8 +774,8 @@ class AudioAnalyzer:
                 # Get energy in this band
                 if high_idx > low_idx:
                     band_energy = np.mean(fft_data[low_idx:high_idx] ** 2)
-                    # Normalize with adaptive scaling
-                    normalized = min(1.0, band_energy / max(0.001, self._max_rms_observed ** 2 * 10))
+                    # Normalize with fixed reference and gain
+                    normalized = min(1.0, (band_energy / (self._ref_rms ** 2 * 10)) * self._gain)
                     spectrum.append(float(normalized))
                 else:
                     spectrum.append(0.0)
@@ -899,42 +901,11 @@ class AudioAnalyzer:
             self._madmom_processing = False
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
-        """Normalize frequency bands with adaptive per-band scaling."""
-        # Check if we have meaningful audio (any significant raw values)
-        total_raw = bass_raw + mid_raw + high_raw
-        
-        # If audio is essentially silent, reset adaptive scaling to defaults
-        # This ensures responsive values when music starts after silence
-        if total_raw < 0.0001:
-            self._max_bass = 0.01
-            self._max_mid = 0.01
-            self._max_high = 0.01
-            # Clear history to avoid stale values
-            self._bass_history.clear()
-            self._mid_history.clear()
-            self._high_history.clear()
-            return 0.0, 0.0, 0.0
-        
-        # Update max values with decay
-        if bass_raw > self._max_bass:
-            self._max_bass = bass_raw
-        else:
-            self._max_bass = max(0.01, self._max_bass * self._band_decay)
-        
-        if mid_raw > self._max_mid:
-            self._max_mid = mid_raw
-        else:
-            self._max_mid = max(0.01, self._max_mid * self._band_decay)
-            
-        if high_raw > self._max_high:
-            self._max_high = high_raw
-        else:
-            self._max_high = max(0.01, self._max_high * self._band_decay)
-        
-        # Normalize each band independently
-        bass = min(1.0, (bass_raw / self._max_bass) * 1.1)
-        mid = min(1.0, (mid_raw / self._max_mid) * 1.1)
-        high = min(1.0, (high_raw / self._max_high) * 1.1)
+        """Normalize frequency bands with absolute fixed reference values."""
+        # Normalize each band against its fixed reference, apply gain
+        bass = min(1.0, (bass_raw / self._ref_bass) * self._gain)
+        mid = min(1.0, (mid_raw / self._ref_mid) * self._gain)
+        high = min(1.0, (high_raw / self._ref_high) * self._gain)
         
         return bass, mid, high
     
