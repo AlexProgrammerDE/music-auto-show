@@ -900,6 +900,21 @@ class AudioAnalyzer:
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
         """Normalize frequency bands with adaptive per-band scaling."""
+        # Check if we have meaningful audio (any significant raw values)
+        total_raw = bass_raw + mid_raw + high_raw
+        
+        # If audio is essentially silent, reset adaptive scaling to defaults
+        # This ensures responsive values when music starts after silence
+        if total_raw < 0.0001:
+            self._max_bass = 0.01
+            self._max_mid = 0.01
+            self._max_high = 0.01
+            # Clear history to avoid stale values
+            self._bass_history.clear()
+            self._mid_history.clear()
+            self._high_history.clear()
+            return 0.0, 0.0, 0.0
+        
         # Update max values with decay
         if bass_raw > self._max_bass:
             self._max_bass = bass_raw
