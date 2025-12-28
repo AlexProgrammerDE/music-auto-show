@@ -240,6 +240,13 @@ class EffectsEngine:
             self._output_to_dmx()
             return self._smoothed_values.copy()
         
+        # If no music is playing (no energy or no tempo), fade to black and stop all effects
+        # This prevents movement and color cycling when there's silence
+        if data.features.energy < 0.01 or data.features.tempo <= 0:
+            self._fade_to_idle()
+            self._output_to_dmx()
+            return self._smoothed_values.copy()
+        
         self._time = time.time()
         
         # Update album colors if they changed
@@ -435,6 +442,12 @@ class EffectsEngine:
         - _rotation_phase: 0-1 cyclic value for position/animation
         - _rotation_intensity: 0-1 value for speed/intensity (used in auto modes)
         """
+        # Stop rotation when no music is playing (no energy or no tempo)
+        if data.features.energy < 0.01 or data.features.tempo <= 0:
+            self._rotation_phase = 0.0
+            self._smoothed_rotation = 0.0
+            return
+        
         mode = self.config.effects.rotation_mode
         effect_mode = self.config.effects.effect_fixture_mode
         dt = 1.0 / max(1, self.config.dmx.fps)  # Time delta per frame
@@ -1068,6 +1081,37 @@ class EffectsEngine:
             return dimmer_cap.min_value + int(dimmer_normalized * dimmer_span)
         
         return state.dimmer
+    
+    def _fade_to_idle(self) -> None:
+        """
+        Fade fixtures to idle state when no music is playing.
+        
+        Unlike blackout, this uses smoothing to gradually fade colors to black
+        while keeping fixtures responsive. Movement and effects stop immediately
+        but colors fade smoothly.
+        """
+        for fixture in self.config.fixtures:
+            state = self._states[fixture.name]
+            # Set target colors to zero - smoothing will fade them
+            state.red = 0
+            state.green = 0
+            state.blue = 0
+            state.white = 0
+            state.amber = 0
+            state.uv = 0
+            state.dimmer = 0
+            state.strobe = 0
+            # Stop effect rotation
+            state.effect = 0
+            state.effect_pattern = 0
+            state.color_macro = 0
+        
+        # Reset rotation state
+        self._rotation_phase = 0.0
+        self._smoothed_rotation = 0.0
+        
+        # Apply smoothing for gradual fade
+        self._apply_smoothing()
     
     def blackout(self) -> None:
         """Activate blackout - all fixtures to zero."""

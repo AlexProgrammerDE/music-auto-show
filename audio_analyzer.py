@@ -71,7 +71,7 @@ class AudioFeatures:
     high: float = 0.0      # 4000-20000 Hz
     
     # Beat/tempo
-    tempo: float = 120.0   # BPM
+    tempo: float = 0.0   # BPM (0 = no music detected)
     beat_detected: bool = False
     onset_detected: bool = False
     

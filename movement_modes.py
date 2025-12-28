@@ -95,6 +95,11 @@ def apply_movement(engine: "EffectsEngine", data: "AnalysisData",
     if speed <= 0.01:
         return
     
+    # No movement when there's no music (no energy or no tempo)
+    # This prevents fixtures from continuing to move during silence
+    if energy < 0.01 or data.features.tempo <= 0:
+        return
+    
     for fixture in engine.config.fixtures:
         profile = engine._get_profile(fixture)
         channels = fixture.get_channels(profile)
