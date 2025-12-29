@@ -57,6 +57,7 @@ class AudioMeters:
                 border-radius: 5px !important;
                 --q-linear-progress-track-color: #252d3d;
                 --q-linear-progress-bar-color: {color};
+                --q-linear-progress-speed: 10ms;
             ''')
             self._meters[key] = progress
     
