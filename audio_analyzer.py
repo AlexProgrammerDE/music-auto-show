@@ -221,12 +221,13 @@ class AudioAnalyzer:
         # Audio gain (sensitivity multiplier, can be adjusted via set_gain())
         self._gain = 1.0
         
-        # Adaptive max tracking for normalization (with decay)
+        # Adaptive max tracking for normalization (with very slow decay)
+        # These represent "what is loud for this audio source" and decay very slowly
         self._max_rms = 0.01
         self._max_bass = 0.01
         self._max_mid = 0.01
         self._max_high = 0.01
-        self._band_decay = 0.9995  # Slow decay for adaptive max values
+        self._band_decay = 0.99995  # Very slow decay (~30 sec to halve)
         
         # Media info provider (for track name/artist display)
         self._media_info_provider = None
@@ -622,9 +623,8 @@ class AudioAnalyzer:
         else:
             self._max_rms = max(0.01, self._max_rms * self._band_decay)
         
-        # Store normalized energy in history (gain applied at read time)
-        energy_normalized = min(1.0, (rms / self._max_rms) * 1.1)
-        self._energy_history.append(energy_normalized)
+        # Store raw RMS in history (normalization and gain applied at read time)
+        self._energy_history.append(rms)
         
         # FFT for frequency analysis
         if len(audio_data) >= self._fft_size:
@@ -648,7 +648,8 @@ class AudioAnalyzer:
                 self._mid_history.clear()
                 self._high_history.clear()
             else:
-                # Update adaptive max values with decay
+                # Update adaptive max values (only grow, slow decay)
+                # This establishes a reference level, not a per-frame normalization
                 if bass_raw > self._max_bass:
                     self._max_bass = bass_raw
                 else:
@@ -664,31 +665,32 @@ class AudioAnalyzer:
                 else:
                     self._max_high = max(0.01, self._max_high * self._band_decay)
                 
-                # Normalize to 0-1 and store in history (gain applied at read time)
-                bass_normalized = min(1.0, (bass_raw / self._max_bass) * 1.1)
-                mid_normalized = min(1.0, (mid_raw / self._max_mid) * 1.1)
-                high_normalized = min(1.0, (high_raw / self._max_high) * 1.1)
-                self._bass_history.append(bass_normalized)
-                self._mid_history.append(mid_normalized)
-                self._high_history.append(high_normalized)
+                # Store raw values - normalization and gain applied at read time
+                self._bass_history.append(bass_raw)
+                self._mid_history.append(mid_raw)
+                self._high_history.append(high_raw)
         
         # Update features with smoothing
         with self._lock:
             features = self._data.features
             
-            # Apply gain to normalized energy (history already contains 0-1 values)
+            # Normalize energy against adaptive max and apply gain
             avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            features.energy = min(1.0, avg_energy * self._gain)
+            features.energy = min(1.0, (avg_energy / self._max_rms) * self._gain) if self._max_rms > 0 else 0
             
-            # Smooth frequency bands and apply gain at read time (for immediate response to gain changes)
-            # History already contains normalized 0-1 values, just apply gain
+            # Smooth frequency bands and apply gain
             avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
             avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
             avg_high = np.mean(list(self._high_history)) if self._high_history else 0
-            features.bass = min(1.0, avg_bass * self._gain)
-            features.mid = min(1.0, avg_mid * self._gain)
-            features.high = min(1.0, avg_high * self._gain)
+            
+            # Use adaptive max as the reference for "full scale", gain adjusts sensitivity
+            # At gain=1.0, reaching the adaptive max = 1.0 output
+            # At gain=0.5, you need 2x the adaptive max to reach 1.0
+            # At gain=2.0, you only need 0.5x the adaptive max to reach 1.0
+            features.bass = min(1.0, (avg_bass / self._max_bass) * self._gain) if self._max_bass > 0 else 0
+            features.mid = min(1.0, (avg_mid / self._max_mid) * self._gain) if self._max_mid > 0 else 0
+            features.high = min(1.0, (avg_high / self._max_high) * self._gain) if self._max_high > 0 else 0
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
