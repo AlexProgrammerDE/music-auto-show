@@ -403,7 +403,7 @@ def _create_main_layout() -> None:
             ui.timer(0.5, update_status)
     
     # Main content - use row layout instead of splitter for better control
-    with ui.row().classes('w-full main-splitter gap-0'):
+    with ui.row().classes('w-full main-splitter gap-0 no-wrap'):
         # Left panel - Configuration (fixed width)
         with ui.column().classes('w-80 left-panel overflow-auto p-2').style('min-width: 320px; max-width: 400px'):
             # Config panel
