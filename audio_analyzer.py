@@ -640,9 +640,22 @@ class AudioAnalyzer:
             # Normalize relative to signal power (RMS²) - this makes it input-level independent
             # Then divide by calibrated scale factor to get 0-1 range at gain=1.0
             if signal_power > 1e-10:  # Avoid division by zero
-                bass_norm = (bass_power / signal_power) / self._bass_scale
-                mid_norm = (mid_power / signal_power) / self._mid_scale
-                high_norm = (high_power / signal_power) / self._high_scale
+                bass_ratio = bass_power / signal_power
+                mid_ratio = mid_power / signal_power
+                high_ratio = high_power / signal_power
+                
+                bass_norm = bass_ratio / self._bass_scale
+                mid_norm = mid_ratio / self._mid_scale
+                high_norm = high_ratio / self._high_scale
+                
+                # Debug logging (every ~100 frames)
+                if hasattr(self, '_debug_counter'):
+                    self._debug_counter += 1
+                else:
+                    self._debug_counter = 0
+                if self._debug_counter % 100 == 0:
+                    logger.debug(f"Band ratios: bass={bass_ratio:.2f}, mid={mid_ratio:.2f}, high={high_ratio:.4f}")
+                    logger.debug(f"After scale: bass={bass_norm:.2f}, mid={mid_norm:.2f}, high={high_norm:.4f}")
             else:
                 bass_norm = 0.0
                 mid_norm = 0.0
