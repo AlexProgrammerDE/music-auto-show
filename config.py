@@ -224,6 +224,53 @@ class AudioInputMode(str, Enum):
     AUTO = "auto"  # Auto-detect best available
 
 
+class AudioDeviceType(str, Enum):
+    """Type of audio input device."""
+    LOOPBACK = "loopback"  # System audio loopback (captures what you hear)
+    MICROPHONE = "microphone"  # Physical microphone input
+    LINE_IN = "line_in"  # Line-in input
+    VIRTUAL = "virtual"  # Virtual audio device (e.g., VB-Cable)
+    MONITOR = "monitor"  # PulseAudio monitor device (Linux)
+    UNKNOWN = "unknown"  # Unknown device type
+
+
+class AudioDeviceInfo(BaseModel):
+    """Information about an audio input device."""
+    index: int = Field(..., description="Device index for pyaudio")
+    name: str = Field(..., description="Device name")
+    device_type: AudioDeviceType = Field(default=AudioDeviceType.UNKNOWN)
+    channels: int = Field(default=2, ge=1)
+    sample_rate: int = Field(default=44100)
+    host_api: str = Field(default="", description="Host API name (e.g., WASAPI, ALSA, CoreAudio)")
+    is_default: bool = Field(default=False, description="Is this the system default input")
+    is_default_loopback: bool = Field(default=False, description="Is this the default loopback device")
+    
+    def get_display_name(self) -> str:
+        """Get a user-friendly display name."""
+        type_prefix = {
+            AudioDeviceType.LOOPBACK: "[Loopback]",
+            AudioDeviceType.MICROPHONE: "[Mic]",
+            AudioDeviceType.LINE_IN: "[Line-In]",
+            AudioDeviceType.VIRTUAL: "[Virtual]",
+            AudioDeviceType.MONITOR: "[Monitor]",
+            AudioDeviceType.UNKNOWN: "",
+        }
+        prefix = type_prefix.get(self.device_type, "")
+        suffix = " (Default)" if self.is_default else ""
+        if prefix:
+            return f"{prefix} {self.name}{suffix}"
+        return f"{self.name}{suffix}"
+
+
+class AudioConfig(BaseModel):
+    """Audio input configuration."""
+    # Selected device (by name for persistence across sessions)
+    device_name: str = Field(default="", description="Selected device name (empty for auto)")
+    # Fallback mode if device not found
+    fallback_mode: AudioInputMode = Field(default=AudioInputMode.AUTO, 
+                                          description="Mode to use if selected device not found")
+
+
 class VisualizationMode(str, Enum):
     """How audio is mapped to fixture output."""
     ENERGY = "energy"
@@ -448,6 +495,7 @@ class ShowConfig(BaseModel):
     """Complete show configuration."""
     name: str = Field(default="My Light Show")
     dmx: DMXConfig = Field(default_factory=DMXConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     effects: EffectsConfig = Field(default_factory=EffectsConfig)
     profiles: list[FixtureProfile] = Field(default_factory=list)
     fixtures: list[FixtureConfig] = Field(default_factory=list)

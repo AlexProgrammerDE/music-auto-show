@@ -11,7 +11,7 @@ from typing import Optional, Callable, Any
 
 from typing import Union, TYPE_CHECKING
 
-from config import ShowConfig, AudioInputMode
+from config import ShowConfig
 from audio_analyzer import AnalysisData, AudioAnalyzer, create_audio_analyzer
 from effects_engine import EffectsEngine, FixtureState
 from dmx_controller import DMXController, create_dmx_controller
@@ -66,7 +66,6 @@ class AppState:
         self.running: bool = False
         self.simulate_dmx: bool = False
         self.simulate_audio: bool = False
-        self.audio_input_mode: AudioInputMode = AudioInputMode.AUTO
         
         # Components (initialized when show starts)
         self.dmx_controller: Optional[DMXController] = None
@@ -147,11 +146,13 @@ class AppState:
         
         # Initialize audio
         logger.info(f"Simulate Audio: {self.simulate_audio}")
-        logger.info(f"Audio Input Mode: {self.audio_input_mode.value}")
+        logger.info(f"Audio Device: {self.config.audio.device_name or '(auto)'}")
+        logger.info(f"Audio Fallback Mode: {self.config.audio.fallback_mode.value}")
         
         self.audio_analyzer = create_audio_analyzer(
             simulate=self.simulate_audio,
-            input_mode=self.audio_input_mode
+            device_name=self.config.audio.device_name,
+            input_mode=self.config.audio.fallback_mode
         )
         
         if not self.audio_analyzer.start():

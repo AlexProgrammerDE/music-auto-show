@@ -153,16 +153,8 @@ Examples:
     
     # List audio devices
     if args.list_audio_devices:
-        from audio_analyzer import AudioAnalyzer
-        analyzer = AudioAnalyzer()
-        devices = analyzer.list_devices()
-        logger.info("Available Audio Input Devices:")
-        logger.info("-" * 60)
-        for dev in devices:
-            loopback_tag = " [LOOPBACK]" if dev.get('is_loopback') else ""
-            logger.info(f"  [{dev['index']}] {dev['name']}{loopback_tag}")
-            logger.info(f"      Channels: {dev['channels']}, Sample Rate: {dev['sample_rate']} Hz")
-        logger.info("-" * 60)
+        from audio_devices import print_device_list
+        print_device_list()
         return
     
     # Check required dependencies

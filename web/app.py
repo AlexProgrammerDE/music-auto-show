@@ -281,6 +281,9 @@ def _create_main_layout() -> None:
         .q-linear-progress__track {
             background: var(--bg-tertiary) !important;
         }
+        .q-linear-progress__model {
+            --q-linear-progress-speed: 0.05s;
+        }
         
         /* Fixture list items */
         .fixture-item {
