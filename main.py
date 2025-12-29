@@ -16,7 +16,9 @@ Usage:
     python main.py --config config.json
 """
 import argparse
+import atexit
 import logging
+import signal
 import sys
 
 # Configure logging early - before any other imports
@@ -103,6 +105,45 @@ def print_dependency_status(deps: dict) -> None:
         logger.warning("  pip install -r requirements.txt")
 
 
+def _shutdown_handler(signum=None, frame=None) -> None:
+    """Handle shutdown signals (SIGINT, SIGTERM) gracefully."""
+    from web.state import app_state
+    
+    sig_name = signal.Signals(signum).name if signum else "SHUTDOWN"
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"RECEIVED {sig_name} - SHUTTING DOWN")
+    logger.info("=" * 60)
+    
+    # Stop the show with blackout
+    if app_state.running:
+        logger.info("Stopping show and sending blackout...")
+        app_state.stop_show()
+    
+    logger.info("Shutdown complete")
+    logger.info("=" * 60)
+
+
+def _register_signal_handlers() -> None:
+    """Register signal handlers for graceful shutdown."""
+    # SIGINT (Ctrl+C) and SIGTERM (kill)
+    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    
+    # On Windows, also handle SIGBREAK (Ctrl+Break)
+    if sys.platform == 'win32':
+        signal.signal(signal.SIGBREAK, _shutdown_handler)  # type: ignore
+
+
+def _atexit_cleanup() -> None:
+    """Cleanup function called on program exit."""
+    from web.state import app_state
+    
+    if app_state.running:
+        logger.info("atexit: Cleaning up...")
+        app_state.stop_show()
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -166,8 +207,12 @@ Examples:
         logger.error("nicegui is required. Install with: pip install nicegui")
         sys.exit(1)
     
+    # Register signal handlers for graceful shutdown
+    _register_signal_handlers()
+    atexit.register(_atexit_cleanup)
+    
     # Launch NiceGUI web app
-    from nicegui import ui
+    from nicegui import ui, app
     from web.app import create_app
     from web.state import app_state
     
@@ -177,6 +222,14 @@ Examples:
     if args.simulate or args.simulate_audio:
         app_state.simulate_audio = True
     
+    # Register shutdown handler with NiceGUI app
+    @app.on_shutdown
+    async def on_shutdown():
+        """Called when NiceGUI app is shutting down."""
+        logger.info("NiceGUI shutdown event - cleaning up...")
+        if app_state.running:
+            app_state.stop_show()
+    
     # Create and run app
     create_app(
         config_path=args.config,
@@ -185,13 +238,21 @@ Examples:
     )
     
     logger.info(f"Starting Music Auto Show web UI on http://{args.host}:{args.port}")
-    ui.run(
-        host=args.host,
-        port=args.port,
-        title="Music Auto Show",
-        reload=False,
-        show=True
-    )
+    try:
+        ui.run(
+            host=args.host,
+            port=args.port,
+            title="Music Auto Show",
+            reload=False,
+            show=True
+        )
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt caught in ui.run()")
+    finally:
+        # Ensure cleanup happens even if ui.run() exits unexpectedly
+        if app_state.running:
+            logger.info("Final cleanup...")
+            app_state.stop_show()
 
 
 if __name__ == "__main__":

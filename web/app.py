@@ -70,25 +70,26 @@ def _create_main_layout() -> None:
     with ui.header().classes('items-center justify-between px-6 py-3').props('color=dark'):
         ui.label('Music Auto Show').classes('text-xl font-bold')
         
-        with ui.row().classes('items-center gap-4'):
-            # Status display
-            status_label = ui.label().classes('text-lg font-semibold')
+        with ui.row().classes('items-center gap-2'):
+            # Status indicator dot and text
+            status_dot = ui.element('div').classes('w-2 h-2 rounded-full')
+            status_label = ui.label().classes('text-sm text-gray-300 mr-4')
             
             def update_status():
-                status_label.text = f"Status: {app_state.status_message}"
+                status_label.text = app_state.status_message
                 if app_state.status_message == "Running":
-                    status_label.classes(remove='text-orange-400 text-red-400', add='text-green-400')
+                    status_dot.classes(remove='bg-orange-400 bg-red-400', add='bg-green-400')
                 elif app_state.status_message == "BLACKOUT":
-                    status_label.classes(remove='text-orange-400 text-green-400', add='text-red-400')
+                    status_dot.classes(remove='bg-orange-400 bg-green-400', add='bg-red-400')
                 else:
-                    status_label.classes(remove='text-green-400 text-red-400', add='text-orange-400')
+                    status_dot.classes(remove='bg-green-400 bg-red-400', add='bg-orange-400')
             
             update_status()
             
-            # Control buttons - use outline style for subtler look
-            ui.button('Start', on_click=lambda: _start_show(update_status), color='green').props('outline')
-            ui.button('Stop', on_click=lambda: _stop_show(update_status), color='red').props('outline')
-            ui.button('Blackout', on_click=lambda: _toggle_blackout(update_status), color='amber').props('outline')
+            # Control buttons - white/light colors for dark header
+            ui.button('Start', icon='play_arrow', on_click=lambda: _start_show(update_status)).props('flat dense').classes('text-white')
+            ui.button('Stop', icon='stop', on_click=lambda: _stop_show(update_status)).props('flat dense').classes('text-white')
+            ui.button('Blackout', icon='highlight_off', on_click=lambda: _toggle_blackout(update_status)).props('flat dense').classes('text-white')
             
             # Timer to update status
             ui.timer(0.5, update_status)

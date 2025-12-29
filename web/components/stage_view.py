@@ -14,11 +14,19 @@ from web.state import app_state
 class StageView:
     """3D Stage visualization using NiceGUI scene."""
     
+    # Beam configuration
+    BEAM_LENGTH = 2.8
+    BEAM_RADIUS = 0.04  # Visible thin beam
+    
+    # Effect fixture beam configuration  
+    EFFECT_BEAM_COUNT = 4
+    EFFECT_BEAM_LENGTH = 2.5
+    EFFECT_BEAM_RADIUS = 0.03
+    EFFECT_BEAM_SPREAD = 25  # Degrees from vertical
+    
     def __init__(self):
         self._scene = None
-        self._fixture_objects: dict[str, dict] = {}
-        self._floor = None
-        self._truss = None
+        self._fixture_objects: dict = {}
         self._create_ui()
     
     def _create_ui(self) -> None:
@@ -26,46 +34,27 @@ class StageView:
         with ui.scene(
             width=800,
             height=400,
-            background_color='#1d1d1d',
+            background_color='#1a1a1a',
             grid=False
         ).classes('w-full rounded-lg') as self._scene:
             # Stage floor
-            self._scene.box(12, 10, 0.1).move(0, 0, -0.05).material('#2d2d2d')
+            self._scene.box(12, 10, 0.1).move(0, 0, -0.05).material('#2a2a2a')
             
             # Floor grid lines
-            for x in range(-6, 7):
-                opacity = 0.2 if x % 2 == 0 else 0.1
-                self._scene.line([x, -5, 0.02], [x, 5, 0.02]).material('#666666', opacity=opacity)
-            for y in range(-5, 6):
-                opacity = 0.2 if y % 2 == 0 else 0.1
-                self._scene.line([-6, y, 0.02], [6, y, 0.02]).material('#666666', opacity=opacity)
+            for i in range(-6, 7):
+                op = 0.12 if i % 2 == 0 else 0.06
+                self._scene.line([i, -5, 0.01], [i, 5, 0.01]).material('#555555', opacity=op)
+            for i in range(-5, 6):
+                op = 0.12 if i % 2 == 0 else 0.06
+                self._scene.line([-6, i, 0.01], [6, i, 0.01]).material('#555555', opacity=op)
             
-            # Stage edge lines
-            self._scene.line([-6, -5, 0.03], [6, -5, 0.03]).material('#888888', opacity=0.4)
-            self._scene.line([-6, 5, 0.03], [6, 5, 0.03]).material('#888888', opacity=0.2)
-            
-            # Truss structure
-            # Main horizontal truss bar
+            # Truss
             self._scene.box(8, 0.15, 0.15).move(0, 0, 3.5).material('#aaaaaa')
-            
-            # Secondary truss bars
-            self._scene.box(8, 0.08, 0.08).move(0, 0.15, 3.35).material('#888888')
-            self._scene.box(8, 0.08, 0.08).move(0, -0.15, 3.35).material('#888888')
-            
-            # Truss vertical supports
             self._scene.box(0.12, 0.12, 3.5).move(-4, 0, 1.75).material('#999999')
             self._scene.box(0.12, 0.12, 3.5).move(4, 0, 1.75).material('#999999')
-            
-            # Cross braces
-            for z_pos in [0.8, 1.8, 2.8]:
-                self._scene.box(0.04, 0.04, 0.4).move(-4, 0, z_pos).material('#666666')
-                self._scene.box(0.04, 0.04, 0.4).move(4, 0, z_pos).material('#666666')
         
-        # Set camera position - front-of-house elevated view, slightly angled
-        self._scene.move_camera(x=0, y=-10, z=5, look_at_x=0, look_at_y=0, look_at_z=1.5, duration=0)
-        
-        # Update timer for fixture updates
-        ui.timer(0.05, self._update_scene)  # 20 FPS
+        self._scene.move_camera(x=0, y=-8, z=4, look_at_x=0, look_at_y=0, look_at_z=1.5, duration=0)
+        ui.timer(0.05, self._update_scene)
     
     def _update_scene(self) -> None:
         """Update the scene with current fixture states."""
@@ -73,267 +62,248 @@ class StageView:
             return
         
         fixtures = app_state.config.fixtures
-        
         if not fixtures:
             self._clear_fixtures()
             return
         
-        # Calculate fixture positions
-        num_fixtures = len(fixtures)
+        num = len(fixtures)
         sorted_fixtures = sorted(fixtures, key=lambda f: f.position)
+        spacing = 6.0 / max(1, num - 1) if num > 1 else 0
+        start_x = -3.0 if num > 1 else 0
         
-        spacing = 6.0 / max(1, num_fixtures - 1) if num_fixtures > 1 else 0
-        start_x = -3.0 if num_fixtures > 1 else 0
-        
-        # Track which fixtures we've updated
         updated = set()
-        
         for i, fixture in enumerate(sorted_fixtures):
-            x = start_x + i * spacing if num_fixtures > 1 else 0
-            y = 0
-            z = 3.2  # Just below truss
+            x = start_x + i * spacing if num > 1 else 0
+            y, z = 0, 3.2
             
             state = app_state.get_fixture_state(fixture.name)
-            fixture_type = self._get_fixture_type(fixture)
+            ftype = self._get_fixture_type(fixture)
             
-            # Create or update fixture
+            # Recreate if structure is wrong
+            if fixture.name in self._fixture_objects:
+                obj = self._fixture_objects[fixture.name]
+                recreate = obj.get('ftype') != ftype
+                if ftype == FixtureType.EFFECT:
+                    recreate = recreate or 'beams' not in obj
+                else:
+                    recreate = recreate or 'beam' not in obj
+                if recreate:
+                    del self._fixture_objects[fixture.name]
+            
             if fixture.name not in self._fixture_objects:
-                self._create_fixture_object(fixture.name, x, y, z, fixture_type)
+                self._create_fixture(fixture.name, ftype)
             
-            self._update_fixture_object(fixture.name, state, fixture_type, x, y, z)
+            self._update_fixture(fixture.name, state, ftype, x, y, z)
             updated.add(fixture.name)
         
-        # Remove fixtures no longer in config
-        to_remove = set(self._fixture_objects.keys()) - updated
-        for name in to_remove:
-            self._remove_fixture_object(name)
+        for name in set(self._fixture_objects.keys()) - updated:
+            del self._fixture_objects[name]
     
     def _get_fixture_type(self, fixture) -> FixtureType:
-        """Get fixture type from profile."""
         if fixture.profile_name:
             profile = get_preset(fixture.profile_name)
             if profile:
                 return profile.fixture_type
         return FixtureType.OTHER
     
-    def _create_fixture_object(self, name: str, x: float, y: float, z: float, 
-                                fixture_type: FixtureType) -> None:
-        """Create a fixture object in the scene."""
+    def _create_fixture(self, name: str, ftype: FixtureType) -> None:
+        """Create fixture 3D objects."""
         if not self._scene:
             return
         
         with self._scene:
-            objects = {}
+            obj = {'ftype': ftype}
             
-            # Mount bracket
-            objects['mount'] = self._scene.box(0.08, 0.08, 0.25).move(x, y, z + 0.12).material('#777777')
+            # Mount
+            obj['mount'] = self._scene.box(0.06, 0.06, 0.15).material('#555555')
             
-            if fixture_type == FixtureType.EFFECT:
-                # Effect light (derby/moonflower)
-                objects['body'] = self._scene.box(0.28, 0.28, 0.22).move(x, y, z - 0.08).material('#333333')
-                # Lens ring
-                objects['ring'] = self._scene.cylinder(0.14, 0.04).move(x, y, z - 0.22).material('#444444')
-                objects['lens'] = self._scene.sphere(0.11).move(x, y, z - 0.24).material('#222222')
-                
-                # Multiple beam indicators for effect lights
-                objects['beams'] = []
-                for angle in range(0, 360, 72):  # 5 beams
-                    rad = math.radians(angle)
-                    bx = x + 0.06 * math.cos(rad)
-                    by = y + 0.06 * math.sin(rad)
-                    beam = self._scene.box(0.04, 0.04, 2.8).move(bx, by, z - 1.7).material('#555555', opacity=0.0)
-                    objects['beams'].append(beam)
+            if ftype == FixtureType.EFFECT:
+                obj['body'] = self._scene.box(0.24, 0.24, 0.18).material('#2a2a2a')
+                obj['lens'] = self._scene.sphere(0.09).material('#111111')
+                obj['beams'] = []
+                for _ in range(self.EFFECT_BEAM_COUNT):
+                    # Use box for beam - more reliable than cylinder
+                    beam = self._scene.box(
+                        self.EFFECT_BEAM_RADIUS * 2,
+                        self.EFFECT_BEAM_RADIUS * 2, 
+                        self.EFFECT_BEAM_LENGTH
+                    ).material('#333333', opacity=0.0)
+                    obj['beams'].append(beam)
             else:
-                # Standard fixture (moving head/par)
-                # Yoke arms
-                objects['yoke_l'] = self._scene.box(0.03, 0.12, 0.18).move(x - 0.08, y, z - 0.06).material('#444444')
-                objects['yoke_r'] = self._scene.box(0.03, 0.12, 0.18).move(x + 0.08, y, z - 0.06).material('#444444')
-                # Head body
-                objects['body'] = self._scene.box(0.14, 0.18, 0.14).move(x, y, z - 0.18).material('#333333')
-                # Lens
-                objects['head'] = self._scene.sphere(0.07).move(x, y, z - 0.28).material('#222222')
-                
-                # Single beam - use a line from fixture to floor for the beam effect
-                beam_start = [x, y, z - 0.3]
-                beam_end = [x, y, 0.05]
-                objects['beam'] = self._scene.curve(beam_start, beam_end).material('#555555', opacity=0.0)
-                
-                # Floor spot
-                objects['spot'] = self._scene.cylinder(0.4, 0.02).move(x, y, 0.02).material('#555555', opacity=0.0)
+                obj['yoke_l'] = self._scene.box(0.02, 0.08, 0.14).material('#3a3a3a')
+                obj['yoke_r'] = self._scene.box(0.02, 0.08, 0.14).material('#3a3a3a')
+                obj['head'] = self._scene.box(0.10, 0.14, 0.10).material('#2a2a2a')
+                obj['lens'] = self._scene.sphere(0.05).material('#111111')
+                # Use box for beam
+                obj['beam'] = self._scene.box(
+                    self.BEAM_RADIUS * 2,
+                    self.BEAM_RADIUS * 2,
+                    self.BEAM_LENGTH
+                ).material('#333333', opacity=0.0)
             
-            self._fixture_objects[name] = objects
+            self._fixture_objects[name] = obj
     
-    def _update_fixture_object(self, name: str, state: FixtureState, 
-                                fixture_type: FixtureType, x: float, y: float, z: float) -> None:
-        """Update a fixture object with current state."""
-        if name not in self._fixture_objects:
+    def _update_fixture(self, name: str, state: FixtureState, ftype: FixtureType,
+                        x: float, y: float, z: float) -> None:
+        """Update fixture position and state."""
+        obj = self._fixture_objects.get(name)
+        if not obj:
             return
         
-        objects = self._fixture_objects[name]
+        # Position body parts
+        obj['mount'].move(x, y, z + 0.07)
         
-        # Calculate brightness
-        brightness = (state.red + state.green + state.blue) / 3.0 / 255.0
-        dimmer = state.dimmer / 255.0
-        total_brightness = brightness * dimmer
-        
-        # Get color
-        r, g, b = state.red, state.green, state.blue
-        
-        if fixture_type == FixtureType.EFFECT:
-            # Effect light - use color_macro if RGB is zero
-            if brightness < 0.1 and state.color_macro > 5:
-                r, g, b = self._color_macro_to_rgb(state.color_macro)
-                brightness = (r + g + b) / 3.0 / 255.0
-                total_brightness = brightness * dimmer
-            
-            # Update lens color
-            if 'lens' in objects:
-                if total_brightness > 0.05:
-                    lr = min(255, int(r * 1.2 + 40))
-                    lg = min(255, int(g * 1.2 + 40))
-                    lb = min(255, int(b * 1.2 + 40))
-                    color = f'#{lr:02x}{lg:02x}{lb:02x}'
-                    objects['lens'].material(color)
-                else:
-                    objects['lens'].material('#222222')
-            
-            # Update ring
-            if 'ring' in objects:
-                if total_brightness > 0.1:
-                    objects['ring'].material(f'#{r:02x}{g:02x}{b:02x}', opacity=0.5)
-                else:
-                    objects['ring'].material('#444444')
-            
-            # Update beams
-            if 'beams' in objects:
-                # Rotation based on effect value or time
-                rotation_offset = 0.0
-                if state.effect >= 128:
-                    rotation_speed = (state.effect - 128) / 127.0
-                    rotation_offset = (time.time() * rotation_speed * 2) % (2 * math.pi)
-                elif state.effect > 0:
-                    rotation_offset = (state.effect / 127.0) * 2 * math.pi
-                
-                for i, beam in enumerate(objects['beams']):
-                    if total_brightness > 0.05:
-                        angle = (i / 5) * 2 * math.pi + rotation_offset
-                        bx = x + 0.25 * math.sin(angle)
-                        by = y + 0.25 * math.cos(angle)
-                        
-                        beam.move(bx, by, z - 1.7)
-                        
-                        # Strobe effect
-                        opacity = min(0.7, total_brightness * 0.9)
-                        if state.strobe > 5:
-                            strobe_freq = state.strobe / 50.0
-                            if int(time.time() * strobe_freq * 10) % 2 == 0:
-                                opacity = min(0.9, opacity + 0.3)
-                            else:
-                                opacity *= 0.2
-                        
-                        color = f'#{r:02x}{g:02x}{b:02x}'
-                        beam.material(color, opacity=opacity)
-                    else:
-                        beam.material('#333333', opacity=0.0)
+        if ftype == FixtureType.EFFECT:
+            obj['body'].move(x, y, z - 0.07)
+            lens_z = z - 0.18
+            obj['lens'].move(x, y, lens_z)
         else:
-            # Standard fixture
-            # Update head/lens color
-            if 'head' in objects:
-                if total_brightness > 0.05:
-                    hr = min(255, int(r * 1.2 + 50))
-                    hg = min(255, int(g * 1.2 + 50))
-                    hb = min(255, int(b * 1.2 + 50))
-                    color = f'#{hr:02x}{hg:02x}{hb:02x}'
-                    objects['head'].material(color)
-                else:
-                    objects['head'].material('#222222')
-            
-            # Update beam - straight down with pan/tilt offset
-            if 'beam' in objects:
-                if total_brightness > 0.05:
-                    # Calculate beam offset from pan/tilt
-                    pan_offset = ((state.pan - 128) / 128.0) * 1.5
-                    tilt_offset = ((state.tilt - 128) / 128.0) * 0.8
-                    
-                    # Beam position (center of beam box)
-                    bx = x + pan_offset * 0.5
-                    by = y + tilt_offset * 0.3
-                    bz = z - 1.8
-                    
-                    objects['beam'].move(bx, by, bz)
-                    
-                    opacity = min(0.6, total_brightness * 0.75)
-                    color = f'#{r:02x}{g:02x}{b:02x}'
-                    objects['beam'].material(color, opacity=opacity)
-                else:
-                    objects['beam'].material('#333333', opacity=0.0)
-            
-            # Update floor spot
-            if 'spot' in objects:
-                if total_brightness > 0.1:
-                    pan_offset = ((state.pan - 128) / 128.0) * 2.5
-                    tilt_offset = ((state.tilt - 128) / 128.0) * 1.5
-                    spot_x = x + pan_offset
-                    spot_y = y + tilt_offset
-                    
-                    objects['spot'].move(spot_x, spot_y, 0.02)
-                    
-                    # Spot size varies with intensity
-                    opacity = min(0.5, total_brightness * 0.6)
-                    color = f'#{r:02x}{g:02x}{b:02x}'
-                    objects['spot'].material(color, opacity=opacity)
-                else:
-                    objects['spot'].material('#333333', opacity=0.0)
+            obj['yoke_l'].move(x - 0.06, y, z - 0.05)
+            obj['yoke_r'].move(x + 0.06, y, z - 0.05)
+            obj['head'].move(x, y, z - 0.14)
+            lens_z = z - 0.21
+            obj['lens'].move(x, y, lens_z)
+        
+        # Calculate color and brightness
+        r, g, b = state.red, state.green, state.blue
+        brightness = (r + g + b) / 765.0
+        dimmer = state.dimmer / 255.0
+        total = brightness * dimmer
+        
+        # Color macro for effect fixtures
+        if ftype == FixtureType.EFFECT and brightness < 0.1 and state.color_macro > 5:
+            r, g, b = self._color_macro_to_rgb(state.color_macro)
+            brightness = (r + g + b) / 765.0
+            total = brightness * dimmer
+        
+        # Lens glow
+        if total > 0.05:
+            gr = min(255, int(r * 1.2 + 50))
+            gg = min(255, int(g * 1.2 + 50))
+            gb = min(255, int(b * 1.2 + 50))
+            obj['lens'].material(f'#{gr:02x}{gg:02x}{gb:02x}')
+        else:
+            obj['lens'].material('#111111')
+        
+        # Update beams
+        color = f'#{r:02x}{g:02x}{b:02x}'
+        
+        if ftype == FixtureType.EFFECT:
+            self._update_effect_beams(obj, state, x, y, lens_z, color, total)
+        else:
+            self._update_spot_beam(obj, state, x, y, lens_z, color, total)
     
-    def _remove_fixture_object(self, name: str) -> None:
-        """Remove a fixture object from the scene."""
-        if name in self._fixture_objects:
-            # Objects will be garbage collected
-            del self._fixture_objects[name]
+    def _update_spot_beam(self, obj: dict, state: FixtureState,
+                          x: float, y: float, lens_z: float,
+                          color: str, total: float) -> None:
+        """Update spot fixture beam."""
+        beam = obj.get('beam')
+        if not beam:
+            return
+        
+        if total < 0.05:
+            beam.material('#333333', opacity=0.0)
+            return
+        
+        # Pan/tilt from DMX (center is 128)
+        pan = (state.pan - 128) / 128.0 * 0.8  # radians, ~45 deg each way
+        tilt = (state.tilt - 128) / 128.0 * 0.5  # radians, ~30 deg each way
+        
+        # Beam points down (-Z), offset by half length
+        # Simple approach: position center, then rotate
+        half = self.BEAM_LENGTH / 2
+        
+        # Center of beam when pointing straight down
+        cx, cy, cz = x, y, lens_z - half
+        
+        # Move and rotate beam
+        beam.move(cx, cy, cz)
+        beam.rotate(tilt, 0, pan)  # Tilt around X, pan around Z
+        
+        # Strobe effect
+        opacity = min(0.6, total * 0.7)
+        if state.strobe > 5:
+            freq = state.strobe / 40.0
+            if int(time.time() * freq * 10) % 2 == 0:
+                opacity = min(0.8, opacity + 0.2)
+            else:
+                opacity *= 0.3
+        
+        beam.material(color, opacity=opacity)
+    
+    def _update_effect_beams(self, obj: dict, state: FixtureState,
+                             x: float, y: float, lens_z: float,
+                             color: str, total: float) -> None:
+        """Update effect fixture beams with motor rotation."""
+        beams = obj.get('beams', [])
+        if not beams:
+            return
+        
+        if total < 0.05:
+            for beam in beams:
+                beam.material('#333333', opacity=0.0)
+            return
+        
+        # Motor rotation
+        motor = 0.0
+        if state.effect >= 128:
+            speed = (state.effect - 128) / 127.0 * 2.0
+            motor = (time.time() * speed * 2 * math.pi) % (2 * math.pi)
+        elif state.effect > 0:
+            motor = (state.effect / 127.0) * 2 * math.pi
+        
+        spread_rad = math.radians(self.EFFECT_BEAM_SPREAD)
+        half = self.EFFECT_BEAM_LENGTH / 2
+        num = len(beams)
+        
+        for i, beam in enumerate(beams):
+            # Angle around the motor axis
+            angle = (i / num) * 2 * math.pi + motor
+            
+            # Beam tilts outward at spread angle, rotated around vertical
+            # Position: offset from lens in the tilted direction
+            dx = math.sin(angle) * math.sin(spread_rad) * half
+            dy = math.cos(angle) * math.sin(spread_rad) * half
+            dz = -math.cos(spread_rad) * half
+            
+            cx = x + dx
+            cy = y + dy
+            cz = lens_z + dz
+            
+            beam.move(cx, cy, cz)
+            # Rotate: first tilt by spread, then rotate around Z by angle
+            beam.rotate(spread_rad, 0, angle)
+            
+            # Per-beam strobe phase
+            opacity = min(0.5, total * 0.6)
+            if state.strobe > 5:
+                freq = state.strobe / 50.0
+                phase = i * 0.15
+                if int((time.time() + phase) * freq * 10) % 2 == 0:
+                    opacity = min(0.75, opacity + 0.25)
+                else:
+                    opacity *= 0.25
+            
+            beam.material(color, opacity=opacity)
     
     def _clear_fixtures(self) -> None:
-        """Clear all fixture objects."""
         self._fixture_objects.clear()
     
-    def _color_macro_to_rgb(self, color_macro: int) -> tuple[int, int, int]:
-        """Convert color macro value to RGB."""
-        if color_macro <= 5:
-            return (0, 0, 0)
-        elif color_macro <= 20:
-            return (255, 0, 0)
-        elif color_macro <= 35:
-            return (0, 255, 0)
-        elif color_macro <= 50:
-            return (0, 0, 255)
-        elif color_macro <= 65:
-            return (255, 255, 255)
-        elif color_macro <= 80:
-            return (255, 255, 0)
-        elif color_macro <= 95:
-            return (255, 0, 255)
-        elif color_macro <= 110:
-            return (255, 200, 200)
-        elif color_macro <= 125:
-            return (0, 255, 255)
-        elif color_macro <= 140:
-            return (200, 255, 200)
-        elif color_macro <= 155:
-            return (200, 200, 255)
-        elif color_macro <= 170:
-            return (255, 255, 255)
-        elif color_macro <= 185:
-            return (255, 255, 200)
-        elif color_macro <= 200:
-            return (200, 255, 255)
-        elif color_macro <= 215:
-            return (255, 255, 255)
-        elif color_macro <= 255:
-            # Color change modes
-            cycle = int(time.time() * 2) % 7
-            colors = [
-                (255, 0, 0), (0, 255, 0), (0, 0, 255),
-                (255, 255, 0), (255, 0, 255), (0, 255, 255), (255, 255, 255)
-            ]
-            return colors[cycle]
-        
+    def _color_macro_to_rgb(self, val: int) -> tuple[int, int, int]:
+        """Convert color macro to RGB."""
+        if val <= 5: return (0, 0, 0)
+        if val <= 20: return (255, 0, 0)
+        if val <= 35: return (0, 255, 0)
+        if val <= 50: return (0, 0, 255)
+        if val <= 65: return (255, 255, 255)
+        if val <= 80: return (255, 255, 0)
+        if val <= 95: return (255, 0, 255)
+        if val <= 110: return (255, 128, 128)
+        if val <= 125: return (0, 255, 255)
+        if val <= 140: return (128, 255, 128)
+        if val <= 155: return (128, 128, 255)
+        if val <= 200: return (255, 255, 255)
+        if val <= 255:
+            c = int(time.time() * 2) % 7
+            return [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),(255,255,255)][c]
         return (128, 128, 128)

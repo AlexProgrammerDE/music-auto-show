@@ -180,35 +180,66 @@ class AppState:
         return True
     
     def stop_show(self) -> None:
-        """Stop the light show."""
+        """Stop the light show with proper blackout and cleanup."""
+        logger.info("=" * 50)
+        logger.info("STOPPING SHOW")
+        logger.info("=" * 50)
+        
         self.running = False
         
-        # Wait for effects thread
+        # Wait for effects thread to finish
         if self._effects_thread:
-            self._effects_thread.join(timeout=1.0)
+            logger.info("Waiting for effects thread to stop...")
+            self._effects_thread.join(timeout=2.0)
+            if self._effects_thread.is_alive():
+                logger.warning("Effects thread did not stop in time")
             self._effects_thread = None
         
-        # Blackout and cleanup
+        # Send blackout through effects engine (sets all fixture states to 0)
         if self.effects_engine:
+            logger.info("Sending blackout through effects engine...")
             self.effects_engine.blackout()
-            self.effects_engine = None
         
+        # Also explicitly blackout the DMX controller
+        if self.dmx_controller:
+            logger.info("Sending blackout to DMX controller...")
+            self.dmx_controller.blackout()
+            
+            # Give time for the blackout frame to be sent
+            # The DMX output thread runs at configured FPS, wait for at least 2 frames
+            import time
+            time.sleep(0.1)  # 100ms should cover 2+ frames at 40 FPS
+        
+        # Stop audio analyzer first (doesn't need DMX)
         if self.audio_analyzer:
+            logger.info("Stopping audio analyzer...")
             self.audio_analyzer.stop()
             self.audio_analyzer = None
         
+        # Stop DMX output thread
         if self.dmx_controller:
+            logger.info("Stopping DMX controller...")
             self.dmx_controller.stop()
             self.dmx_controller = None
         
+        # Close DMX interface (releases serial port lock)
         if self.dmx_interface:
+            logger.info("Closing DMX interface...")
             self.dmx_interface.close()
             self.dmx_interface = None
         
+        # Clear effects engine reference
+        if self.effects_engine:
+            self.effects_engine = None
+        
         self.status_message = "Stopped"
+        self.is_blackout = False
         self.fixture_states = {}
         self.dmx_channels = [0] * 512
-        logger.info("Show stopped")
+        
+        logger.info("=" * 50)
+        logger.info("SHOW STOPPED")
+        logger.info("=" * 50)
     
     def toggle_blackout(self) -> bool:
         """Toggle blackout mode. Returns new blackout state."""
