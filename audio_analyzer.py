@@ -630,12 +630,10 @@ class AudioAnalyzer:
             mid_raw = self._get_band_energy_normalized(fft_data, 250, 4000)
             high_raw = self._get_band_energy_normalized(fft_data, 4000, 16000)
             
-            # Normalize each band independently for balanced display
-            bass, mid, high = self._normalize_bands(bass_raw, mid_raw, high_raw)
-            
-            self._bass_history.append(bass)
-            self._mid_history.append(mid)
-            self._high_history.append(high)
+            # Store raw values in history (gain applied at read time for immediate response to gain changes)
+            self._bass_history.append(bass_raw)
+            self._mid_history.append(mid_raw)
+            self._high_history.append(high_raw)
         
         # Update features with smoothing
         with self._lock:
@@ -648,10 +646,13 @@ class AudioAnalyzer:
             normalized_energy = (avg_energy / self._ref_rms) * self._gain
             features.energy = min(1.0, normalized_energy)  # Cap at 1.0
             
-            # Smooth frequency bands
-            features.bass = np.mean(list(self._bass_history)) if self._bass_history else 0
-            features.mid = np.mean(list(self._mid_history)) if self._mid_history else 0
-            features.high = np.mean(list(self._high_history)) if self._high_history else 0
+            # Smooth frequency bands and apply gain at read time (for immediate response to gain changes)
+            avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
+            avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
+            avg_high = np.mean(list(self._high_history)) if self._high_history else 0
+            features.bass = min(1.0, (avg_bass / self._ref_bass) * self._gain)
+            features.mid = min(1.0, (avg_mid / self._ref_mid) * self._gain)
+            features.high = min(1.0, (avg_high / self._ref_high) * self._gain)
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
