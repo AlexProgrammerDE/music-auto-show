@@ -346,10 +346,22 @@ class MusicAutoShowGUI:
                     # Color the channel number based on whether it's used
                     if i in channel_info:
                         color = (100, 200, 100)  # Green for used channels
+                        fixture_name, ch_name = channel_info[i]
                     else:
                         color = (150, 150, 150)  # Gray for unused
+                        fixture_name, ch_name = None, None
                     dpg.add_text(f"{i}", color=color)
                     dpg.add_progress_bar(tag=f"dmx_ch_{i}", default_value=0.0, width=scaled(20))
+                    # Add tooltip with channel details
+                    with dpg.tooltip(f"dmx_ch_{i}"):
+                        dpg.add_text(f"DMX Channel {i}", color=(200, 200, 255))
+                        dpg.add_separator()
+                        if fixture_name:
+                            dpg.add_text(f"Fixture: {fixture_name}", color=(100, 200, 100))
+                            dpg.add_text(f"Function: {ch_name}", color=(150, 200, 150))
+                        else:
+                            dpg.add_text("Unassigned channel", color=(150, 150, 150))
+                        dpg.add_text("Value: 0", tag=f"dmx_ch_{i}_value", color=(180, 180, 200))
         
         # Add legend
         dpg.add_spacer(height=5, parent="dmx_universe_container")
@@ -611,14 +623,36 @@ class MusicAutoShowGUI:
         
         # Album color palette and audio visualization display
         with dpg.group(horizontal=True):
-            dpg.add_text("Album Colors:", color=(150, 150, 180))
+            dpg.add_text("Album Colors:", color=(150, 150, 180), tag="album_colors_label")
+            with dpg.tooltip("album_colors_label"):
+                dpg.add_text("Album Art Color Palette", color=(200, 200, 255))
+                dpg.add_separator()
+                dpg.add_text("Colors extracted from current track's album art.", color=(150, 150, 180))
+                dpg.add_text("Used to create cohesive lighting that matches", color=(150, 150, 180))
+                dpg.add_text("the visual aesthetic of the music.", color=(150, 150, 180))
+                dpg.add_separator()
+                dpg.add_text("Up to 5 dominant colors (k-means clustering).", color=(150, 150, 180))
+                dpg.add_text("RGB Values:", tag="color_palette_values", color=(100, 200, 100))
             dpg.add_spacer(width=scaled(10))
-            # Create 5 color swatches using drawlist
+            # Create 5 color swatches using drawlist (tooltips not supported on drawlist)
             with dpg.drawlist(width=scaled(200), height=scaled(20), tag="color_palette"):
                 # Will be drawn in _update_gui
                 pass
             
             dpg.add_spacer(width=scaled(20))
+            # Audio analysis visualization with info label
+            dpg.add_text("[?]", color=(100, 150, 200), tag="audio_viz_help")
+            with dpg.tooltip("audio_viz_help"):
+                dpg.add_text("Audio Analysis Breakdown", color=(200, 200, 255))
+                dpg.add_separator()
+                dpg.add_text("Section 1 (Left): Frequency Spectrum", color=(100, 200, 255))
+                dpg.add_text("  FFT visualization showing bass/mid/high", color=(150, 150, 180))
+                dpg.add_text("Section 2: Onset Detection History", color=(100, 200, 255))
+                dpg.add_text("  Shows beat/transient detection over time", color=(150, 150, 180))
+                dpg.add_text("Section 3: Frequency Bands", color=(100, 200, 255))
+                dpg.add_text("  Bass (red) | Mid (green) | High (blue)", color=(150, 150, 180))
+                dpg.add_text("Section 4 (Right): Beat Pulse", color=(100, 200, 255))
+                dpg.add_text("  Circular indicator pulses with the beat", color=(150, 150, 180))
             # Audio analysis visualization (spectrum, beats, onset detection)
             with dpg.drawlist(width=scaled(500), height=scaled(80), tag="audio_viz_display"):
                 # Will be drawn in _update_gui - shows how BPM/energy/etc are calculated
@@ -631,38 +665,112 @@ class MusicAutoShowGUI:
                 with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Energy:")
                     dpg.add_progress_bar(tag="energy_bar", default_value=0.0, width=-1)
+                    with dpg.tooltip("energy_bar"):
+                        dpg.add_text("Overall Audio Energy (0-100%)", color=(200, 200, 255))
+                        dpg.add_separator()
+                        dpg.add_text("Raw Value:", tag="energy_tooltip_value")
+                        dpg.add_text("RMS amplitude of the audio signal.\nHigher = louder sound.\nDrives overall brightness and effect intensity.", color=(150, 150, 180))
+                    
                     dpg.add_text("Bass:")
                     dpg.add_progress_bar(tag="bass_bar", default_value=0.0, width=-1)
+                    with dpg.tooltip("bass_bar"):
+                        dpg.add_text("Bass Frequency Band (20-250 Hz)", color=(255, 150, 150))
+                        dpg.add_separator()
+                        dpg.add_text("Raw Value:", tag="bass_tooltip_value")
+                        dpg.add_text("Low frequency energy.\nKick drums, bass guitar, sub-bass.\nDrives pulse effects, movement triggers.", color=(150, 150, 180))
+                    
                     dpg.add_text("Mid:")
                     dpg.add_progress_bar(tag="mid_bar", default_value=0.0, width=-1)
+                    with dpg.tooltip("mid_bar"):
+                        dpg.add_text("Mid Frequency Band (250-4000 Hz)", color=(150, 255, 150))
+                        dpg.add_separator()
+                        dpg.add_text("Raw Value:", tag="mid_tooltip_value")
+                        dpg.add_text("Mid frequency energy.\nVocals, guitars, synths, snare.\nDrives color changes, smooth transitions.", color=(150, 150, 180))
+                    
                     dpg.add_text("High:")
                     dpg.add_progress_bar(tag="high_bar", default_value=0.0, width=-1)
+                    with dpg.tooltip("high_bar"):
+                        dpg.add_text("High Frequency Band (4000+ Hz)", color=(150, 150, 255))
+                        dpg.add_separator()
+                        dpg.add_text("Raw Value:", tag="high_tooltip_value")
+                        dpg.add_text("High frequency energy.\nHi-hats, cymbals, sibilance, sparkle.\nDrives fast effects, strobes, white accents.", color=(150, 150, 180))
                 
                 with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Tempo:", tag="tempo_text")
                     dpg.add_progress_bar(tag="tempo_bar", default_value=0.5, width=-1)
+                    with dpg.tooltip("tempo_bar"):
+                        dpg.add_text("Tempo / BPM Detection", color=(255, 200, 100))
+                        dpg.add_separator()
+                        dpg.add_text("Current BPM:", tag="tempo_tooltip_value")
+                        dpg.add_text("Bar shows position in 60-180 BPM range.\nDetected using madmom neural network.\nUpdates every few seconds.", color=(150, 150, 180))
+                    
                     dpg.add_text("Beat Position:")
                     dpg.add_progress_bar(tag="beat_bar", default_value=0.0, width=-1)
+                    with dpg.tooltip("beat_bar"):
+                        dpg.add_text("Beat Phase (0-100%)", color=(255, 255, 150))
+                        dpg.add_separator()
+                        dpg.add_text("Position:", tag="beat_tooltip_value")
+                        dpg.add_text("Position within the current beat.\n0% = beat start, 100% = next beat.\nUsed for beat-synced effects.", color=(150, 150, 180))
+                    
                     dpg.add_text("Danceability:")
                     dpg.add_progress_bar(tag="dance_bar", default_value=0.5, width=-1)
+                    with dpg.tooltip("dance_bar"):
+                        dpg.add_text("Danceability Score (0-100%)", color=(255, 100, 200))
+                        dpg.add_separator()
+                        dpg.add_text("Score:", tag="dance_tooltip_value")
+                        dpg.add_text("How rhythmic/danceable the audio is.\nBased on beat strength and consistency.\nAffects movement intensity.", color=(150, 150, 180))
+                    
                     dpg.add_text("Valence:")
                     dpg.add_progress_bar(tag="valence_bar", default_value=0.5, width=-1)
+                    with dpg.tooltip("valence_bar"):
+                        dpg.add_text("Musical Mood / Valence (0-100%)", color=(100, 255, 200))
+                        dpg.add_separator()
+                        dpg.add_text("Value:", tag="valence_tooltip_value")
+                        dpg.add_text("Musical positivity/mood estimate.\n0% = dark/sad, 100% = bright/happy.\nInfluences color palette warmth.", color=(150, 150, 180))
                 
                 with dpg.child_window(width=scaled(300), height=scaled(180), border=True):
                     dpg.add_text("Background Tasks:", color=(180, 180, 220))
                     dpg.add_separator()
-                    dpg.add_text("Madmom Beat Detection:", color=(150, 150, 180))
+                    dpg.add_text("Madmom Beat Detection:", color=(150, 150, 180), tag="madmom_header")
+                    with dpg.tooltip("madmom_header"):
+                        dpg.add_text("Neural Network Beat Tracking", color=(200, 200, 255))
+                        dpg.add_separator()
+                        dpg.add_text("Uses RNN + DBN for accurate BPM detection.\nProcesses audio in background every few seconds.\nMore accurate than simple onset detection.", color=(150, 150, 180))
+                    
                     dpg.add_text("  Status: Idle", tag="madmom_status")
                     dpg.add_progress_bar(tag="madmom_progress", default_value=0.0, width=-1)
+                    with dpg.tooltip("madmom_progress"):
+                        dpg.add_text("Beat Detection Progress", color=(200, 200, 255))
+                        dpg.add_text("Shows neural network processing progress.\nFills up as audio is analyzed.", color=(150, 150, 180))
+                    
                     dpg.add_text("  Audio buffer: 0.0s", tag="madmom_buffer")
                     dpg.add_text("  Next run: --", tag="madmom_next_run")
                     dpg.add_spacer(height=scaled(5))
-                    dpg.add_text("Effects Engine:", color=(150, 150, 180))
+                    dpg.add_text("Effects Engine:", color=(150, 150, 180), tag="effects_header")
+                    with dpg.tooltip("effects_header"):
+                        dpg.add_text("DMX Effects Processing", color=(200, 200, 255))
+                        dpg.add_separator()
+                        dpg.add_text("Converts audio analysis to DMX values.\nRuns in dedicated thread at ~30 FPS.\nApplies smoothing and transitions.", color=(150, 150, 180))
+                    
                     dpg.add_text("  FPS: 0", tag="effects_fps")
         
         dpg.add_spacer(height=scaled(10))
         
         with dpg.collapsing_header(label="Stage View", default_open=True):
+            # Add help text with tooltip (tooltips not supported on drawlist)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Stage Visualization", color=(180, 180, 200))
+                dpg.add_text("[?]", color=(100, 150, 200), tag="stage_view_help")
+                with dpg.tooltip("stage_view_help"):
+                    dpg.add_text("Stage Visualization", color=(200, 200, 255))
+                    dpg.add_separator()
+                    dpg.add_text("Real-time visualization of your light show:", color=(180, 180, 200))
+                    dpg.add_text("- Fixtures on truss with realistic beams", color=(150, 150, 180))
+                    dpg.add_text("- Beam color/direction from DMX values", color=(150, 150, 180))
+                    dpg.add_text("- Floor spots show beam landing points", color=(150, 150, 180))
+                    dpg.add_text("- Bottom bar shows audio energy/beat", color=(150, 150, 180))
+                    dpg.add_separator()
+                    dpg.add_text("Fixture Info:", tag="stage_fixture_info", color=(100, 200, 100))
             visualizer_width = scaled(940)
             visualizer_height = scaled(400)
             with dpg.drawlist(width=visualizer_width, height=visualizer_height, tag="visualizer"):
@@ -673,7 +781,14 @@ class MusicAutoShowGUI:
         
         dpg.add_spacer(height=scaled(10))
         
-        with dpg.collapsing_header(label="DMX Universe", default_open=False):
+        with dpg.collapsing_header(label="DMX Universe", default_open=False, tag="dmx_universe_header"):
+            with dpg.tooltip("dmx_universe_header"):
+                dpg.add_text("DMX Channel Preview", color=(200, 200, 255))
+                dpg.add_separator()
+                dpg.add_text("Shows real-time DMX output values (0-255).", color=(150, 150, 180))
+                dpg.add_text("Green channels = assigned to fixtures", color=(100, 200, 100))
+                dpg.add_text("Gray channels = unassigned", color=(150, 150, 150))
+                dpg.add_text("Hover individual channels for details.", color=(150, 150, 180))
             with dpg.child_window(height=scaled(120), border=True, horizontal_scrollbar=True, tag="dmx_universe_container"):
                 dpg.add_text("Add fixtures to see DMX channels", tag="dmx_no_fixtures_text", color=(100, 100, 120))
     
@@ -1010,24 +1125,48 @@ class MusicAutoShowGUI:
         if dpg.does_item_exist("track_info"):
             dpg.set_value("track_info", track_text[:80])
         
+        # Update progress bars and their tooltip values
         if dpg.does_item_exist("energy_bar"):
             dpg.set_value("energy_bar", data.features.energy)
+        if dpg.does_item_exist("energy_tooltip_value"):
+            dpg.set_value("energy_tooltip_value", f"Raw Value: {data.features.energy:.3f} ({data.features.energy*100:.1f}%)")
+        
         if dpg.does_item_exist("bass_bar"):
             dpg.set_value("bass_bar", data.features.bass)
+        if dpg.does_item_exist("bass_tooltip_value"):
+            dpg.set_value("bass_tooltip_value", f"Raw Value: {data.features.bass:.3f} ({data.features.bass*100:.1f}%)")
+        
         if dpg.does_item_exist("mid_bar"):
             dpg.set_value("mid_bar", data.features.mid)
+        if dpg.does_item_exist("mid_tooltip_value"):
+            dpg.set_value("mid_tooltip_value", f"Raw Value: {data.features.mid:.3f} ({data.features.mid*100:.1f}%)")
+        
         if dpg.does_item_exist("high_bar"):
             dpg.set_value("high_bar", data.features.high)
+        if dpg.does_item_exist("high_tooltip_value"):
+            dpg.set_value("high_tooltip_value", f"Raw Value: {data.features.high:.3f} ({data.features.high*100:.1f}%)")
+        
         if dpg.does_item_exist("dance_bar"):
             dpg.set_value("dance_bar", data.features.danceability)
+        if dpg.does_item_exist("dance_tooltip_value"):
+            dpg.set_value("dance_tooltip_value", f"Score: {data.features.danceability:.3f} ({data.features.danceability*100:.1f}%)")
+        
         if dpg.does_item_exist("valence_bar"):
             dpg.set_value("valence_bar", data.features.valence)
+        if dpg.does_item_exist("valence_tooltip_value"):
+            dpg.set_value("valence_tooltip_value", f"Value: {data.features.valence:.3f} ({data.features.valence*100:.1f}%)")
+        
         if dpg.does_item_exist("tempo_text"):
             dpg.set_value("tempo_text", f"Tempo: {data.features.tempo:.0f} BPM")
         if dpg.does_item_exist("tempo_bar"):
             dpg.set_value("tempo_bar", data.normalized_tempo)
+        if dpg.does_item_exist("tempo_tooltip_value"):
+            dpg.set_value("tempo_tooltip_value", f"Current BPM: {data.features.tempo:.1f}")
+        
         if dpg.does_item_exist("beat_bar"):
             dpg.set_value("beat_bar", data.beat_position)
+        if dpg.does_item_exist("beat_tooltip_value"):
+            dpg.set_value("beat_tooltip_value", f"Position: {data.beat_position:.3f} ({data.beat_position*100:.1f}%)")
         
         # Draw album color palette
         if dpg.does_item_exist("color_palette"):
@@ -1044,9 +1183,15 @@ class MusicAutoShowGUI:
                         rounding=3,
                         parent="color_palette"
                     )
+                # Update tooltip with RGB values
+                if dpg.does_item_exist("color_palette_values"):
+                    colors_str = ", ".join([f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}" for c in data.album_colors[:5]])
+                    dpg.set_value("color_palette_values", f"RGB Values: {colors_str}")
             else:
                 dpg.draw_text((0, 3), "(no colors detected)", size=11, 
                              color=(100, 100, 120), parent="color_palette")
+                if dpg.does_item_exist("color_palette_values"):
+                    dpg.set_value("color_palette_values", "RGB Values: (none)")
         
         # Draw comprehensive audio analysis visualization
         if dpg.does_item_exist("audio_viz_display"):
@@ -1312,8 +1457,13 @@ class MusicAutoShowGUI:
             channels = self.dmx_controller.get_all_channels()
             last_channel = self._get_last_used_channel()
             for i in range(min(last_channel, len(channels))):
-                if dpg.does_item_exist(f"dmx_ch_{i+1}"):
-                    dpg.set_value(f"dmx_ch_{i+1}", channels[i] / 255.0)
+                ch_num = i + 1
+                if dpg.does_item_exist(f"dmx_ch_{ch_num}"):
+                    value = channels[i]
+                    dpg.set_value(f"dmx_ch_{ch_num}", value / 255.0)
+                    # Update tooltip value
+                    if dpg.does_item_exist(f"dmx_ch_{ch_num}_value"):
+                        dpg.set_value(f"dmx_ch_{ch_num}_value", f"Value: {value} ({value/255*100:.0f}%)")
         
         # Draw the stage visualizer
         if self._stage_visualizer:
@@ -1322,6 +1472,21 @@ class MusicAutoShowGUI:
                 self._fixture_states,
                 self._current_analysis
             )
+        
+        # Update stage visualizer tooltip with fixture info
+        if dpg.does_item_exist("stage_fixture_info"):
+            if self._fixture_states:
+                fixture_lines = []
+                for name, state in self._fixture_states.items():
+                    rgb_str = f"RGB({state.red},{state.green},{state.blue})"
+                    pos_str = f"Pan:{state.pan} Tilt:{state.tilt}"
+                    fixture_lines.append(f"{name}: {rgb_str} {pos_str} Dim:{state.dimmer}")
+                info_text = "\n".join(fixture_lines[:4])  # Limit to 4 fixtures
+                if len(self._fixture_states) > 4:
+                    info_text += f"\n... +{len(self._fixture_states)-4} more"
+            else:
+                info_text = "No fixtures active"
+            dpg.set_value("stage_fixture_info", info_text)
     
     def _new_config(self) -> None:
         self.config = ShowConfig()
