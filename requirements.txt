@@ -11,8 +11,8 @@ madmom @ git+https://github.com/CPJKU/madmom.git  # Neural network beat/tempo de
 pyftdi>=0.54.0         # FTDI-based DMX interfaces
 pyserial>=3.5          # Generic serial DMX
 
-# GUI
-dearpygui>=1.10.0
+# Web UI
+nicegui>=1.4.0
 
 # Media Info - OS-specific (optional, for track info display)
 # Windows: winrt (pre-built wheels, no compiler needed)

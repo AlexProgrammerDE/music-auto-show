@@ -13,7 +13,7 @@ dependencies:
     - madmom>=0.16.1  # Neural network beat/tempo detection
     - pyftdi>=0.54.0
     - pyserial>=3.5
-    - dearpygui>=1.10.0
+    - nicegui>=1.4.0
     - Pillow>=10.0.0
     # Windows media info
     - winrt-Windows.Media.Control>=2.0.0

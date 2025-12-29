@@ -6,17 +6,14 @@ A cross-platform application that visualizes music using real-time
 audio analysis to control DMX lighting fixtures.
 
 Usage:
-    # GUI mode
+    # Start web UI
     python main.py
-    
-    # Headless mode with config
-    python main.py --headless config.json
     
     # Simulation mode (no hardware required)
     python main.py --simulate
     
-    # Create example config
-    python main.py --create-example example_config.json
+    # Load config on startup
+    python main.py --config config.json
 """
 import argparse
 import logging
@@ -36,10 +33,10 @@ def check_dependencies() -> dict:
     deps = {}
     
     try:
-        import dearpygui.dearpygui
-        deps['dearpygui'] = True
+        import nicegui
+        deps['nicegui'] = True
     except ImportError:
-        deps['dearpygui'] = False
+        deps['nicegui'] = False
     
     try:
         import pyftdi
@@ -79,9 +76,8 @@ def print_dependency_status(deps: dict) -> None:
     logger.info("Dependency Status:")
     logger.info("-" * 40)
     
-    required = ['pydantic', 'numpy', 'madmom']
+    required = ['pydantic', 'numpy', 'madmom', 'nicegui']
     optional_dmx = ['pyftdi', 'pyserial']
-    optional_gui = ['dearpygui']
     
     all_ok = True
     
@@ -100,14 +96,6 @@ def print_dependency_status(deps: dict) -> None:
     if not dmx_ok:
         logger.info("  (Simulation mode will be used)")
     
-    logger.info("")
-    logger.info("GUI Support:")
-    for dep in optional_gui:
-        status = "OK" if deps.get(dep) else "not installed"
-        logger.info(f"  {dep}: {status}")
-    if not deps.get('dearpygui'):
-        logger.info("  (Only headless mode available)")
-    
     logger.info("-" * 40)
     
     if not all_ok:
@@ -122,34 +110,33 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                          # Start GUI
-  python main.py --headless config.json   # Run headless with config
-  python main.py --simulate               # GUI with simulation
-  python main.py --create-example out.json  # Create example config
+  python main.py                          # Start web UI
+  python main.py --simulate               # Web UI with simulation
+  python main.py --config show.json       # Load config on startup
   python main.py --check-deps             # Check dependencies
         """
     )
     
-    parser.add_argument("config", nargs="?",
-                       help="Configuration file (for headless mode)")
-    parser.add_argument("--headless", action="store_true",
-                       help="Run in headless mode (requires config file)")
+    parser.add_argument("--config", "-c",
+                       help="Configuration file to load on startup")
     parser.add_argument("--simulate", action="store_true",
                        help="Simulate DMX and audio (no hardware required)")
     parser.add_argument("--simulate-dmx", action="store_true",
                        help="Simulate DMX output only")
     parser.add_argument("--simulate-audio", action="store_true",
                        help="Simulate audio input only")
-    parser.add_argument("--microphone", "--mic", action="store_true",
-                       help="Use microphone input instead of system audio loopback")
-    parser.add_argument("--create-example", metavar="PATH",
-                       help="Create example configuration file")
+    parser.add_argument("--auto-start", action="store_true",
+                       help="Automatically start the show on launch")
     parser.add_argument("--check-deps", action="store_true",
                        help="Check dependency status and exit")
     parser.add_argument("--list-audio-devices", action="store_true",
                        help="List available audio input devices and exit")
     parser.add_argument("--debug", action="store_true",
                        help="Enable debug logging")
+    parser.add_argument("--port", type=int, default=8080,
+                       help="Port for web UI (default: 8080)")
+    parser.add_argument("--host", default="0.0.0.0",
+                       help="Host for web UI (default: 0.0.0.0)")
     
     args = parser.parse_args()
     
@@ -176,7 +163,6 @@ Examples:
             logger.info(f"  [{dev['index']}] {dev['name']}{loopback_tag}")
             logger.info(f"      Channels: {dev['channels']}, Sample Rate: {dev['sample_rate']} Hz")
         logger.info("-" * 60)
-        logger.info("Use --microphone to use microphone input instead of system loopback")
         return
     
     # Check required dependencies
@@ -184,45 +170,36 @@ Examples:
         logger.error("pydantic is required. Install with: pip install pydantic")
         sys.exit(1)
     
-    # Create example config
-    if args.create_example:
-        from headless import create_example_config
-        create_example_config(args.create_example)
-        return
-    
-    # Headless mode
-    if args.headless or args.config:
-        if not args.config:
-            logger.error("Configuration file required for headless mode")
-            sys.exit(1)
-        
-        from headless import HeadlessRunner
-        
-        simulate_dmx = args.simulate_dmx or args.simulate
-        simulate_audio = args.simulate_audio or args.simulate
-        use_microphone = getattr(args, 'microphone', False)
-        
-        runner = HeadlessRunner(args.config, simulate_dmx, simulate_audio, use_microphone)
-        if runner.start():
-            try:
-                runner.run()
-            finally:
-                runner.stop()
-        else:
-            sys.exit(1)
-        return
-    
-    # GUI mode
-    if not deps.get('dearpygui'):
-        logger.error("Dear PyGui is required for GUI mode.")
-        logger.error("Install with: pip install dearpygui")
-        logger.error("Or use headless mode: python main.py --headless config.json")
+    if not deps.get('nicegui'):
+        logger.error("nicegui is required. Install with: pip install nicegui")
         sys.exit(1)
     
-    from gui import MusicAutoShowGUI
+    # Launch NiceGUI web app
+    from nicegui import ui
+    from web.app import create_app
+    from web.state import app_state
     
-    app = MusicAutoShowGUI()
-    app.run()
+    # Configure simulation mode
+    if args.simulate or args.simulate_dmx:
+        app_state.simulate_dmx = True
+    if args.simulate or args.simulate_audio:
+        app_state.simulate_audio = True
+    
+    # Create and run app
+    create_app(
+        config_path=args.config,
+        simulate=args.simulate,
+        auto_start=args.auto_start
+    )
+    
+    logger.info(f"Starting Music Auto Show web UI on http://{args.host}:{args.port}")
+    ui.run(
+        host=args.host,
+        port=args.port,
+        title="Music Auto Show",
+        reload=False,
+        show=True
+    )
 
 
 if __name__ == "__main__":
