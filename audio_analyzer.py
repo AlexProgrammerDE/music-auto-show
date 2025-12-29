@@ -219,17 +219,17 @@ class AudioAnalyzer:
         self._onset_threshold = 0.3  # Threshold for onset detection from activations
         
         # Audio gain (sensitivity multiplier, can be adjusted via set_gain())
+        # Gain acts as a dB offset: gain=1.0 is 0dB, gain=2.0 is +6dB, gain=0.5 is -6dB
         self._gain = 1.0
         
-        # Absolute normalization scale factors (calibrated for typical music)
-        # These convert RMS-relative band power to 0-1 range at gain=1.0
-        # The formula is: normalized = (band_mean_power / rms²) / scale_factor * gain
-        # Scale factors determined empirically: at gain=1.0, typical music peaks at ~0.8
-        # Based on measured ratios: bass~20000, mid~800, high~5
-        self._bass_scale = 25000.0  # Bass (20-250 Hz) - very high energy
-        self._mid_scale = 1000.0    # Mid (250-4000 Hz) - moderate energy
-        self._high_scale = 8.0      # High (4000-16000 Hz) - low energy
-        self._energy_scale = 3.0    # Overall energy scale factor
+        # dB-based normalization parameters
+        # Human hearing spans ~120dB, but typical music has ~40-60dB dynamic range
+        # We map a dB range to 0-1 for visualization
+        self._db_floor = -60.0    # Minimum dB level (maps to 0.0)
+        self._db_ceiling = 0.0    # Maximum dB level (maps to 1.0)
+        # Reference power for 0dB - calibrated for typical system audio capture
+        # This is the power level that corresponds to "full scale" (0dB)
+        self._ref_power = 1.0     # Reference power (will be auto-calibrated if needed)
         
         # Media info provider (for track name/artist display)
         self._media_info_provider = None
@@ -638,29 +638,49 @@ class AudioAnalyzer:
             mid_power, _ = self._get_band_power(fft_data, 250, 4000)
             high_power, _ = self._get_band_power(fft_data, 4000, 16000)
             
-            # Normalize relative to signal power (RMS²) - this makes it input-level independent
-            # Then divide by calibrated scale factor to get 0-1 range at gain=1.0
-            if signal_power > 1e-10:  # Avoid division by zero
-                bass_ratio = bass_power / signal_power
-                mid_ratio = mid_power / signal_power
-                high_ratio = high_power / signal_power
-                
-                bass_norm = bass_ratio / self._bass_scale
-                mid_norm = mid_ratio / self._mid_scale
-                high_norm = high_ratio / self._high_scale
-                
-                # Debug logging (every ~100 frames)
-                if hasattr(self, '_debug_counter'):
-                    self._debug_counter += 1
-                else:
-                    self._debug_counter = 0
-                if self._debug_counter % 100 == 0:
-                    logger.debug(f"Band ratios: bass={bass_ratio:.2f}, mid={mid_ratio:.2f}, high={high_ratio:.4f}")
-                    logger.debug(f"After scale: bass={bass_norm:.2f}, mid={mid_norm:.2f}, high={high_norm:.4f}")
+            # Convert to dB scale (logarithmic, matches human hearing)
+            # dB = 10 * log10(power / reference)
+            # We use a small epsilon to avoid log(0)
+            eps = 1e-10
+            
+            # Convert band powers to dB relative to signal power
+            # This makes it input-level independent
+            if signal_power > eps:
+                # Normalize band power relative to signal power, then convert to dB
+                bass_db = 10 * np.log10((bass_power / signal_power) + eps)
+                mid_db = 10 * np.log10((mid_power / signal_power) + eps)
+                high_db = 10 * np.log10((high_power / signal_power) + eps)
             else:
-                bass_norm = 0.0
-                mid_norm = 0.0
-                high_norm = 0.0
+                bass_db = self._db_floor
+                mid_db = self._db_floor
+                high_db = self._db_floor
+            
+            # Map dB range to 0-1
+            # Typical band ratios are: bass ~40dB, mid ~30dB, high ~5dB above signal power
+            # We offset each band so 0dB = average expected level
+            bass_offset = 35.0  # Bass is typically ~35dB above signal power
+            mid_offset = 25.0   # Mid is typically ~25dB above signal power
+            high_offset = 5.0   # High is typically ~5dB above signal power
+            
+            # Normalize: subtract offset, then map [-30, +30] dB range to [0, 1]
+            db_range = 30.0  # ±30dB dynamic range around the offset
+            bass_norm = (bass_db - bass_offset + db_range) / (2 * db_range)
+            mid_norm = (mid_db - mid_offset + db_range) / (2 * db_range)
+            high_norm = (high_db - high_offset + db_range) / (2 * db_range)
+            
+            # Clamp to 0-1
+            bass_norm = max(0.0, min(1.0, bass_norm))
+            mid_norm = max(0.0, min(1.0, mid_norm))
+            high_norm = max(0.0, min(1.0, high_norm))
+            
+            # Debug logging (every ~100 frames)
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 0
+            if self._debug_counter % 100 == 0:
+                logger.debug(f"Band dB: bass={bass_db:.1f}, mid={mid_db:.1f}, high={high_db:.1f}")
+                logger.debug(f"Normalized: bass={bass_norm:.2f}, mid={mid_norm:.2f}, high={high_norm:.2f}")
             
             # Store normalized values in history
             self._bass_history.append(bass_norm)
@@ -671,22 +691,32 @@ class AudioAnalyzer:
         with self._lock:
             features = self._data.features
             
-            # Energy: normalized against a fixed reference, adjusted by gain
-            # Reference RMS of 0.1 represents "moderate" audio level
+            # Energy: use dB scale for consistent normalization
             avg_rms = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            features.energy = min(1.0, (avg_rms / 0.1) * self._gain / self._energy_scale)
+            if avg_rms > 1e-10:
+                # Convert RMS to dB, map -60dB to 0dB range to 0-1
+                energy_db = 20 * np.log10(avg_rms + 1e-10)
+                # Map dB range to 0-1, with gain acting as dB offset
+                # gain=1.0 is 0dB offset, gain=2.0 is +6dB, gain=0.5 is -6dB
+                gain_db = 20 * np.log10(self._gain) if self._gain > 0 else -60
+                energy_norm = (energy_db + gain_db - self._db_floor) / (self._db_ceiling - self._db_floor)
+                features.energy = max(0.0, min(1.0, energy_norm))
+            else:
+                features.energy = 0.0
             
-            # Frequency bands: apply gain to the RMS-relative normalized values
+            # Frequency bands: already normalized in dB, apply gain as dB offset
             avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
             avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
             avg_high = np.mean(list(self._high_history)) if self._high_history else 0
             
-            # Apply gain - at gain=1.0, calibrated music peaks at ~0.8
-            # Higher gain = more sensitive, lower gain = less sensitive
-            features.bass = min(1.0, avg_bass * self._gain)
-            features.mid = min(1.0, avg_mid * self._gain)
-            features.high = min(1.0, avg_high * self._gain)
+            # Apply gain as a shift in the normalized value
+            # gain=1.0 -> no change, gain=2.0 -> +0.1 boost, gain=0.5 -> -0.1 reduction
+            # This maps the gain slider (0.1-5.0) to roughly ±0.2 adjustment
+            gain_adjustment = (self._gain - 1.0) * 0.2
+            features.bass = max(0.0, min(1.0, avg_bass + gain_adjustment))
+            features.mid = max(0.0, min(1.0, avg_mid + gain_adjustment))
+            features.high = max(0.0, min(1.0, avg_high + gain_adjustment))
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
@@ -948,14 +978,29 @@ class AudioAnalyzer:
             self._madmom_processing = False
     
     def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float, signal_power: float) -> tuple[float, float, float]:
-        """Normalize frequency bands with absolute RMS-relative scaling."""
+        """Normalize frequency bands using dB-based scaling."""
         if signal_power < 1e-10:
             return 0.0, 0.0, 0.0
         
-        # Normalize relative to signal power, then by calibrated scale factors
-        bass = min(1.0, ((bass_raw / signal_power) / self._bass_scale) * self._gain)
-        mid = min(1.0, ((mid_raw / signal_power) / self._mid_scale) * self._gain)
-        high = min(1.0, ((high_raw / signal_power) / self._high_scale) * self._gain)
+        eps = 1e-10
+        # Convert to dB relative to signal power
+        bass_db = 10 * np.log10((bass_raw / signal_power) + eps)
+        mid_db = 10 * np.log10((mid_raw / signal_power) + eps)
+        high_db = 10 * np.log10((high_raw / signal_power) + eps)
+        
+        # Normalize with offsets
+        bass_offset, mid_offset, high_offset = 35.0, 25.0, 5.0
+        db_range = 30.0
+        
+        bass = max(0.0, min(1.0, (bass_db - bass_offset + db_range) / (2 * db_range)))
+        mid = max(0.0, min(1.0, (mid_db - mid_offset + db_range) / (2 * db_range)))
+        high = max(0.0, min(1.0, (high_db - high_offset + db_range) / (2 * db_range)))
+        
+        # Apply gain adjustment
+        gain_adj = (self._gain - 1.0) * 0.2
+        bass = max(0.0, min(1.0, bass + gain_adj))
+        mid = max(0.0, min(1.0, mid + gain_adj))
+        high = max(0.0, min(1.0, high + gain_adj))
         
         return bass, mid, high
     
