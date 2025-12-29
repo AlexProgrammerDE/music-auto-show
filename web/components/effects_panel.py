@@ -21,11 +21,11 @@ class EffectsPanel:
         
         with ui.column().classes('w-full gap-1'):
             with ui.row().classes('justify-between items-center w-full'):
-                ui.label(label).classes('text-sm font-medium').style('color: #8b949e;')
+                ui.label(label).classes('text-sm font-medium text-gray-500')
                 if format_pct:
-                    val_label = ui.label(f'{value:.0%}').classes('text-sm font-mono').style('color: #39d0d8;')
+                    val_label = ui.label(f'{value:.0%}').classes('text-sm font-mono text-primary')
                 else:
-                    val_label = ui.label(f'{value:.1f}{suffix}').classes('text-sm font-mono').style('color: #39d0d8;')
+                    val_label = ui.label(f'{value:.1f}{suffix}').classes('text-sm font-mono text-primary')
             
             def update_label(e: Any, lbl=val_label, pct=format_pct, suf=suffix):
                 if pct:
@@ -121,7 +121,7 @@ class EffectsPanel:
         # Effect fixtures (Derby/Moonflower)
         with ui.expansion('Effect Fixtures', icon='blur_on').classes('w-full'):
             with ui.column().classes('w-full gap-4 p-3'):
-                ui.label('For Derby/Moonflower fixtures').classes('text-xs').style('color: #8b949e;')
+                ui.label('For Derby/Moonflower fixtures').classes('text-xs text-gray-500')
                 
                 # Effect fixture mode
                 effect_mode_options = [m.value for m in EffectFixtureMode]

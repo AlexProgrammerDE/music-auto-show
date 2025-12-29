@@ -80,31 +80,28 @@ class DMXUniverse:
                         
                         with ui.column().classes('items-center gap-0'):
                             # Channel number
-                            color_class = 'text-green-400' if is_used else 'text-gray-500'
+                            color_class = 'text-green-500' if is_used else 'text-gray-500'
                             ui.label(str(ch_num)).classes(f'text-xs {color_class}')
                             
-                            # Progress bar (vertical style using html)
-                            bar = ui.html(f'''
-                                <div style="width:20px;height:40px;background:#2a2a2a;border-radius:2px;position:relative;overflow:hidden;">
-                                    <div id="dmx-bar-{ch_num}" style="position:absolute;bottom:0;width:100%;height:0%;background:{'#4ade80' if is_used else '#666'};transition:height 0.1s;"></div>
-                                </div>
-                            ''', sanitize=False)
+                            # Progress bar using NiceGUI element
+                            with ui.element('div').classes('relative w-5 h-10 bg-gray-700 rounded overflow-hidden'):
+                                bar_color = 'bg-green-500' if is_used else 'bg-gray-500'
+                                bar = ui.element('div').classes(f'absolute bottom-0 w-full {bar_color}')
+                                bar.style('height: 0%; transition: height 0.1s')
+                                bar._props['id'] = f'dmx-bar-{ch_num}'
                             self._channel_elements.append((ch_num, bar))
                             
                             # Value label
-                            val_label = ui.label('0').classes('text-xs text-gray-400 font-mono')
+                            val_label = ui.label('0').classes('text-xs text-gray-500 font-mono')
                             self._value_labels.append((ch_num, val_label))
-                        
-                        # Tooltip with channel info
-                        if is_used:
-                            fixture_name, ch_name = channel_info[ch_num]
-                            # NiceGUI doesn't have tooltip on html elements easily, so we skip
             
             # Legend
             ui.separator().classes('my-2')
-            with ui.row().classes('gap-4 text-xs'):
-                ui.html('<span style="color:#4ade80">&#9679;</span> Used', sanitize=False).classes('text-gray-400')
-                ui.html('<span style="color:#666">&#9679;</span> Unused', sanitize=False).classes('text-gray-400')
+            with ui.row().classes('gap-4 text-xs items-center'):
+                ui.element('span').classes('w-2 h-2 rounded-full bg-green-500')
+                ui.label('Used').classes('text-gray-500')
+                ui.element('span').classes('w-2 h-2 rounded-full bg-gray-500')
+                ui.label('Unused').classes('text-gray-500')
             ui.label(f'Channels 1-{last_channel} ({last_channel} total)').classes('text-xs text-gray-500')
     
     def _update_values(self) -> None:

@@ -20,10 +20,10 @@ class FixtureList:
         """Create the fixture list UI."""
         with ui.expansion('Fixtures', icon='lightbulb', value=True).classes('w-full'):
             with ui.column().classes('w-full gap-3 p-3'):
-                # Action buttons - styled
+                # Action buttons
                 with ui.row().classes('gap-2 w-full'):
-                    ui.button('Add Fixture', on_click=self.dialogs.show_add_dialog, icon='add').props('flat dense').classes('flex-grow').style('border-color: rgba(52, 211, 153, 0.3) !important; color: #34d399 !important;')
-                    ui.button('Remove', on_click=self._remove_selected, icon='delete').props('flat dense').style('border-color: rgba(248, 113, 113, 0.3) !important; color: #f87171 !important;')
+                    ui.button('Add Fixture', on_click=self.dialogs.show_add_dialog, icon='add', color='green').props('flat dense').classes('flex-grow')
+                    ui.button('Remove', on_click=self._remove_selected, icon='delete', color='red').props('flat dense')
                 
                 # Fixture list
                 self._list_container = ui.column().classes('w-full gap-2')
@@ -39,9 +39,9 @@ class FixtureList:
         with self._list_container:
             if not app_state.config.fixtures:
                 with ui.column().classes('w-full items-center py-4 gap-2'):
-                    ui.icon('lightbulb_outline').classes('text-4xl').style('color: #39d0d8; opacity: 0.4;')
-                    ui.label('No fixtures configured').classes('italic').style('color: #8b949e;')
-                    ui.label('Click "Add Fixture" to get started').classes('text-xs').style('color: #6b7280;')
+                    ui.icon('lightbulb_outline').classes('text-4xl text-gray-500 opacity-40')
+                    ui.label('No fixtures configured').classes('italic text-gray-500')
+                    ui.label('Click "Add Fixture" to get started').classes('text-xs text-gray-600')
                 return
             
             for i, fixture in enumerate(app_state.config.fixtures):
@@ -51,28 +51,27 @@ class FixtureList:
         """Create a fixture list item."""
         profile_text = fixture.profile_name if fixture.profile_name else "Custom"
         
-        with ui.element('div').classes('fixture-item w-full').on('click', lambda _e, f=fixture: self.dialogs.show_edit_dialog(f)):
+        with ui.card().classes('w-full cursor-pointer').props('flat bordered').on('click', lambda _e, f=fixture: self.dialogs.show_edit_dialog(f)):
             with ui.row().classes('items-center justify-between w-full gap-3'):
                 # Fixture icon
-                ui.icon('lightbulb').classes('text-cyan-400').style('font-size: 1.5rem; opacity: 0.8;')
+                ui.icon('lightbulb').classes('text-primary text-2xl')
                 
                 # Fixture info
                 with ui.column().classes('flex-grow gap-0'):
-                    ui.label(fixture.name).classes('font-semibold text-white')
-                    ui.label(f'{profile_text}').classes('text-xs text-gray-400')
-                    ui.label(f'Channel {fixture.start_channel}').classes('text-xs text-cyan-400 font-mono')
+                    ui.label(fixture.name).classes('font-semibold')
+                    ui.label(f'{profile_text}').classes('text-xs text-gray-500')
+                    ui.label(f'Channel {fixture.start_channel}').classes('text-xs text-primary font-mono')
                 
                 # Color indicator (shows current state if running)
-                off_style = 'width:20px;height:20px;border-radius:50%;background:#1a1f2e;border:2px solid rgba(57,208,216,0.3);transition:all 0.2s;'
-                color_indicator = ui.html(f'<div style="{off_style}"></div>', sanitize=False)
+                color_indicator = ui.element('div').classes('w-5 h-5 rounded-full bg-gray-700')
                 
-                def update_color(name=fixture.name, indicator=color_indicator, off_style=off_style):
+                def update_color(name=fixture.name, indicator=color_indicator):
                     state = app_state.get_fixture_state(name)
                     if state.dimmer > 0:
                         r, g, b = state.red, state.green, state.blue
-                        indicator.content = f'<div style="width:20px;height:20px;border-radius:50%;background:rgb({r},{g},{b});box-shadow:0 0 12px rgb({r},{g},{b}),0 0 24px rgba({r},{g},{b},0.5);border:2px solid rgba(255,255,255,0.3);"></div>'
+                        indicator.style(f'background-color: rgb({r},{g},{b}); box-shadow: 0 0 8px rgb({r},{g},{b})')
                     else:
-                        indicator.content = f'<div style="{off_style}"></div>'
+                        indicator.style('background-color: #374151; box-shadow: none')
                 
                 ui.timer(0.1, update_color)
     

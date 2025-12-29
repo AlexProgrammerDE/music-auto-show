@@ -26,40 +26,40 @@ class StageView:
         with ui.scene(
             width=800,
             height=400,
-            background_color='#0a0e14',
+            background_color='#1d1d1d',
             grid=False
         ).classes('w-full rounded-lg') as self._scene:
-            # Stage floor - dark with subtle gradient effect
-            self._scene.box(12, 10, 0.1).move(0, 0, -0.05).material('#0d1117')
+            # Stage floor
+            self._scene.box(12, 10, 0.1).move(0, 0, -0.05).material('#2d2d2d')
             
-            # Floor grid lines - cyan accent for modern look
+            # Floor grid lines
             for x in range(-6, 7):
-                opacity = 0.15 if x % 2 == 0 else 0.08
-                self._scene.line([x, -5, 0.02], [x, 5, 0.02]).material('#39d0d8', opacity=opacity)
+                opacity = 0.2 if x % 2 == 0 else 0.1
+                self._scene.line([x, -5, 0.02], [x, 5, 0.02]).material('#666666', opacity=opacity)
             for y in range(-5, 6):
-                opacity = 0.15 if y % 2 == 0 else 0.08
-                self._scene.line([-6, y, 0.02], [6, y, 0.02]).material('#39d0d8', opacity=opacity)
+                opacity = 0.2 if y % 2 == 0 else 0.1
+                self._scene.line([-6, y, 0.02], [6, y, 0.02]).material('#666666', opacity=opacity)
             
-            # Stage edge glow lines
-            self._scene.line([-6, -5, 0.03], [6, -5, 0.03]).material('#39d0d8', opacity=0.4)
-            self._scene.line([-6, 5, 0.03], [6, 5, 0.03]).material('#39d0d8', opacity=0.2)
+            # Stage edge lines
+            self._scene.line([-6, -5, 0.03], [6, -5, 0.03]).material('#888888', opacity=0.4)
+            self._scene.line([-6, 5, 0.03], [6, 5, 0.03]).material('#888888', opacity=0.2)
             
-            # Truss structure - modern metallic look
+            # Truss structure
             # Main horizontal truss bar
-            self._scene.box(8, 0.15, 0.15).move(0, 0, 3.5).material('#c0c8d0')
+            self._scene.box(8, 0.15, 0.15).move(0, 0, 3.5).material('#aaaaaa')
             
-            # Secondary truss bars for depth
-            self._scene.box(8, 0.08, 0.08).move(0, 0.15, 3.35).material('#8090a0')
-            self._scene.box(8, 0.08, 0.08).move(0, -0.15, 3.35).material('#8090a0')
+            # Secondary truss bars
+            self._scene.box(8, 0.08, 0.08).move(0, 0.15, 3.35).material('#888888')
+            self._scene.box(8, 0.08, 0.08).move(0, -0.15, 3.35).material('#888888')
             
             # Truss vertical supports
-            self._scene.box(0.12, 0.12, 3.5).move(-4, 0, 1.75).material('#9aa5b5')
-            self._scene.box(0.12, 0.12, 3.5).move(4, 0, 1.75).material('#9aa5b5')
+            self._scene.box(0.12, 0.12, 3.5).move(-4, 0, 1.75).material('#999999')
+            self._scene.box(0.12, 0.12, 3.5).move(4, 0, 1.75).material('#999999')
             
-            # Cross braces for realism
+            # Cross braces
             for z_pos in [0.8, 1.8, 2.8]:
-                self._scene.box(0.04, 0.04, 0.4).move(-4, 0, z_pos).material('#606878')
-                self._scene.box(0.04, 0.04, 0.4).move(4, 0, z_pos).material('#606878')
+                self._scene.box(0.04, 0.04, 0.4).move(-4, 0, z_pos).material('#666666')
+                self._scene.box(0.04, 0.04, 0.4).move(4, 0, z_pos).material('#666666')
         
         # Set camera position - front-of-house elevated view, slightly angled
         self._scene.move_camera(x=0, y=-10, z=5, look_at_x=0, look_at_y=0, look_at_z=1.5, duration=0)
@@ -125,40 +125,41 @@ class StageView:
         with self._scene:
             objects = {}
             
-            # Mount bracket - visible metallic clamp
-            objects['mount'] = self._scene.box(0.08, 0.08, 0.25).move(x, y, z + 0.12).material('#8899bb')
+            # Mount bracket
+            objects['mount'] = self._scene.box(0.08, 0.08, 0.25).move(x, y, z + 0.12).material('#777777')
             
             if fixture_type == FixtureType.EFFECT:
-                # Effect light (derby/moonflower) - cube body with lens
-                objects['body'] = self._scene.box(0.28, 0.28, 0.22).move(x, y, z - 0.08).material('#1e2432')
+                # Effect light (derby/moonflower)
+                objects['body'] = self._scene.box(0.28, 0.28, 0.22).move(x, y, z - 0.08).material('#333333')
                 # Lens ring
-                objects['ring'] = self._scene.cylinder(0.14, 0.04).move(x, y, z - 0.22).material('#303848')
-                objects['lens'] = self._scene.sphere(0.11).move(x, y, z - 0.24).material('#181c24')
+                objects['ring'] = self._scene.cylinder(0.14, 0.04).move(x, y, z - 0.22).material('#444444')
+                objects['lens'] = self._scene.sphere(0.11).move(x, y, z - 0.24).material('#222222')
                 
-                # Multiple beam indicators for effect lights - use boxes for beams pointing down
+                # Multiple beam indicators for effect lights
                 objects['beams'] = []
                 for angle in range(0, 360, 72):  # 5 beams
                     rad = math.radians(angle)
                     bx = x + 0.06 * math.cos(rad)
                     by = y + 0.06 * math.sin(rad)
-                    # Use thin box for beam (extends downward in -z direction)
-                    beam = self._scene.box(0.04, 0.04, 2.8).move(bx, by, z - 1.7).material('#333333', opacity=0.0)
+                    beam = self._scene.box(0.04, 0.04, 2.8).move(bx, by, z - 1.7).material('#555555', opacity=0.0)
                     objects['beams'].append(beam)
             else:
-                # Standard fixture (moving head/par) - yoke and head design
+                # Standard fixture (moving head/par)
                 # Yoke arms
-                objects['yoke_l'] = self._scene.box(0.03, 0.12, 0.18).move(x - 0.08, y, z - 0.06).material('#2a3040')
-                objects['yoke_r'] = self._scene.box(0.03, 0.12, 0.18).move(x + 0.08, y, z - 0.06).material('#2a3040')
+                objects['yoke_l'] = self._scene.box(0.03, 0.12, 0.18).move(x - 0.08, y, z - 0.06).material('#444444')
+                objects['yoke_r'] = self._scene.box(0.03, 0.12, 0.18).move(x + 0.08, y, z - 0.06).material('#444444')
                 # Head body
-                objects['body'] = self._scene.box(0.14, 0.18, 0.14).move(x, y, z - 0.18).material('#1e2432')
+                objects['body'] = self._scene.box(0.14, 0.18, 0.14).move(x, y, z - 0.18).material('#333333')
                 # Lens
-                objects['head'] = self._scene.sphere(0.07).move(x, y, z - 0.28).material('#181c24')
+                objects['head'] = self._scene.sphere(0.07).move(x, y, z - 0.28).material('#222222')
                 
-                # Single beam - use box extending downward
-                objects['beam'] = self._scene.box(0.12, 0.12, 3.0).move(x, y, z - 1.8).material('#333333', opacity=0.0)
+                # Single beam - use a line from fixture to floor for the beam effect
+                beam_start = [x, y, z - 0.3]
+                beam_end = [x, y, 0.05]
+                objects['beam'] = self._scene.curve(beam_start, beam_end).material('#555555', opacity=0.0)
                 
-                # Floor spot - flat cylinder on floor
-                objects['spot'] = self._scene.cylinder(0.4, 0.02).move(x, y, 0.02).material('#333333', opacity=0.0)
+                # Floor spot
+                objects['spot'] = self._scene.cylinder(0.4, 0.02).move(x, y, 0.02).material('#555555', opacity=0.0)
             
             self._fixture_objects[name] = objects
     
@@ -185,24 +186,23 @@ class StageView:
                 brightness = (r + g + b) / 3.0 / 255.0
                 total_brightness = brightness * dimmer
             
-            # Update lens color with glow effect
+            # Update lens color
             if 'lens' in objects:
                 if total_brightness > 0.05:
-                    # Brighten the lens color
                     lr = min(255, int(r * 1.2 + 40))
                     lg = min(255, int(g * 1.2 + 40))
                     lb = min(255, int(b * 1.2 + 40))
                     color = f'#{lr:02x}{lg:02x}{lb:02x}'
                     objects['lens'].material(color)
                 else:
-                    objects['lens'].material('#1a1e26')
+                    objects['lens'].material('#222222')
             
-            # Update ring glow
+            # Update ring
             if 'ring' in objects:
                 if total_brightness > 0.1:
                     objects['ring'].material(f'#{r:02x}{g:02x}{b:02x}', opacity=0.5)
                 else:
-                    objects['ring'].material('#252a36')
+                    objects['ring'].material('#444444')
             
             # Update beams
             if 'beams' in objects:
@@ -234,10 +234,10 @@ class StageView:
                         color = f'#{r:02x}{g:02x}{b:02x}'
                         beam.material(color, opacity=opacity)
                     else:
-                        beam.material('#1a1e26', opacity=0.0)
+                        beam.material('#333333', opacity=0.0)
         else:
             # Standard fixture
-            # Update head/lens color with glow
+            # Update head/lens color
             if 'head' in objects:
                 if total_brightness > 0.05:
                     hr = min(255, int(r * 1.2 + 50))
@@ -246,7 +246,7 @@ class StageView:
                     color = f'#{hr:02x}{hg:02x}{hb:02x}'
                     objects['head'].material(color)
                 else:
-                    objects['head'].material('#1a1e26')
+                    objects['head'].material('#222222')
             
             # Update beam - straight down with pan/tilt offset
             if 'beam' in objects:
@@ -266,7 +266,7 @@ class StageView:
                     color = f'#{r:02x}{g:02x}{b:02x}'
                     objects['beam'].material(color, opacity=opacity)
                 else:
-                    objects['beam'].material('#1a1e26', opacity=0.0)
+                    objects['beam'].material('#333333', opacity=0.0)
             
             # Update floor spot
             if 'spot' in objects:
@@ -283,7 +283,7 @@ class StageView:
                     color = f'#{r:02x}{g:02x}{b:02x}'
                     objects['spot'].material(color, opacity=opacity)
                 else:
-                    objects['spot'].material('#1a1e26', opacity=0.0)
+                    objects['spot'].material('#333333', opacity=0.0)
     
     def _remove_fixture_object(self, name: str) -> None:
         """Remove a fixture object from the scene."""
