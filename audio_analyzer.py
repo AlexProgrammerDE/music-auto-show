@@ -221,13 +221,14 @@ class AudioAnalyzer:
         # Audio gain (sensitivity multiplier, can be adjusted via set_gain())
         self._gain = 1.0
         
-        # Adaptive max tracking for normalization (with very slow decay)
-        # These represent "what is loud for this audio source" and decay very slowly
-        self._max_rms = 0.01
-        self._max_bass = 0.01
-        self._max_mid = 0.01
-        self._max_high = 0.01
-        self._band_decay = 0.99995  # Very slow decay (~30 sec to halve)
+        # Absolute normalization scale factors (calibrated for typical music)
+        # These convert RMS-relative band power to 0-1 range at gain=1.0
+        # The formula is: normalized = (band_mean_power / rms²) / scale_factor * gain
+        # Scale factors determined empirically for typical music to show ~0.7-0.8 at peaks
+        self._bass_scale = 8.0    # Bass (20-250 Hz) - high energy, needs larger scale
+        self._mid_scale = 4.0     # Mid (250-4000 Hz) - moderate energy
+        self._high_scale = 1.0    # High (4000-16000 Hz) - low energy, smaller scale
+        self._energy_scale = 3.0  # Overall energy scale factor
         
         # Media info provider (for track name/artist display)
         self._media_info_provider = None
@@ -613,18 +614,17 @@ class AudioAnalyzer:
                 self._onset_history.append(current_time)
         else:
             # Fallback: simple energy-based detection if madmom not processing yet
-            normalized_rms = min(1.0, (rms / max(0.01, self._max_rms)) * self._gain)
+            # Use fixed reference (0.1 = moderate audio level)
+            normalized_rms = min(1.0, (rms / 0.1) * self._gain)
             self._onset_strength_history.append(normalized_rms)
             self._prev_onset_strength = normalized_rms
         
-        # Update adaptive max for energy with decay
-        if rms > self._max_rms:
-            self._max_rms = rms
-        else:
-            self._max_rms = max(0.01, self._max_rms * self._band_decay)
-        
-        # Store raw RMS in history (normalization and gain applied at read time)
+        # Store RMS in history for smoothing
         self._energy_history.append(rms)
+        
+        # Calculate signal power (RMS²) for relative normalization
+        # This is the reference for all band powers
+        signal_power = rms ** 2
         
         # FFT for frequency analysis
         if len(audio_data) >= self._fft_size:
@@ -632,65 +632,47 @@ class AudioAnalyzer:
             windowed = audio_data[:self._fft_size] * np.hanning(self._fft_size)
             fft_data = np.abs(np.fft.rfft(windowed))
             
-            # Calculate raw frequency band power
-            bass_raw = self._get_band_energy_normalized(fft_data, 20, 250)
-            mid_raw = self._get_band_energy_normalized(fft_data, 250, 4000)
-            high_raw = self._get_band_energy_normalized(fft_data, 4000, 16000)
+            # Calculate mean power per bin for each frequency band
+            bass_power, _ = self._get_band_power(fft_data, 20, 250)
+            mid_power, _ = self._get_band_power(fft_data, 250, 4000)
+            high_power, _ = self._get_band_power(fft_data, 4000, 16000)
             
-            # Check if we have meaningful audio
-            total_raw = bass_raw + mid_raw + high_raw
-            if total_raw < 0.0001:
-                # Silent - reset adaptive scaling
-                self._max_bass = 0.01
-                self._max_mid = 0.01
-                self._max_high = 0.01
-                self._bass_history.clear()
-                self._mid_history.clear()
-                self._high_history.clear()
+            # Normalize relative to signal power (RMS²) - this makes it input-level independent
+            # Then divide by calibrated scale factor to get 0-1 range at gain=1.0
+            if signal_power > 1e-10:  # Avoid division by zero
+                bass_norm = (bass_power / signal_power) / self._bass_scale
+                mid_norm = (mid_power / signal_power) / self._mid_scale
+                high_norm = (high_power / signal_power) / self._high_scale
             else:
-                # Update adaptive max values (only grow, slow decay)
-                # This establishes a reference level, not a per-frame normalization
-                if bass_raw > self._max_bass:
-                    self._max_bass = bass_raw
-                else:
-                    self._max_bass = max(0.01, self._max_bass * self._band_decay)
-                
-                if mid_raw > self._max_mid:
-                    self._max_mid = mid_raw
-                else:
-                    self._max_mid = max(0.01, self._max_mid * self._band_decay)
-                
-                if high_raw > self._max_high:
-                    self._max_high = high_raw
-                else:
-                    self._max_high = max(0.01, self._max_high * self._band_decay)
-                
-                # Store raw values - normalization and gain applied at read time
-                self._bass_history.append(bass_raw)
-                self._mid_history.append(mid_raw)
-                self._high_history.append(high_raw)
+                bass_norm = 0.0
+                mid_norm = 0.0
+                high_norm = 0.0
+            
+            # Store normalized values in history
+            self._bass_history.append(bass_norm)
+            self._mid_history.append(mid_norm)
+            self._high_history.append(high_norm)
         
         # Update features with smoothing
         with self._lock:
             features = self._data.features
             
-            # Normalize energy against adaptive max and apply gain
-            avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
+            # Energy: normalized against a fixed reference, adjusted by gain
+            # Reference RMS of 0.1 represents "moderate" audio level
+            avg_rms = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            features.energy = min(1.0, (avg_energy / self._max_rms) * self._gain) if self._max_rms > 0 else 0
+            features.energy = min(1.0, (avg_rms / 0.1) * self._gain / self._energy_scale)
             
-            # Smooth frequency bands and apply gain
+            # Frequency bands: apply gain to the RMS-relative normalized values
             avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
             avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
             avg_high = np.mean(list(self._high_history)) if self._high_history else 0
             
-            # Use adaptive max as the reference for "full scale", gain adjusts sensitivity
-            # At gain=1.0, reaching the adaptive max = 1.0 output
-            # At gain=0.5, you need 2x the adaptive max to reach 1.0
-            # At gain=2.0, you only need 0.5x the adaptive max to reach 1.0
-            features.bass = min(1.0, (avg_bass / self._max_bass) * self._gain) if self._max_bass > 0 else 0
-            features.mid = min(1.0, (avg_mid / self._max_mid) * self._gain) if self._max_mid > 0 else 0
-            features.high = min(1.0, (avg_high / self._max_high) * self._gain) if self._max_high > 0 else 0
+            # Apply gain - at gain=1.0, calibrated music peaks at ~0.8
+            # Higher gain = more sensitive, lower gain = less sensitive
+            features.bass = min(1.0, avg_bass * self._gain)
+            features.mid = min(1.0, avg_mid * self._gain)
+            features.high = min(1.0, avg_high * self._gain)
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
@@ -773,8 +755,8 @@ class AudioAnalyzer:
                 max_val = float(np.max(np.abs(chunk)))
                 # Apply some compression for better visibility
                 if max_val > 0:
-                    # Normalize with adaptive max and gain
-                    normalized = min(1.0, (max_val / max(0.01, self._max_rms * 3)) * self._gain)
+                    # Normalize with fixed reference (0.3 = moderate peak level) and gain
+                    normalized = min(1.0, (max_val / 0.3) * self._gain)
                     waveform.append(normalized)
                 else:
                     waveform.append(0.0)
@@ -819,8 +801,8 @@ class AudioAnalyzer:
                 # Get energy in this band
                 if high_idx > low_idx:
                     band_energy = np.mean(fft_data[low_idx:high_idx] ** 2)
-                    # Normalize with adaptive max and gain
-                    normalized = min(1.0, (band_energy / max(0.0001, self._max_rms ** 2 * 10)) * self._gain)
+                    # Normalize with fixed reference (0.01 = moderate spectrum energy) and gain
+                    normalized = min(1.0, (band_energy / 0.01) * self._gain)
                     spectrum.append(float(normalized))
                 else:
                     spectrum.append(0.0)
@@ -831,21 +813,27 @@ class AudioAnalyzer:
     
 
     
-    def _get_band_energy_normalized(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> float:
-        """Get energy in a frequency band from FFT data (raw, not normalized)."""
+    def _get_band_power(self, fft_data: np.ndarray, low_freq: float, high_freq: float) -> tuple[float, int]:
+        """
+        Get mean power per bin in a frequency band from FFT data.
+        
+        Returns:
+            tuple: (mean_power_per_bin, num_bins)
+        """
         if self._freq_bins is None or len(fft_data) == 0:
-            return 0.0
+            return 0.0, 0
         
         # Find indices for frequency range
         low_idx = np.searchsorted(self._freq_bins, low_freq)
         high_idx = np.searchsorted(self._freq_bins, high_freq)
         
         if high_idx <= low_idx:
-            return 0.0
+            return 0.0, 0
         
-        # Use sum of squared magnitudes (power) for better energy representation
-        band_power = np.sum(fft_data[low_idx:high_idx] ** 2)
-        return float(band_power)
+        num_bins = high_idx - low_idx
+        # Mean of squared magnitudes (average power per bin)
+        mean_power = float(np.mean(fft_data[low_idx:high_idx] ** 2))
+        return mean_power, num_bins
     
     def _correct_tempo_octave(self, raw_bpm: float, confidence: float = 0.0) -> float:
         """
@@ -945,12 +933,15 @@ class AudioAnalyzer:
         finally:
             self._madmom_processing = False
     
-    def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float) -> tuple[float, float, float]:
-        """Normalize frequency bands with adaptive max values."""
-        # Normalize each band against its adaptive max, apply gain
-        bass = min(1.0, (bass_raw / max(0.01, self._max_bass)) * self._gain)
-        mid = min(1.0, (mid_raw / max(0.01, self._max_mid)) * self._gain)
-        high = min(1.0, (high_raw / max(0.01, self._max_high)) * self._gain)
+    def _normalize_bands(self, bass_raw: float, mid_raw: float, high_raw: float, signal_power: float) -> tuple[float, float, float]:
+        """Normalize frequency bands with absolute RMS-relative scaling."""
+        if signal_power < 1e-10:
+            return 0.0, 0.0, 0.0
+        
+        # Normalize relative to signal power, then by calibrated scale factors
+        bass = min(1.0, ((bass_raw / signal_power) / self._bass_scale) * self._gain)
+        mid = min(1.0, ((mid_raw / signal_power) / self._mid_scale) * self._gain)
+        high = min(1.0, ((high_raw / signal_power) / self._high_scale) * self._gain)
         
         return bass, mid, high
     
