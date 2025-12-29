@@ -16,20 +16,20 @@ class AudioMeters:
     def _create_ui(self) -> None:
         """Create the audio meters UI."""
         # Two-column layout for meters
-        with ui.row().classes('w-full gap-4'):
+        with ui.row().classes('w-full gap-6'):
             # Left column - frequency bands
-            with ui.column().classes('flex-1 gap-2'):
-                self._create_meter('energy', 'Energy', '#3b82f6')
-                self._create_meter('bass', 'Bass', '#ef4444')
-                self._create_meter('mid', 'Mid', '#22c55e')
-                self._create_meter('high', 'High', '#3b82f6')
+            with ui.column().classes('flex-1 gap-3'):
+                self._create_meter('energy', 'Energy', '#58a6ff')  # Blue
+                self._create_meter('bass', 'Bass', '#f87171')      # Red
+                self._create_meter('mid', 'Mid', '#34d399')        # Green
+                self._create_meter('high', 'High', '#a78bfa')      # Purple
             
             # Right column - rhythm info
-            with ui.column().classes('flex-1 gap-2'):
-                self._create_meter('tempo', 'Tempo', '#f59e0b')
-                self._create_meter('beat', 'Beat Position', '#a855f7')
-                self._create_meter('danceability', 'Danceability', '#ec4899')
-                self._create_meter('valence', 'Valence', '#14b8a6')
+            with ui.column().classes('flex-1 gap-3'):
+                self._create_meter('tempo', 'Tempo', '#fb923c')           # Orange
+                self._create_meter('beat', 'Beat Position', '#f472b6')    # Pink
+                self._create_meter('danceability', 'Danceability', '#39d0d8')  # Cyan
+                self._create_meter('valence', 'Valence', '#fbbf24')        # Yellow
         
         # Background task status
         with ui.expansion('Background Tasks', icon='schedule').classes('w-full mt-2'):
@@ -44,15 +44,20 @@ class AudioMeters:
         ui.timer(0.05, self._update_meters)  # 20 FPS for UI
     
     def _create_meter(self, key: str, label: str, color: str) -> None:
-        """Create a single meter."""
-        with ui.column().classes('w-full gap-0'):
+        """Create a single meter with modern styling."""
+        with ui.column().classes('w-full gap-1'):
             with ui.row().classes('justify-between items-center w-full'):
-                ui.label(label).classes('text-sm text-gray-400')
-                value_label = ui.label('0').classes('text-sm font-mono')
+                ui.label(label).classes('text-sm font-medium').style('color: #8b949e;')
+                value_label = ui.label('0').classes('text-sm font-mono font-semibold').style(f'color: {color};')
                 self._meters[f'{key}_label'] = value_label
             
             progress = ui.linear_progress(value=0, show_value=False).classes('w-full')
-            progress.style(f'--q-linear-progress-track-color: #333; --q-linear-progress-bar-color: {color}')
+            progress.style(f'''
+                height: 10px !important;
+                border-radius: 5px !important;
+                --q-linear-progress-track-color: #252d3d;
+                --q-linear-progress-bar-color: {color};
+            ''')
             self._meters[key] = progress
     
     def _update_meters(self) -> None:

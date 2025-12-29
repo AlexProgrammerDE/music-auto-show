@@ -66,93 +66,318 @@ def _create_main_layout() -> None:
     # Dark theme
     ui.dark_mode().enable()
     
-    # Custom CSS for styling
+    # Custom CSS for styling - Modern dark theme with vibrant accents
     ui.add_head_html('''
     <style>
-        .control-card {
-            background-color: rgba(22, 27, 34, 0.95) !important;
-            border: 1px solid rgba(48, 54, 61, 0.8) !important;
+        :root {
+            --bg-primary: #0f1419;
+            --bg-secondary: #1a1f2e;
+            --bg-tertiary: #252d3d;
+            --bg-card: #1e2536;
+            --border-color: rgba(99, 179, 237, 0.15);
+            --border-hover: rgba(99, 179, 237, 0.3);
+            --text-primary: #f0f6fc;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-cyan: #39d0d8;
+            --accent-purple: #a78bfa;
+            --accent-pink: #f472b6;
+            --accent-green: #34d399;
+            --accent-orange: #fb923c;
+            --accent-red: #f87171;
         }
+        
+        /* Global body styling */
+        body {
+            background: var(--bg-primary) !important;
+        }
+        
+        /* Control cards */
+        .control-card {
+            background: var(--bg-card) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 12px !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+        }
+        
+        /* Status indicators */
         .status-running {
-            color: #4ade80 !important;
+            color: var(--accent-green) !important;
+            text-shadow: 0 0 10px rgba(52, 211, 153, 0.5);
         }
         .status-stopped {
-            color: #f97316 !important;
+            color: var(--accent-orange) !important;
         }
         .status-blackout {
-            color: #ef4444 !important;
+            color: var(--accent-red) !important;
+            text-shadow: 0 0 10px rgba(248, 113, 113, 0.5);
+            animation: pulse-red 1s infinite;
         }
-        .meter-bar {
-            height: 20px !important;
+        
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
         }
-        /* Improved expansion panel styling */
+        
+        /* Expansion panels - modern styling */
         .nicegui-expansion {
-            background-color: rgba(22, 27, 34, 0.9) !important;
-            border-radius: 8px !important;
-            margin-bottom: 4px !important;
-            border: 1px solid rgba(48, 54, 61, 0.6) !important;
+            background: var(--bg-secondary) !important;
+            border-radius: 10px !important;
+            margin-bottom: 8px !important;
+            border: 1px solid var(--border-color) !important;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+        .nicegui-expansion:hover {
+            border-color: var(--border-hover) !important;
         }
         .nicegui-expansion .q-item {
-            padding: 10px 16px !important;
-            min-height: 44px !important;
+            padding: 12px 16px !important;
+            min-height: 48px !important;
         }
         .nicegui-expansion .q-item__label {
-            font-weight: 500 !important;
-            color: #e6edf3 !important;
+            font-weight: 600 !important;
+            color: var(--text-primary) !important;
+            font-size: 0.95rem !important;
         }
         .nicegui-expansion .q-expansion-item__content {
-            background-color: rgba(13, 17, 23, 0.6) !important;
-            border-top: 1px solid rgba(48, 54, 61, 0.4) !important;
+            background: var(--bg-tertiary) !important;
+            border-top: 1px solid var(--border-color) !important;
+            padding: 8px !important;
         }
         .nicegui-expansion .q-item__section--avatar {
-            color: #7ee787 !important;
+            color: var(--accent-cyan) !important;
         }
+        
+        /* Main layout */
         .main-splitter {
-            height: calc(100vh - 56px) !important;
+            height: calc(100vh - 60px) !important;
         }
         .left-panel {
-            background-color: rgba(13, 17, 23, 0.98);
-            border-right: 1px solid rgba(48, 54, 61, 0.6);
+            background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+            border-right: 1px solid var(--border-color);
         }
+        
         /* Album color boxes */
         .album-color-box {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            transition: transform 0.2s ease;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
         .album-color-box:hover {
-            transform: scale(1.1);
+            transform: scale(1.15);
+            border-color: rgba(255, 255, 255, 0.4);
         }
-        /* Now playing card styling */
+        
+        /* Now playing card */
         .now-playing-card {
-            background: linear-gradient(135deg, rgba(22, 27, 34, 0.95) 0%, rgba(30, 40, 50, 0.95) 100%) !important;
-            border: 1px solid rgba(48, 54, 61, 0.8) !important;
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-tertiary) 100%) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 12px !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
         }
-        /* Button improvements */
+        
+        /* Header buttons - vibrant colors */
+        .header-btn-start {
+            background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+            border: none !important;
+            font-weight: 600 !important;
+            box-shadow: 0 2px 10px rgba(16, 185, 129, 0.3) !important;
+        }
+        .header-btn-start:hover {
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.5) !important;
+        }
+        .header-btn-stop {
+            background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%) !important;
+            border: none !important;
+            font-weight: 600 !important;
+            box-shadow: 0 2px 10px rgba(239, 68, 68, 0.3) !important;
+        }
+        .header-btn-stop:hover {
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.5) !important;
+        }
+        .header-btn-blackout {
+            background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%) !important;
+            border: none !important;
+            font-weight: 600 !important;
+            box-shadow: 0 2px 10px rgba(245, 158, 11, 0.3) !important;
+        }
+        .header-btn-blackout:hover {
+            box-shadow: 0 4px 20px rgba(245, 158, 11, 0.5) !important;
+        }
+        
+        /* Flat button improvements */
         .q-btn--flat {
-            border: 1px solid rgba(48, 54, 61, 0.5) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease !important;
         }
-        /* Slider styling */
+        .q-btn--flat:hover {
+            border-color: var(--border-hover) !important;
+            background: rgba(99, 179, 237, 0.1) !important;
+        }
+        
+        /* Slider styling - modern look */
+        .q-slider {
+            padding: 8px 0 !important;
+        }
         .q-slider__track-container {
-            background: rgba(48, 54, 61, 0.6) !important;
+            background: var(--bg-tertiary) !important;
+            height: 6px !important;
+            border-radius: 3px !important;
         }
+        .q-slider__track {
+            background: linear-gradient(90deg, var(--accent-cyan) 0%, var(--accent-blue) 100%) !important;
+            border-radius: 3px !important;
+        }
+        .q-slider__thumb {
+            background: var(--accent-cyan) !important;
+            width: 18px !important;
+            height: 18px !important;
+            box-shadow: 0 2px 8px rgba(57, 208, 216, 0.4) !important;
+        }
+        .q-slider__thumb:after {
+            display: none !important;
+        }
+        
         /* Input styling */
         .q-field--dark .q-field__control {
-            background: rgba(13, 17, 23, 0.8) !important;
+            background: var(--bg-tertiary) !important;
+            border-radius: 8px !important;
         }
+        .q-field--dark .q-field__control:before {
+            border-color: var(--border-color) !important;
+        }
+        .q-field--dark .q-field__control:hover:before {
+            border-color: var(--border-hover) !important;
+        }
+        .q-field--focused .q-field__control:after {
+            border-color: var(--accent-cyan) !important;
+        }
+        
+        /* Select dropdown */
+        .q-field__native, .q-field__input {
+            color: var(--text-primary) !important;
+        }
+        
         /* Stage view card */
         .stage-view-card {
-            background: linear-gradient(180deg, rgba(13, 17, 23, 0.98) 0%, rgba(22, 27, 34, 0.95) 100%) !important;
-            border: 1px solid rgba(48, 54, 61, 0.8) !important;
+            background: linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 12px !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+            overflow: hidden;
+        }
+        
+        /* Progress bars - vibrant colors */
+        .q-linear-progress {
+            border-radius: 4px !important;
+            overflow: hidden;
+            height: 8px !important;
+        }
+        .q-linear-progress__track {
+            background: var(--bg-tertiary) !important;
+        }
+        
+        /* Fixture list items */
+        .fixture-item {
+            background: var(--bg-tertiary) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 10px !important;
+            padding: 12px 16px !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer;
+        }
+        .fixture-item:hover {
+            border-color: var(--accent-cyan) !important;
+            background: rgba(57, 208, 216, 0.08) !important;
+            transform: translateX(4px);
+        }
+        
+        /* Checkbox styling */
+        .q-checkbox__inner {
+            color: var(--accent-cyan) !important;
+        }
+        .q-checkbox__bg {
+            border-color: var(--border-color) !important;
+        }
+        .q-checkbox__inner--truthy .q-checkbox__bg {
+            background: var(--accent-cyan) !important;
+            border-color: var(--accent-cyan) !important;
+        }
+        
+        /* Table styling */
+        .q-table {
+            background: transparent !important;
+        }
+        .q-table th {
+            background: var(--bg-tertiary) !important;
+            color: var(--text-secondary) !important;
+            font-weight: 600 !important;
+            border-bottom: 1px solid var(--border-color) !important;
+        }
+        .q-table td {
+            border-bottom: 1px solid var(--border-color) !important;
+            color: var(--text-primary) !important;
+        }
+        .q-table tbody tr:hover {
+            background: rgba(57, 208, 216, 0.05) !important;
+        }
+        
+        /* Dialog styling */
+        .q-dialog__inner > .q-card {
+            background: var(--bg-secondary) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5) !important;
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-cyan);
+        }
+        
+        /* Separator */
+        .q-separator {
+            background: var(--border-color) !important;
+        }
+        
+        /* Notification styling */
+        .q-notification {
+            border-radius: 10px !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+        }
+        
+        /* Header app bar */
+        .q-header {
+            background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%) !important;
+            border-bottom: 1px solid var(--border-color) !important;
+        }
+        
+        /* Scene canvas styling */
+        canvas {
+            border-radius: 8px !important;
         }
     </style>
     ''')
     
     # Header with controls
-    with ui.header().classes('items-center justify-between px-4 py-2 bg-gray-900'):
-        ui.label('Music Auto Show').classes('text-xl font-bold')
+    with ui.header().classes('items-center justify-between px-6 py-3'):
+        ui.label('Music Auto Show').classes('text-xl font-bold').style('color: #f0f6fc; letter-spacing: -0.5px;')
         
         with ui.row().classes('items-center gap-4'):
             # Status display
@@ -169,10 +394,10 @@ def _create_main_layout() -> None:
             
             update_status()
             
-            # Control buttons
-            start_btn = ui.button('Start', on_click=lambda: _start_show(update_status)).props('color=positive')
-            stop_btn = ui.button('Stop', on_click=lambda: _stop_show(update_status)).props('color=negative')
-            blackout_btn = ui.button('Blackout', on_click=lambda: _toggle_blackout(update_status)).props('color=warning')
+            # Control buttons - styled with custom classes
+            start_btn = ui.button('Start', on_click=lambda: _start_show(update_status)).classes('header-btn-start')
+            stop_btn = ui.button('Stop', on_click=lambda: _stop_show(update_status)).classes('header-btn-stop')
+            blackout_btn = ui.button('Blackout', on_click=lambda: _toggle_blackout(update_status)).classes('header-btn-blackout')
             
             # Timer to update status
             ui.timer(0.5, update_status)
