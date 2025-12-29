@@ -224,11 +224,12 @@ class AudioAnalyzer:
         # Absolute normalization scale factors (calibrated for typical music)
         # These convert RMS-relative band power to 0-1 range at gain=1.0
         # The formula is: normalized = (band_mean_power / rms²) / scale_factor * gain
-        # Scale factors determined empirically for typical music to show ~0.7-0.8 at peaks
-        self._bass_scale = 8.0    # Bass (20-250 Hz) - high energy, needs larger scale
-        self._mid_scale = 4.0     # Mid (250-4000 Hz) - moderate energy
-        self._high_scale = 1.0    # High (4000-16000 Hz) - low energy, smaller scale
-        self._energy_scale = 3.0  # Overall energy scale factor
+        # Scale factors determined empirically: at gain=1.0, typical music peaks at ~0.8
+        # Based on measured ratios: bass~20000, mid~800, high~5
+        self._bass_scale = 25000.0  # Bass (20-250 Hz) - very high energy
+        self._mid_scale = 1000.0    # Mid (250-4000 Hz) - moderate energy
+        self._high_scale = 8.0      # High (4000-16000 Hz) - low energy
+        self._energy_scale = 3.0    # Overall energy scale factor
         
         # Media info provider (for track name/artist display)
         self._media_info_provider = None
