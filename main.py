@@ -148,8 +148,14 @@ Examples:
                        help="Check dependency status and exit")
     parser.add_argument("--list-audio-devices", action="store_true",
                        help="List available audio input devices and exit")
+    parser.add_argument("--debug", action="store_true",
+                       help="Enable debug logging")
     
     args = parser.parse_args()
+    
+    # Set debug logging if requested
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
     
     # Check dependencies
     deps = check_dependencies()
