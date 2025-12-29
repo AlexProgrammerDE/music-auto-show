@@ -642,17 +642,22 @@ class AudioAnalyzer:
             # Normalize energy with fixed reference and gain
             avg_energy = np.mean(list(self._energy_history)) if self._energy_history else 0
             features.rms = rms
-            # Absolute normalization: compare to fixed reference, apply gain
-            normalized_energy = (avg_energy / self._ref_rms) * self._gain
-            features.energy = min(1.0, normalized_energy)  # Cap at 1.0
+            # Normalize to 0-1 first (cap at 1.0), then apply gain
+            energy_normalized = min(1.0, avg_energy / self._ref_rms)
+            features.energy = min(1.0, energy_normalized * self._gain)
             
             # Smooth frequency bands and apply gain at read time (for immediate response to gain changes)
+            # First normalize to 0-1 range, then apply gain as a multiplier
             avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
             avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
             avg_high = np.mean(list(self._high_history)) if self._high_history else 0
-            features.bass = min(1.0, (avg_bass / self._ref_bass) * self._gain)
-            features.mid = min(1.0, (avg_mid / self._ref_mid) * self._gain)
-            features.high = min(1.0, (avg_high / self._ref_high) * self._gain)
+            # Normalize to 0-1 first (cap at 1.0), then apply gain
+            bass_normalized = min(1.0, avg_bass / self._ref_bass)
+            mid_normalized = min(1.0, avg_mid / self._ref_mid)
+            high_normalized = min(1.0, avg_high / self._ref_high)
+            features.bass = min(1.0, bass_normalized * self._gain)
+            features.mid = min(1.0, mid_normalized * self._gain)
+            features.high = min(1.0, high_normalized * self._gain)
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
@@ -662,23 +667,29 @@ class AudioAnalyzer:
             features.time_since_beat = current_time - self._last_beat_time
             
             # Estimate danceability from beat regularity and bass energy
-            if len(self._onset_history) >= 3:
+            if len(self._onset_history) >= 3 and features.energy > 0:
                 intervals = np.diff(list(self._onset_history))
                 if len(intervals) > 0 and np.mean(intervals) > 0:
                     # Regularity: how consistent are the intervals (lower std = more regular)
                     coefficient_of_variation = np.std(intervals) / np.mean(intervals)
                     regularity = 1.0 - min(1.0, coefficient_of_variation)
-                    # Combine regularity with bass presence for danceability
+                    # Combine regularity with bass presence for danceability, scaled by energy
                     bass_factor = features.bass * 0.3
-                    features.danceability = min(1.0, regularity * 0.7 + bass_factor + 0.1)
+                    raw_danceability = regularity * 0.7 + bass_factor
+                    features.danceability = min(1.0, raw_danceability * (0.5 + features.energy * 0.5))
+                else:
+                    features.danceability = 0.0
             else:
-                # Fallback: estimate from bass and energy
-                features.danceability = min(1.0, features.bass * 0.5 + features.energy * 0.3 + 0.2)
+                # Fallback: estimate from bass and energy (no constant offset)
+                features.danceability = min(1.0, features.bass * 0.5 + features.energy * 0.5)
             
             # Estimate valence from frequency balance (brighter = happier)
+            # When no audio (all bands zero), valence goes to 0
             if features.bass + features.mid + features.high > 0:
                 brightness = (features.mid + features.high * 2) / (features.bass + features.mid + features.high + 0.001)
                 features.valence = min(1.0, brightness)
+            else:
+                features.valence = 0.0
             
             # Update beat position
             if features.tempo > 0:
