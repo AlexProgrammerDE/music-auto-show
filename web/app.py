@@ -95,49 +95,40 @@ def _create_main_layout() -> None:
             # Timer to update status
             ui.timer(0.5, update_status)
     
-    # Main content - use splitter for resizable panels
-    with ui.splitter(value=25).classes('w-full h-screen') as splitter:
+    # Main content - responsive layout (stacks on mobile, side-by-side on desktop)
+    with ui.element('div').classes('flex w-full flex-col md:flex-row'):
         # Left panel - Configuration
-        with splitter.before:
-            with ui.scroll_area().classes('h-full'):
-                with ui.column().classes('w-full gap-2 p-2'):
-                    ConfigPanel()
-                    FixtureList()
-                    EffectsPanel()
+        with ui.column().classes('w-full md:w-1/4 gap-2 p-1 md:p-2'):
+            ConfigPanel()
+            FixtureList()
+            EffectsPanel()
         
         # Right panel - Visualization
-        with splitter.after:
-            with ui.scroll_area().classes('h-full'):
-                with ui.column().classes('w-full gap-2 p-2'):
-                    # Now playing info
-                    _create_now_playing()
-                    
-                    # Stage view (3D)
-                    with ui.card().classes('w-full').props('flat bordered'):
-                        ui.label('Stage View').classes('text-lg font-semibold mb-2')
-                        StageView()
-                    
-                    # Audio visualizer (spectrum, beats, etc)
-                    with ui.card().classes('w-full').props('flat bordered'):
-                        ui.label('Audio Visualization').classes('text-lg font-semibold mb-2')
-                        AudioVisualizer()
-                    
-                    # Audio meters
-                    with ui.card().classes('w-full').props('flat bordered'):
-                        ui.label('Audio Analysis').classes('text-lg font-semibold mb-2')
-                        AudioMeters()
-                    
-                    # DMX Universe
-                    with ui.expansion('DMX Universe', icon='settings_input_hdmi').classes('w-full'):
-                        DMXUniverse()
+        with ui.column().classes('w-full md:w-3/4 gap-2 p-1 md:p-2'):
+            _create_now_playing()
+            
+            with ui.card().classes('w-full').props('flat bordered'):
+                ui.label('Stage View').classes('text-lg font-semibold mb-2')
+                StageView()
+            
+            with ui.card().classes('w-full').props('flat bordered'):
+                ui.label('Audio Visualization').classes('text-lg font-semibold mb-2')
+                AudioVisualizer()
+            
+            with ui.card().classes('w-full').props('flat bordered'):
+                ui.label('Audio Analysis').classes('text-lg font-semibold mb-2')
+                AudioMeters()
+            
+            with ui.expansion('DMX Universe', icon='settings_input_hdmi').classes('w-full'):
+                DMXUniverse()
 
 
 def _create_now_playing() -> None:
     """Create the now playing display."""
     with ui.card().classes('w-full').props('flat bordered'):
-        with ui.row().classes('items-center gap-4 w-full'):
+        with ui.row().classes('items-center gap-4 w-full flex-col sm:flex-row'):
             # Track info
-            with ui.column().classes('flex-grow'):
+            with ui.column().classes('w-full sm:flex-grow'):
                 ui.label('Now Playing').classes('text-sm text-gray-500')
                 track_label = ui.label('No track').classes('text-lg font-semibold')
                 tempo_label = ui.label('120 BPM').classes('text-sm text-primary')
@@ -153,7 +144,7 @@ def _create_now_playing() -> None:
                 ui.timer(0.25, update_track)
             
             # Album colors
-            with ui.column().classes('items-end'):
+            with ui.column().classes('w-full sm:w-auto items-start sm:items-end'):
                 ui.label('Album Colors').classes('text-sm text-gray-500')
                 with ui.row().classes('gap-1'):
                     color_boxes = []

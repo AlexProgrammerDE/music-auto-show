@@ -15,17 +15,17 @@ class AudioMeters:
     
     def _create_ui(self) -> None:
         """Create the audio meters UI."""
-        # Two-column layout for meters
-        with ui.row().classes('w-full gap-6'):
+        # Two-column layout for meters (stacks on mobile)
+        with ui.row().classes('w-full gap-6 flex-col sm:flex-row'):
             # Left column - frequency bands
-            with ui.column().classes('flex-1 gap-3'):
+            with ui.column().classes('w-full sm:flex-1 gap-3'):
                 self._create_meter('energy', 'Energy', 'blue')
                 self._create_meter('bass', 'Bass', 'red')
                 self._create_meter('mid', 'Mid', 'green')
                 self._create_meter('high', 'High', 'purple')
             
             # Right column - rhythm info
-            with ui.column().classes('flex-1 gap-3'):
+            with ui.column().classes('w-full sm:flex-1 gap-3'):
                 self._create_meter('tempo', 'Tempo', 'orange')
                 self._create_meter('beat', 'Beat Position', 'pink')
                 self._create_meter('danceability', 'Danceability', 'cyan')
