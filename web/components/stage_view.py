@@ -4,6 +4,8 @@ Displays fixtures on a virtual stage with beams and effects.
 """
 import math
 import time
+from typing import Any
+
 from nicegui import ui
 
 from config import FixtureType, get_preset
@@ -26,7 +28,7 @@ class StageView:
     
     def __init__(self):
         self._scene = None
-        self._fixture_objects: dict = {}
+        self._fixture_objects: dict[str, dict[str, Any]] = {}
         self._create_ui()
     
     def _create_ui(self) -> None:
@@ -88,7 +90,7 @@ class StageView:
                 else:
                     recreate = recreate or 'beam' not in obj
                 if recreate:
-                    del self._fixture_objects[fixture.name]
+                    self._delete_fixture_objects(fixture.name)
             
             if fixture.name not in self._fixture_objects:
                 self._create_fixture(fixture.name, ftype)
@@ -97,7 +99,7 @@ class StageView:
             updated.add(fixture.name)
         
         for name in set(self._fixture_objects.keys()) - updated:
-            del self._fixture_objects[name]
+            self._delete_fixture_objects(name)
     
     def _get_fixture_type(self, fixture) -> FixtureType:
         if fixture.profile_name:
@@ -112,7 +114,7 @@ class StageView:
             return
         
         with self._scene:
-            obj = {'ftype': ftype}
+            obj: dict[str, Any] = {'ftype': ftype}
             
             # Mount
             obj['mount'] = self._scene.box(0.06, 0.06, 0.15).material('#555555')
@@ -286,8 +288,27 @@ class StageView:
             
             beam.material(color, opacity=opacity)
     
+    def _delete_fixture_objects(self, name: str) -> None:
+        """Delete all 3D objects for a fixture from the scene."""
+        obj = self._fixture_objects.get(name)
+        if not obj:
+            return
+        
+        # Delete all scene objects
+        for key, value in obj.items():
+            if key == 'ftype':
+                continue
+            if key == 'beams' and isinstance(value, list):
+                for beam in value:
+                    beam.delete()
+            else:
+                value.delete()
+        
+        del self._fixture_objects[name]
+    
     def _clear_fixtures(self) -> None:
-        self._fixture_objects.clear()
+        for name in list(self._fixture_objects.keys()):
+            self._delete_fixture_objects(name)
     
     def _color_macro_to_rgb(self, val: int) -> tuple[int, int, int]:
         """Convert color macro to RGB."""

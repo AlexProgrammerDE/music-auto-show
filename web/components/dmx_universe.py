@@ -12,6 +12,7 @@ class DMXUniverse:
     def __init__(self):
         self._channel_elements = []
         self._value_labels = []
+        self._last_channel_count = 0
         self._create_ui()
     
     def _create_ui(self) -> None:
@@ -60,6 +61,7 @@ class DMXUniverse:
         self._value_labels = []
         
         last_channel = self._get_last_used_channel()
+        self._last_channel_count = last_channel
         
         with self._container:
             if last_channel == 0:
@@ -108,9 +110,9 @@ class DMXUniverse:
         """Update channel values."""
         channels = app_state.dmx_channels
         
-        # Check if we need to refresh layout (fixture count changed)
+        # Check if we need to refresh layout (channel count changed)
         current_last = self._get_last_used_channel()
-        if not self._channel_elements and current_last > 0:
+        if current_last != self._last_channel_count:
             self._refresh_display()
             return
         

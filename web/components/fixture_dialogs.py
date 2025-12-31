@@ -24,12 +24,13 @@ class FixtureDialogs:
         # Calculate defaults
         next_channel = self._get_next_start_channel()
         next_position = len(app_state.config.fixtures)
+        next_name = self._get_next_fixture_name()
         
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
             ui.label('Add Fixture').classes('text-xl font-bold mb-4')
             
             # Basic settings
-            name_input = ui.input('Name', value='New Fixture').classes('w-full')
+            name_input = ui.input('Name', value=next_name).classes('w-full')
             
             with ui.row().classes('gap-4 w-full'):
                 start_input = ui.number('Start Channel', value=next_channel, min=1, max=512).classes('w-32')
@@ -98,10 +99,17 @@ class FixtureDialogs:
                 ui.button('Cancel', on_click=dialog.close).props('flat')
                 
                 def add_fixture():
+                    fixture_name = str(name_input.value or next_name).strip()
+                    
+                    # Validate unique name
+                    if not self._is_name_unique(fixture_name):
+                        ui.notify(f'A fixture named "{fixture_name}" already exists', type='negative')
+                        return
+                    
                     profile_name_val = '' if profile_select.value == '(Custom)' else str(profile_select.value or '')
                     
                     fixture = FixtureConfig(
-                        name=str(name_input.value or 'New Fixture'),
+                        name=fixture_name,
                         profile_name=profile_name_val,
                         start_channel=int(start_input.value or 1),
                         position=int(position_input.value or 0),
@@ -238,7 +246,14 @@ class FixtureDialogs:
                 ui.button('Cancel', on_click=dialog.close).props('flat')
                 
                 def save_fixture():
-                    fixture.name = str(name_input.value or fixture.name)
+                    new_name = str(name_input.value or fixture.name).strip()
+                    
+                    # Validate unique name (exclude current fixture)
+                    if not self._is_name_unique(new_name, exclude_fixture=fixture):
+                        ui.notify(f'A fixture named "{new_name}" already exists', type='negative')
+                        return
+                    
+                    fixture.name = new_name
                     fixture.start_channel = int(start_input.value or 1)
                     fixture.position = int(position_input.value or 0)
                     fixture.intensity_scale = float(intensity_input.value or 1.0)
@@ -282,6 +297,20 @@ class FixtureDialogs:
             highest = max(highest, fixture_end)
         
         return highest + 1
+    
+    def _get_next_fixture_name(self) -> str:
+        """Generate the next unique fixture name."""
+        num_fixtures = len(app_state.config.fixtures)
+        return f'New Fixture {num_fixtures + 1}'
+    
+    def _is_name_unique(self, name: str, exclude_fixture: Optional[FixtureConfig] = None) -> bool:
+        """Check if a fixture name is unique."""
+        for fixture in app_state.config.fixtures:
+            if exclude_fixture and fixture is exclude_fixture:
+                continue
+            if fixture.name == name:
+                return False
+        return True
     
     def _update_channel_name(self, idx: int, name: str) -> None:
         """Update channel name."""
