@@ -35,7 +35,7 @@ class AudioMeters:
         with ui.expansion('Background Tasks', icon='schedule').classes('w-full mt-2'):
             with ui.column().classes('w-full gap-1 p-2'):
                 self._madmom_status = ui.label('Madmom: Idle').classes('text-sm')
-                self._madmom_progress = ui.linear_progress(value=0).classes('w-full')
+                self._madmom_progress = ui.linear_progress(value=0).classes('w-full').style('--q-linear-progress-speed: 10ms')
                 self._buffer_label = ui.label('Buffer: 0.0s').classes('text-xs text-gray-400')
                 self._next_run_label = ui.label('Next run: --').classes('text-xs text-gray-400')
                 self._fps_label = ui.label('Effects FPS: 0').classes('text-xs text-gray-400')
@@ -51,7 +51,7 @@ class AudioMeters:
                 value_label = ui.label('0').classes('text-sm font-mono font-semibold text-primary')
                 self._meters[f'{key}_label'] = value_label
             
-            progress = ui.linear_progress(value=0, show_value=False).classes('w-full')
+            progress = ui.linear_progress(value=0, show_value=False).classes('w-full').style('--q-linear-progress-speed: 10ms')
             self._meters[key] = progress
     
     def _update_meters(self) -> None:

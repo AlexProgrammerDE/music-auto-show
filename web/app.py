@@ -61,6 +61,7 @@ def _create_main_layout() -> None:
     from web.components.fixture_list import FixtureList
     from web.components.stage_view import StageView
     from web.components.audio_meters import AudioMeters
+    from web.components.audio_visualizer import AudioVisualizer
     from web.components.dmx_universe import DMXUniverse
     
     # Dark theme
@@ -115,6 +116,11 @@ def _create_main_layout() -> None:
                     with ui.card().classes('w-full').props('flat bordered'):
                         ui.label('Stage View').classes('text-lg font-semibold mb-2')
                         StageView()
+                    
+                    # Audio visualizer (spectrum, beats, etc)
+                    with ui.card().classes('w-full').props('flat bordered'):
+                        ui.label('Audio Visualization').classes('text-lg font-semibold mb-2')
+                        AudioVisualizer()
                     
                     # Audio meters
                     with ui.card().classes('w-full').props('flat bordered'):
