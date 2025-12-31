@@ -36,16 +36,10 @@ class AudioVisualizer:
         """Create the visualizer UI with canvas."""
         # Container with dark background
         with ui.card().classes('w-full p-0 overflow-hidden').style('background: #0f0f16'):
-            # Section labels
-            with ui.row().classes('w-full justify-between px-2 py-1').style('background: #1a1a24'):
-                ui.label('Spectrum').classes('text-xs text-gray-500')
-                ui.label('Onset History').classes('text-xs text-gray-500')
-                ui.label('Bands').classes('text-xs text-gray-500')
-                ui.label('Beat').classes('text-xs text-gray-500')
-            
             # Canvas for drawing (sanitize=False since we generate the SVG ourselves)
+            # Labels are drawn inside the SVG for proper alignment
             self._canvas = ui.html('', sanitize=False).classes('w-full')
-            self._canvas.style(f'height: {self.TOTAL_HEIGHT}px')
+            self._canvas.style(f'height: {self.TOTAL_HEIGHT + 20}px')  # Extra height for labels
         
         # Update timer - 20 FPS for smooth animation
         ui.timer(0.05, self._update_canvas)
@@ -62,33 +56,48 @@ class AudioVisualizer:
         """Build the complete SVG visualization."""
         w = self.TOTAL_WIDTH
         h = self.TOTAL_HEIGHT
+        label_h = 18  # Height for labels row
+        total_h = h + label_h
         
         # Start SVG
-        svg = f'''<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" 
+        svg = f'''<svg width="100%" height="{total_h}" viewBox="0 0 {w} {total_h}" preserveAspectRatio="xMidYMid meet" 
                    style="background: #0f0f16;">'''
         
+        # Draw label background
+        svg += f'<rect x="0" y="0" width="{w}" height="{label_h}" fill="#1a1a24"/>'
+        
+        # Draw section labels
+        svg += f'<text x="{self.SPECTRUM_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Spectrum</text>'
+        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Onset History</text>'
+        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Bands</text>'
+        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH + self.PULSE_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Beat</text>'
+        
+        # Offset for content below labels
+        content_y = label_h
+        
         # Draw sections
-        svg += self._draw_spectrum(state, 0, 0, self.SPECTRUM_WIDTH, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH, h)
+        svg += self._draw_spectrum(state, 0, content_y, self.SPECTRUM_WIDTH, h)
+        svg += self._draw_separator(self.SPECTRUM_WIDTH, content_y, h)
         
-        svg += self._draw_onset_history(state, self.SPECTRUM_WIDTH + 2, 0, self.ONSET_WIDTH - 4, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH, h)
+        svg += self._draw_onset_history(state, self.SPECTRUM_WIDTH + 2, content_y, self.ONSET_WIDTH - 4, h)
+        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH, content_y, h)
         
-        svg += self._draw_frequency_bands(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + 2, 0, self.BANDS_WIDTH - 4, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, h)
+        svg += self._draw_frequency_bands(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + 2, content_y, self.BANDS_WIDTH - 4, h)
+        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, content_y, h)
         
-        svg += self._draw_beat_pulse(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, 0, self.PULSE_WIDTH, h)
+        svg += self._draw_beat_pulse(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, content_y, self.PULSE_WIDTH, h)
         
         svg += '</svg>'
         return svg
     
-    def _draw_separator(self, x: float, height: float) -> str:
+    def _draw_separator(self, x: float, y: float, height: float) -> str:
         """Draw a vertical separator line."""
-        return f'<line x1="{x}" y1="0" x2="{x}" y2="{height}" stroke="#32324a" stroke-width="1"/>'
+        return f'<line x1="{x}" y1="{y}" x2="{x}" y2="{y + height}" stroke="#32324a" stroke-width="1"/>'
     
     def _draw_spectrum(self, state, x: float, y: float, width: float, height: float) -> str:
         """Draw frequency spectrum visualization."""
         svg = ''
+        bottom = y + height  # Bottom of this section
         
         spectrum = state.spectrum if state.spectrum else []
         bass, mid, high = state.bass, state.mid, state.high
@@ -108,7 +117,7 @@ class AudioVisualizer:
                 r, g, b = self._spectrum_color(pos)
                 
                 if bar_h > 0.5:
-                    svg += f'''<rect x="{bx:.1f}" y="{height - bar_h - 2:.1f}" 
+                    svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
                                width="{bar_width - 1:.1f}" height="{bar_h:.1f}" 
                                fill="rgba({r},{g},{b},0.85)"/>'''
         else:
@@ -135,7 +144,7 @@ class AudioVisualizer:
                 
                 r, g, b = self._spectrum_color(pos)
                 
-                svg += f'''<rect x="{bx:.1f}" y="{height - bar_h - 2:.1f}" 
+                svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
                            width="{bar_width - 1:.1f}" height="{bar_h:.1f}" 
                            fill="rgba({r},{g},{b},0.8)"/>'''
         
@@ -155,6 +164,7 @@ class AudioVisualizer:
     def _draw_onset_history(self, state, x: float, y: float, width: float, height: float) -> str:
         """Draw onset detection history graph."""
         svg = ''
+        bottom = y + height  # Bottom of this section
         
         onset_data = state.onset_history if state.onset_history else []
         energy = state.energy
@@ -166,14 +176,14 @@ class AudioVisualizer:
             point_width = width / num_points
             
             # Build path for filled area
-            path_data = f'M {x} {height - 2}'
+            path_data = f'M {x} {bottom - 2}'
             
             for i, value in enumerate(onset_data):
                 px = x + i * point_width
-                py = height - 2 - value * (height - 8)
+                py = bottom - 2 - value * (height - 8)
                 path_data += f' L {px:.1f} {py:.1f}'
             
-            path_data += f' L {x + width} {height - 2} Z'
+            path_data += f' L {x + width} {bottom - 2} Z'
             
             # Draw filled area
             svg += f'<path d="{path_data}" fill="rgba(100,180,255,0.3)"/>'
@@ -182,7 +192,7 @@ class AudioVisualizer:
             line_path = ''
             for i, value in enumerate(onset_data):
                 px = x + i * point_width
-                py = height - 2 - value * (height - 8)
+                py = bottom - 2 - value * (height - 8)
                 if i == 0:
                     line_path = f'M {px:.1f} {py:.1f}'
                 else:
@@ -208,12 +218,12 @@ class AudioVisualizer:
                 bx = x + i * point_width
                 bar_h = max(2, wave * (height - 8))
                 
-                svg += f'''<rect x="{bx:.1f}" y="{height - bar_h - 2:.1f}" 
+                svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
                            width="{point_width - 1:.1f}" height="{bar_h:.1f}" 
                            fill="rgba(100,180,255,0.6)"/>'''
             
             # Draw threshold line
-            threshold_y = height - 2 - 0.3 * (height - 8)
+            threshold_y = bottom - 2 - 0.3 * (height - 8)
             svg += f'''<line x1="{x}" y1="{threshold_y:.1f}" x2="{x + width}" y2="{threshold_y:.1f}" 
                        stroke="rgba(255,100,100,0.6)" stroke-width="1" stroke-dasharray="4,2"/>'''
         
@@ -222,6 +232,7 @@ class AudioVisualizer:
     def _draw_frequency_bands(self, state, x: float, y: float, width: float, height: float) -> str:
         """Draw Bass/Mid/High frequency band bars."""
         svg = ''
+        bottom = y + height  # Bottom of this section
         
         bass = state.bass
         mid = state.mid
@@ -234,28 +245,28 @@ class AudioVisualizer:
         # Bass bar (red/orange)
         bass_h = bass * max_height
         bass_x = x
-        svg += f'''<rect x="{bass_x:.1f}" y="{height - bass_h - 4:.1f}" 
+        svg += f'''<rect x="{bass_x:.1f}" y="{bottom - bass_h - 4:.1f}" 
                    width="{bar_width:.1f}" height="{bass_h:.1f}" 
                    fill="rgba(255,80,50,0.9)" rx="2"/>'''
-        svg += f'''<text x="{bass_x + bar_width/2:.1f}" y="{height - 1:.1f}" 
+        svg += f'''<text x="{bass_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
                    font-size="8" fill="#888" text-anchor="middle">B</text>'''
         
         # Mid bar (green/yellow)
         mid_h = mid * max_height
         mid_x = x + bar_width + bar_gap
-        svg += f'''<rect x="{mid_x:.1f}" y="{height - mid_h - 4:.1f}" 
+        svg += f'''<rect x="{mid_x:.1f}" y="{bottom - mid_h - 4:.1f}" 
                    width="{bar_width:.1f}" height="{mid_h:.1f}" 
                    fill="rgba(150,255,50,0.9)" rx="2"/>'''
-        svg += f'''<text x="{mid_x + bar_width/2:.1f}" y="{height - 1:.1f}" 
+        svg += f'''<text x="{mid_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
                    font-size="8" fill="#888" text-anchor="middle">M</text>'''
         
         # High bar (cyan/blue)
         high_h = high * max_height
         high_x = x + 2 * (bar_width + bar_gap)
-        svg += f'''<rect x="{high_x:.1f}" y="{height - high_h - 4:.1f}" 
+        svg += f'''<rect x="{high_x:.1f}" y="{bottom - high_h - 4:.1f}" 
                    width="{bar_width:.1f}" height="{high_h:.1f}" 
                    fill="rgba(50,200,255,0.9)" rx="2"/>'''
-        svg += f'''<text x="{high_x + bar_width/2:.1f}" y="{height - 1:.1f}" 
+        svg += f'''<text x="{high_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
                    font-size="8" fill="#888" text-anchor="middle">H</text>'''
         
         return svg
@@ -267,7 +278,7 @@ class AudioVisualizer:
         beat_pos = state.beat_position
         
         center_x = x + width / 2
-        center_y = height / 2
+        center_y = y + height / 2
         
         # Pulse size: large at beat start, shrinks through beat
         max_radius = min(width, height) / 2 - 8
