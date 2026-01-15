@@ -75,6 +75,11 @@ jobs:
         run: |
           pyinstaller music-auto-show.spec
 
+      - name: Rename executable (Windows)
+        if: runner.os == 'Windows'
+        run: mv dist/music-auto-show.exe dist/${{ matrix.artifact_name }}
+        shell: bash
+
       - name: Rename executable (Linux)
         if: runner.os == 'Linux'
         run: mv dist/music-auto-show dist/${{ matrix.artifact_name }}
