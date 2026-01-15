@@ -15,6 +15,29 @@ nicegui_datas = collect_data_files('nicegui')
 
 # Hidden imports that PyInstaller may not detect
 hiddenimports = [
+    # Local application modules
+    'web',
+    'web.app',
+    'web.state',
+    'web.components',
+    'web.components.audio_meters',
+    'web.components.audio_visualizer',
+    'web.components.config_panel',
+    'web.components.dmx_universe',
+    'web.components.effects_panel',
+    'web.components.fixture_dialogs',
+    'web.components.fixture_list',
+    'web.components.stage_view',
+    'config',
+    'audio_analyzer',
+    'audio_devices',
+    'dmx_controller',
+    'effects_engine',
+    'media_info',
+    'movement_modes',
+    'simulators',
+    'visualization_modes',
+
     # Madmom beat detection
     'madmom',
     'madmom.features',
