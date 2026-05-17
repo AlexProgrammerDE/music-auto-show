@@ -5,7 +5,7 @@ A cross-platform Python application that automatically visualizes system audio t
 ## Features
 
 - **Real-Time Audio Analysis**: Captures system audio via WASAPI loopback (Windows) and analyzes it live
-  - BPM/Tempo detection using Aubio
+  - BPM/Tempo detection using madmom
   - Beat tracking and onset detection
   - Energy/loudness levels
   - Frequency bands (bass/mid/high)
@@ -31,21 +31,21 @@ A cross-platform Python application that automatically visualizes system audio t
 
 ### System Dependencies
 
-Before installing with pip, you need Python development headers and audio libraries. These are required to compile PyAudio and madmom from source.
+Before installing with pip, you need Python development headers, a C compiler, and native audio/media libraries. These are required to compile `PyAudio`, `dbus-python`, and `madmom` from source.
 
 **Fedora / RHEL / CentOS:**
 ```bash
-sudo dnf install python3-devel portaudio-devel gcc
+sudo dnf install python3-devel portaudio-devel dbus-devel glib2-devel pkgconf-pkg-config gcc
 ```
 
 **Debian / Ubuntu:**
 ```bash
-sudo apt install python3-dev portaudio19-dev gcc
+sudo apt install python3-dev portaudio19-dev libdbus-1-dev libglib2.0-dev pkg-config gcc
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S python portaudio gcc
+sudo pacman -S python portaudio dbus glib2 pkgconf gcc
 ```
 
 **Windows:**
@@ -61,7 +61,7 @@ brew install portaudio
 
 ### Option 1: Conda (Recommended)
 
-Conda is recommended because `aubio` (the beat detection library) requires pre-compiled binaries that aren't available via pip for all Python versions.
+Conda is recommended because `madmom` (the beat detection library) and the native audio dependencies can require compiled binaries that aren't available via pip for all Python versions.
 
 **Windows:**
 ```bash
@@ -79,7 +79,7 @@ If you don't have conda, download Miniconda from: https://docs.conda.io/en/lates
 
 ### Option 2: pip only (Python 3.10-3.12)
 
-If you have Python 3.10, 3.11, or 3.12, aubio may install directly via pip:
+If you have Python 3.10, 3.11, or 3.12, the required packages may install directly via pip after the system dependencies above are installed:
 
 ```bash
 # Create virtual environment
@@ -91,17 +91,17 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-> **Note:** pip install of aubio fails on Python 3.13+ on Windows due to missing pre-built wheels. Use conda instead.
+> **Note:** pip installs can fail on newer Python versions when native wheels are not available. Use Python 3.10-3.12 or the conda setup above.
 
-### Option 3: Linux with system packages
+### Option 3: Linux with system audio packages
 
-On Debian/Ubuntu, you can install aubio system-wide:
+On Debian/Ubuntu, you can install the audio and D-Bus bindings from the package manager, then install the remaining Python dependencies with pip:
 
 ```bash
-sudo apt install python3-aubio python3-pyaudio
+sudo apt install python3-dbus python3-pyaudio
 
 # Then install the rest
-pip install pydantic numpy pyftdi pyserial dearpygui Pillow dbus-python
+pip install pydantic numpy "madmom @ git+https://github.com/CPJKU/madmom.git" pyftdi pyserial nicegui Pillow
 ```
 
 ### Dependencies
@@ -111,10 +111,10 @@ pip install pydantic numpy pyftdi pyserial dearpygui Pillow dbus-python
 - `numpy` - Numerical operations
 - `PyAudioWPatch` - WASAPI loopback audio capture (Windows)
 - `PyAudio` - Audio capture (Linux/Mac)
-- `aubio` - Real-time beat/tempo detection
+- `madmom` - Real-time beat/tempo detection
 
 **Optional (but recommended):**
-- `dearpygui` - GUI interface
+- `nicegui` - GUI interface
 - `pyftdi` - FTDI/ENTTEC Open DMX USB support
 - `pyserial` - Generic serial DMX support
 - `Pillow` - Album art color extraction
