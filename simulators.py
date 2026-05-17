@@ -260,13 +260,13 @@ class SimulatedAudioAnalyzer:
                 # High region
                 base = high * (1.0 - (pos - 0.66) * 1.5)
             
-            # Add wave variation
-            wave = 0.2 * math.sin(elapsed * 5 + i * 0.5)
+            # Add fixed per-band texture without implying frequency bins move over time.
+            texture = 0.04 * math.sin(i * 1.7)
             
             # Add randomness
-            noise = random.uniform(-0.05, 0.05)
+            noise = random.uniform(-0.03, 0.03)
             
-            value = (base + wave + noise) * beat_factor
+            value = (base + texture + noise) * beat_factor
             spectrum.append(max(0.0, min(1.0, value)))
         
         return spectrum

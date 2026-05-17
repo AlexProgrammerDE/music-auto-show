@@ -1,9 +1,8 @@
 """
-Audio visualizer component with beat circle, spectrum, and onset history.
+Audio visualizer component with spectrum, frequency bands, and beat pulse.
 Recreates the DearPyGui visualizations using NiceGUI canvas.
 """
 import math
-import time
 from nicegui import ui
 
 from web.state import app_state
@@ -13,7 +12,6 @@ class AudioVisualizer:
     """
     Audio visualization component with multiple displays:
     - Frequency spectrum (FFT visualization)
-    - Onset detection history (beat detection over time)
     - Frequency bands (Bass/Mid/High bars)
     - Beat pulse circle (circular beat indicator)
     """
@@ -23,9 +21,8 @@ class AudioVisualizer:
     TOTAL_HEIGHT = 100
     
     # Section widths
-    SPECTRUM_WIDTH = 150
-    ONSET_WIDTH = 150
-    BANDS_WIDTH = 100
+    SPECTRUM_WIDTH = 270
+    BANDS_WIDTH = 130
     PULSE_WIDTH = 100
     
     def __init__(self):
@@ -68,9 +65,8 @@ class AudioVisualizer:
         
         # Draw section labels
         svg += f'<text x="{self.SPECTRUM_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Spectrum</text>'
-        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Onset History</text>'
-        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Bands</text>'
-        svg += f'<text x="{self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH + self.PULSE_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Beat</text>'
+        svg += f'<text x="{self.SPECTRUM_WIDTH + self.BANDS_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Bands</text>'
+        svg += f'<text x="{self.SPECTRUM_WIDTH + self.BANDS_WIDTH + self.PULSE_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Beat</text>'
         
         # Offset for content below labels
         content_y = label_h
@@ -79,13 +75,10 @@ class AudioVisualizer:
         svg += self._draw_spectrum(state, 0, content_y, self.SPECTRUM_WIDTH, h)
         svg += self._draw_separator(self.SPECTRUM_WIDTH, content_y, h)
         
-        svg += self._draw_onset_history(state, self.SPECTRUM_WIDTH + 2, content_y, self.ONSET_WIDTH - 4, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH, content_y, h)
+        svg += self._draw_frequency_bands(state, self.SPECTRUM_WIDTH + 2, content_y, self.BANDS_WIDTH - 4, h)
+        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.BANDS_WIDTH, content_y, h)
         
-        svg += self._draw_frequency_bands(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + 2, content_y, self.BANDS_WIDTH - 4, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, content_y, h)
-        
-        svg += self._draw_beat_pulse(state, self.SPECTRUM_WIDTH + self.ONSET_WIDTH + self.BANDS_WIDTH, content_y, self.PULSE_WIDTH, h)
+        svg += self._draw_beat_pulse(state, self.SPECTRUM_WIDTH + self.BANDS_WIDTH, content_y, self.PULSE_WIDTH, h)
         
         svg += '</svg>'
         return svg
@@ -101,7 +94,6 @@ class AudioVisualizer:
         
         spectrum = state.spectrum if state.spectrum else []
         bass, mid, high = state.bass, state.mid, state.high
-        beat_pos = state.beat_position
         
         if spectrum and len(spectrum) > 0:
             # Use actual spectrum data
@@ -136,9 +128,6 @@ class AudioVisualizer:
                 else:
                     value = high * (1 - (pos - 0.66) * 2)
                 
-                # Add variation with beat
-                value *= 0.7 + 0.3 * math.sin(i * 0.8 + beat_pos * 6.28)
-                
                 bx = x + i * bar_width
                 bar_h = max(2, value * (height - 4))
                 
@@ -160,74 +149,6 @@ class AudioVisualizer:
         else:
             p = (pos - 0.66) * 3
             return (255, int(255 * (1 - p)), 50)
-    
-    def _draw_onset_history(self, state, x: float, y: float, width: float, height: float) -> str:
-        """Draw onset detection history graph."""
-        svg = ''
-        bottom = y + height  # Bottom of this section
-        
-        onset_data = state.onset_history if state.onset_history else []
-        energy = state.energy
-        beat_pos = state.beat_position
-        
-        if onset_data and len(onset_data) > 0:
-            # Draw actual onset history as line graph
-            num_points = len(onset_data)
-            point_width = width / num_points
-            
-            # Build path for filled area
-            path_data = f'M {x} {bottom - 2}'
-            
-            for i, value in enumerate(onset_data):
-                px = x + i * point_width
-                py = bottom - 2 - value * (height - 8)
-                path_data += f' L {px:.1f} {py:.1f}'
-            
-            path_data += f' L {x + width} {bottom - 2} Z'
-            
-            # Draw filled area
-            svg += f'<path d="{path_data}" fill="rgba(100,180,255,0.3)"/>'
-            
-            # Draw line on top
-            line_path = ''
-            for i, value in enumerate(onset_data):
-                px = x + i * point_width
-                py = bottom - 2 - value * (height - 8)
-                if i == 0:
-                    line_path = f'M {px:.1f} {py:.1f}'
-                else:
-                    line_path += f' L {px:.1f} {py:.1f}'
-            
-            svg += f'<path d="{line_path}" fill="none" stroke="rgba(100,200,255,1)" stroke-width="2"/>'
-        else:
-            # Fallback: show energy-based wave with beat pulses
-            num_points = 32
-            point_width = width / num_points
-            
-            for i in range(num_points):
-                pos = i / num_points
-                
-                # Create wave with beat-synced peaks
-                wave = 0.3 + 0.4 * math.sin(pos * 12.56 + beat_pos * 6.28)
-                wave *= energy
-                
-                # Add decay from recent "beat"
-                if pos > 0.8:
-                    wave += (1 - beat_pos) * 0.5 * ((pos - 0.8) / 0.2)
-                
-                bx = x + i * point_width
-                bar_h = max(2, wave * (height - 8))
-                
-                svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
-                           width="{point_width - 1:.1f}" height="{bar_h:.1f}" 
-                           fill="rgba(100,180,255,0.6)"/>'''
-            
-            # Draw threshold line
-            threshold_y = bottom - 2 - 0.3 * (height - 8)
-            svg += f'''<line x1="{x}" y1="{threshold_y:.1f}" x2="{x + width}" y2="{threshold_y:.1f}" 
-                       stroke="rgba(255,100,100,0.6)" stroke-width="1" stroke-dasharray="4,2"/>'''
-        
-        return svg
     
     def _draw_frequency_bands(self, state, x: float, y: float, width: float, height: float) -> str:
         """Draw Bass/Mid/High frequency band bars."""
