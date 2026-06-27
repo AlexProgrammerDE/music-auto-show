@@ -571,7 +571,7 @@ class AudioAnalyzer:
             features = self._data.features
             
             # Energy: use dB scale for consistent normalization
-            avg_rms = np.mean(list(self._energy_history)) if self._energy_history else 0
+            avg_rms = float(np.mean(list(self._energy_history))) if self._energy_history else 0.0
             features.rms = rms
             if avg_rms > 1e-10:
                 # Convert RMS to dB, map -60dB to 0dB range to 0-1
@@ -580,22 +580,22 @@ class AudioAnalyzer:
                 # gain=1.0 is 0dB offset, gain=2.0 is +6dB, gain=0.5 is -6dB
                 gain_db = 20 * np.log10(self._gain) if self._gain > 0 else -60
                 energy_norm = (energy_db + gain_db - self._db_floor) / (self._db_ceiling - self._db_floor)
-                features.energy = max(0.0, min(1.0, energy_norm))
+                features.energy = float(max(0.0, min(1.0, energy_norm)))
             else:
                 features.energy = 0.0
             
             # Frequency bands: already normalized in dB, apply gain as dB offset
-            avg_bass = np.mean(list(self._bass_history)) if self._bass_history else 0
-            avg_mid = np.mean(list(self._mid_history)) if self._mid_history else 0
-            avg_high = np.mean(list(self._high_history)) if self._high_history else 0
+            avg_bass = float(np.mean(list(self._bass_history))) if self._bass_history else 0.0
+            avg_mid = float(np.mean(list(self._mid_history))) if self._mid_history else 0.0
+            avg_high = float(np.mean(list(self._high_history))) if self._high_history else 0.0
             
             # Apply gain as a shift in the normalized value
             # gain=1.0 -> no change, gain=2.0 -> +0.1 boost, gain=0.5 -> -0.1 reduction
             # This maps the gain slider (0.1-5.0) to roughly ±0.2 adjustment
             gain_adjustment = (self._gain - 1.0) * 0.2
-            features.bass = max(0.0, min(1.0, avg_bass + gain_adjustment))
-            features.mid = max(0.0, min(1.0, avg_mid + gain_adjustment))
-            features.high = max(0.0, min(1.0, avg_high + gain_adjustment))
+            features.bass = float(max(0.0, min(1.0, avg_bass + gain_adjustment)))
+            features.mid = float(max(0.0, min(1.0, avg_mid + gain_adjustment)))
+            features.high = float(max(0.0, min(1.0, avg_high + gain_adjustment)))
             
             # Tempo (use current estimate with smoothing)
             features.tempo = self._current_tempo
@@ -609,12 +609,12 @@ class AudioAnalyzer:
                 intervals = np.diff(list(self._onset_history))
                 if len(intervals) > 0 and np.mean(intervals) > 0:
                     # Regularity: how consistent are the intervals (lower std = more regular)
-                    coefficient_of_variation = np.std(intervals) / np.mean(intervals)
+                    coefficient_of_variation = float(np.std(intervals) / np.mean(intervals))
                     regularity = 1.0 - min(1.0, coefficient_of_variation)
                     # Combine regularity with bass presence for danceability, scaled by energy
                     bass_factor = features.bass * 0.3
                     raw_danceability = regularity * 0.7 + bass_factor
-                    features.danceability = min(1.0, raw_danceability * (0.5 + features.energy * 0.5))
+                    features.danceability = float(min(1.0, raw_danceability * (0.5 + features.energy * 0.5)))
                 else:
                     features.danceability = 0.0
             else:
@@ -747,8 +747,8 @@ class AudioAnalyzer:
             return 0.0, 0
         
         # Find indices for frequency range
-        low_idx = np.searchsorted(self._freq_bins, low_freq)
-        high_idx = np.searchsorted(self._freq_bins, high_freq)
+        low_idx = int(np.searchsorted(self._freq_bins, low_freq))
+        high_idx = int(np.searchsorted(self._freq_bins, high_freq))
         
         if high_idx <= low_idx:
             return 0.0, 0

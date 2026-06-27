@@ -7,8 +7,8 @@ import math
 import threading
 import time
 from typing import Optional, Callable, List, Tuple, TYPE_CHECKING
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+
+from dmx_controller import DMXInterface
 
 logger = logging.getLogger(__name__)
 
@@ -334,34 +334,6 @@ class SimulatedAudioAnalyzer:
             return (t, p, v)
         else:
             return (v, p, q)
-
-
-class DMXInterface(ABC):
-    """Abstract base class for DMX interfaces."""
-    
-    @abstractmethod
-    def open(self) -> bool:
-        """Open the DMX interface."""
-        pass
-    
-    @abstractmethod
-    def close(self) -> None:
-        """Close the DMX interface."""
-        pass
-    
-    @abstractmethod
-    def send(self, data: bytes) -> bool:
-        """Send DMX data."""
-        pass
-    
-    @abstractmethod
-    def is_open(self) -> bool:
-        """Check if interface is open."""
-        pass
-    
-    def get_stats(self) -> dict:
-        """Get interface statistics. Override in subclasses."""
-        return {}
 
 
 class SimulatedDMXInterface(DMXInterface):

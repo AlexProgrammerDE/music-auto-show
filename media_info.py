@@ -10,8 +10,8 @@ import time
 import colorsys
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Callable, List, Tuple
 from io import BytesIO
+from typing import Callable, Iterable, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def extract_colors_from_image(image_data: bytes, num_colors: int = 5) -> List[Tu
         img = img.resize((100, 100), Image.Resampling.LANCZOS)
         
         # Get all pixels
-        pixels = list(img.getdata())
+        pixels = list(cast(Iterable[Tuple[int, int, int]], img.getdata()))
         
         # Simple color quantization using binning
         # Group similar colors together
@@ -296,6 +296,7 @@ class MediaInfoProvider:
 
 class _MediaInfoBackend:
     """Base class for platform-specific backends."""
+    _last_error: str = ""
     
     def get_media_info(self) -> MediaInfo:
         raise NotImplementedError
@@ -321,7 +322,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
         
         # Try the new winrt package structure first
         try:
-            from winrt.windows.media.control import (
+            from winrt.windows.media.control import (  # pyright: ignore[reportMissingImports]
                 GlobalSystemMediaTransportControlsSessionManager,
                 GlobalSystemMediaTransportControlsSessionPlaybackStatus,
             )
@@ -330,7 +331,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
             
             # Try to import DataReader for thumbnail reading
             try:
-                from winrt.windows.storage.streams import DataReader
+                from winrt.windows.storage.streams import DataReader  # pyright: ignore[reportMissingImports]
                 self._DataReader = DataReader
                 logger.info("winrt DataReader available for thumbnail extraction")
             except ImportError:
@@ -339,7 +340,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
         except ImportError:
             # Try alternative import for winsdk
             try:
-                from winsdk.windows.media.control import (
+                from winsdk.windows.media.control import (  # pyright: ignore[reportMissingImports]
                     GlobalSystemMediaTransportControlsSessionManager,
                     GlobalSystemMediaTransportControlsSessionPlaybackStatus,
                 )
@@ -348,7 +349,7 @@ class _WindowsMediaBackend(_MediaInfoBackend):
                 
                 # Try to import DataReader for thumbnail reading
                 try:
-                    from winsdk.windows.storage.streams import DataReader
+                    from winsdk.windows.storage.streams import DataReader  # pyright: ignore[reportMissingImports]
                     self._DataReader = DataReader
                     logger.info("winsdk DataReader available for thumbnail extraction")
                 except ImportError:
@@ -480,10 +481,11 @@ class _LinuxMediaBackend(_MediaInfoBackend):
     def get_media_info(self) -> MediaInfo:
         try:
             # Find MPRIS players
-            for service in self._bus.list_names():
-                if service.startswith('org.mpris.MediaPlayer2.'):
+            for service in self._bus.list_names() or []:
+                service_name = str(service)
+                if service_name.startswith('org.mpris.MediaPlayer2.'):
                     try:
-                        player = self._bus.get_object(service, '/org/mpris/MediaPlayer2')
+                        player = self._bus.get_object(service_name, '/org/mpris/MediaPlayer2')
                         properties = self._dbus.Interface(player, 'org.freedesktop.DBus.Properties')
                         
                         # Get playback status
@@ -507,7 +509,7 @@ class _LinuxMediaBackend(_MediaInfoBackend):
                             thumbnail_data = self._fetch_art(art_url)
                         
                         # Extract app name from service
-                        source_app = service.replace('org.mpris.MediaPlayer2.', '')
+                        source_app = service_name.replace('org.mpris.MediaPlayer2.', '')
                         
                         if title or is_playing:
                             return MediaInfo(

@@ -28,9 +28,9 @@ linux = [
 
 [tool.pyright]
 include = ["."]
-exclude = ["**/__pycache__", ".venv", "venv", "build", "dist"]
+exclude = ["**/__pycache__", ".venv", "venv", "build", "dist", "samsung-galaxy-book-linux-fixes-main"]
 venvPath = "."
-venv = ".venv"
+venv = "venv"
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
 reportMissingImports = "warning"
@@ -39,4 +39,3 @@ reportOptionalMemberAccess = "none"
 reportOptionalSubscript = "none"
 reportOptionalCall = "none"
 reportUnboundVariable = "warning"
-reportPossiblyUnbound = "none"
