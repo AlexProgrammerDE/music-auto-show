@@ -62,6 +62,8 @@ def _create_main_layout() -> None:
     from web.components.stage_view import StageView
     from web.components.audio_meters import AudioMeters
     from web.components.audio_visualizer import AudioVisualizer
+    from web.components.audio_recorder import AudioRecorder
+    from web.components.io_status import IOStatusPanel
     from web.components.dmx_universe import DMXUniverse
     
     # Dark theme
@@ -105,6 +107,10 @@ def _create_main_layout() -> None:
         
         # Right panel - Visualization
         with ui.column().classes('w-full md:w-3/4 gap-2 p-1 md:p-2'):
+            with ui.card().classes('w-full').props('flat bordered'):
+                ui.label('Live I/O').classes('text-lg font-semibold mb-2')
+                IOStatusPanel()
+
             _create_now_playing()
             
             with ui.card().classes('w-full').props('flat bordered'):
@@ -114,6 +120,10 @@ def _create_main_layout() -> None:
             with ui.card().classes('w-full').props('flat bordered'):
                 ui.label('Audio Visualization').classes('text-lg font-semibold mb-2')
                 AudioVisualizer()
+
+            with ui.card().classes('w-full').props('flat bordered'):
+                ui.label('Input Check').classes('text-lg font-semibold mb-2')
+                AudioRecorder()
             
             with ui.card().classes('w-full').props('flat bordered'):
                 ui.label('Audio Analysis').classes('text-lg font-semibold mb-2')

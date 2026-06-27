@@ -6,7 +6,12 @@ import logging
 import math
 import threading
 import time
+import base64
+import io
+import wave
 from typing import Optional, Callable, List, Tuple, TYPE_CHECKING
+
+import numpy as np
 
 from dmx_controller import DMXInterface
 
@@ -35,6 +40,18 @@ class SimulatedAudioAnalyzer:
         self._callbacks: list[Callable] = []
         self._start_time = 0.0
         self._beat_count = 0
+        self.sample_rate = 44100
+        self._spectrogram_history: list[list[float]] = []
+        self._spectrogram_max_frames = 300
+        self._last_spectrogram_time = 0.0
+        self._recording_lock = threading.Lock()
+        self._recording = False
+        self._recording_samples: list[np.ndarray] = []
+        self._recording_sample_count = 0
+        self._recording_sum_squares = 0.0
+        self._recording_peak = 0.0
+        self._recording_clipped_samples = 0
+        self._recording_max_seconds = 30.0
     
     def add_callback(self, callback: Callable) -> None:
         """Add a callback to be called when analysis data updates."""
@@ -52,6 +69,107 @@ class SimulatedAudioAnalyzer:
     def get_gain(self) -> float:
         """Get the current audio input gain."""
         return 1.0  # Always return default for simulation
+
+    def get_input_mode_used(self):
+        """Get the simulated input mode."""
+        from config import AudioInputMode
+        return AudioInputMode.AUTO
+
+    def get_runtime_status(self) -> dict:
+        """Get simulated audio input status for UI display."""
+        return {
+            "configured_device_name": "",
+            "configured_mode": "auto",
+            "actual_mode": "simulated",
+            "device_index": None,
+            "device_name": "Simulated audio generator",
+            "device_type": "simulated",
+            "host_api": "Simulation",
+            "channels": 1,
+            "sample_rate": self.sample_rate,
+            "selection_reason": "simulated",
+            "missing_device_name": "",
+            "running": self._running,
+            "last_error": "",
+            "simulated": True,
+        }
+
+    def start_recording(self) -> bool:
+        """Start recording simulated audio."""
+        if not self._running:
+            return False
+
+        with self._recording_lock:
+            self._recording = True
+            self._recording_samples = []
+            self._recording_sample_count = 0
+            self._recording_sum_squares = 0.0
+            self._recording_peak = 0.0
+            self._recording_clipped_samples = 0
+        return True
+
+    def stop_recording(self) -> dict:
+        """Stop recording simulated audio."""
+        with self._recording_lock:
+            self._recording = False
+        return self.get_recording_status()
+
+    def clear_recording(self) -> None:
+        """Clear the simulated diagnostic recording."""
+        with self._recording_lock:
+            self._recording = False
+            self._recording_samples = []
+            self._recording_sample_count = 0
+            self._recording_sum_squares = 0.0
+            self._recording_peak = 0.0
+            self._recording_clipped_samples = 0
+
+    def get_recording_status(self) -> dict:
+        """Get simulated recording status."""
+        with self._recording_lock:
+            duration = self._recording_sample_count / self.sample_rate if self.sample_rate > 0 else 0.0
+            rms = (
+                float(np.sqrt(self._recording_sum_squares / self._recording_sample_count))
+                if self._recording_sample_count > 0
+                else 0.0
+            )
+            return {
+                "recording": self._recording,
+                "has_recording": self._recording_sample_count > 0,
+                "duration": duration,
+                "max_duration": self._recording_max_seconds,
+                "sample_rate": self.sample_rate,
+                "channels": 1,
+                "peak": self._recording_peak,
+                "rms": rms,
+                "clipped_samples": self._recording_clipped_samples,
+                "source": "Simulated audio generator",
+            }
+
+    def get_recording_wav_bytes(self) -> bytes:
+        """Return the simulated recording as WAV bytes."""
+        with self._recording_lock:
+            if not self._recording_samples:
+                return b""
+            samples = np.concatenate(self._recording_samples)
+
+        samples = np.clip(samples, -1.0, 1.0)
+        pcm = (samples * 32767.0).astype(np.int16)
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(pcm.tobytes())
+        return output.getvalue()
+
+    def get_recording_data_url(self) -> str:
+        """Return the simulated recording as a browser-playable data URL."""
+        wav_bytes = self.get_recording_wav_bytes()
+        if not wav_bytes:
+            return ""
+        encoded = base64.b64encode(wav_bytes).decode("ascii")
+        return f"data:audio/wav;base64,{encoded}"
     
     def start(self) -> bool:
         """Start simulated audio analysis."""
@@ -111,6 +229,7 @@ class SimulatedAudioAnalyzer:
                 album_colors=list(self._data.album_colors),
                 waveform=list(self._data.waveform) if hasattr(self._data, 'waveform') else [],
                 spectrum=list(self._data.spectrum) if hasattr(self._data, 'spectrum') else [],
+                spectrogram=[list(frame) for frame in self._data.spectrogram] if hasattr(self._data, 'spectrogram') else [],
                 onset_history=list(self._data.onset_history) if hasattr(self._data, 'onset_history') else []
             )
     
@@ -191,6 +310,15 @@ class SimulatedAudioAnalyzer:
                                                                self._data.features.bass,
                                                                self._data.features.mid,
                                                                self._data.features.high)
+
+                audio_samples = self._generate_audio_samples(elapsed, base_energy, beat_pulse)
+                self._capture_recording_samples(audio_samples)
+                if current_time - self._last_spectrogram_time >= 0.1:
+                    self._spectrogram_history.append(self._generate_spectrogram_frame(audio_samples))
+                    if len(self._spectrogram_history) > self._spectrogram_max_frames:
+                        self._spectrogram_history = self._spectrogram_history[-self._spectrogram_max_frames:]
+                    self._last_spectrogram_time = current_time
+                    self._data.spectrogram = [list(frame) for frame in self._spectrogram_history]
                 
                 # Simulate onset history (64 points)
                 self._data.onset_history = self._generate_onset_history(elapsed, time_since_beat, beat_interval)
@@ -203,6 +331,69 @@ class SimulatedAudioAnalyzer:
                     pass
             
             time.sleep(0.025)  # 40 Hz
+
+    def _generate_audio_samples(self, elapsed: float, energy: float, beat_pulse: float) -> np.ndarray:
+        """Generate a short synthetic audio buffer for recording and spectrograms."""
+        frame_count = int(self.sample_rate * 0.025)
+        t = (np.arange(frame_count, dtype=np.float32) / self.sample_rate) + elapsed
+        amplitude = min(0.85, 0.12 + energy * 0.28 + beat_pulse * 0.5)
+        signal = (
+            0.48 * np.sin(2 * np.pi * 90 * t)
+            + 0.32 * np.sin(2 * np.pi * 440 * t)
+            + 0.18 * np.sin(2 * np.pi * 1800 * t)
+            + 0.08 * np.sin(2 * np.pi * 6200 * t)
+        )
+        return np.asarray(signal * amplitude, dtype=np.float32)
+
+    def _capture_recording_samples(self, audio_data: np.ndarray) -> None:
+        """Append simulated audio to the current diagnostic recording."""
+        with self._recording_lock:
+            if not self._recording:
+                return
+
+            max_samples = int(self.sample_rate * self._recording_max_seconds)
+            remaining = max_samples - self._recording_sample_count
+            if remaining <= 0:
+                self._recording = False
+                return
+
+            chunk = np.asarray(audio_data[:remaining], dtype=np.float32).copy()
+            if len(chunk) == 0:
+                return
+
+            self._recording_samples.append(chunk)
+            self._recording_sample_count += len(chunk)
+            self._recording_sum_squares += float(np.sum(chunk ** 2))
+            self._recording_peak = max(self._recording_peak, float(np.max(np.abs(chunk))))
+            self._recording_clipped_samples += int(np.count_nonzero(np.abs(chunk) >= 0.99))
+
+            if self._recording_sample_count >= max_samples:
+                self._recording = False
+
+    def _generate_spectrogram_frame(self, audio_data: np.ndarray, num_bands: int = 64) -> List[float]:
+        """Generate a normalized log-frequency spectrogram frame."""
+        fft_size = 1024
+        if len(audio_data) < fft_size:
+            audio_data = np.pad(audio_data, (0, fft_size - len(audio_data)))
+        else:
+            audio_data = audio_data[:fft_size]
+
+        windowed = audio_data * np.hanning(fft_size)
+        fft_data = np.abs(np.fft.rfft(windowed)) ** 2
+        freq_bands = np.logspace(np.log10(20.0), np.log10(16000.0), num_bands + 1)
+        frame: List[float] = []
+
+        for i in range(num_bands):
+            low_idx = int(freq_bands[i] * fft_size / self.sample_rate)
+            high_idx = int(freq_bands[i + 1] * fft_size / self.sample_rate)
+            low_idx = max(0, min(low_idx, len(fft_data) - 1))
+            high_idx = max(low_idx + 1, min(high_idx, len(fft_data)))
+            power = float(np.mean(fft_data[low_idx:high_idx])) if high_idx > low_idx else 0.0
+            db_value = 10.0 * np.log10(power + 1e-12)
+            normalized = (db_value + 92.0) / 74.0
+            frame.append(float(max(0.0, min(1.0, normalized))))
+
+        return frame
     
     def _generate_waveform(self, elapsed: float, time_since_beat: float, 
                            beat_interval: float, energy: float) -> List[float]:
@@ -381,6 +572,12 @@ class SimulatedDMXInterface(DMXInterface):
         """Get interface statistics."""
         return {
             "type": "simulated",
+            "port": "Simulated DMX",
+            "device_info": "No hardware output",
+            "break_method": "simulated",
             "send_count": self._send_count,
+            "error_count": 0,
+            "consecutive_errors": 0,
+            "last_error": None,
             "is_open": self._is_open
         }

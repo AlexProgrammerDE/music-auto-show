@@ -12,6 +12,9 @@ import logging
 import threading
 import queue
 import time
+import base64
+import io
+import wave
 import numpy as np
 from typing import Optional, Callable
 from dataclasses import dataclass, field
@@ -111,6 +114,9 @@ class AnalysisData:
     
     # Frequency spectrum for visualization (bass/mid/high bands, ~32 bins)
     spectrum: List[float] = field(default_factory=list)
+
+    # Spectrogram history for visualization (oldest frame first)
+    spectrogram: List[List[float]] = field(default_factory=list)
     
     # Onset strength history for beat detection visualization
     onset_history: List[float] = field(default_factory=list)
@@ -166,6 +172,14 @@ class AudioAnalyzer:
         self._device_name = device_name
         self.input_mode = input_mode
         self._actual_input_mode: Optional[AudioInputMode] = None  # What we actually used
+        self._actual_device_name = ""
+        self._actual_device_type = ""
+        self._actual_device_host_api = ""
+        self._actual_channels = 0
+        self._actual_sample_rate = sample_rate
+        self._selection_reason = "not_started"
+        self._requested_device_missing = ""
+        self._last_error = ""
         
         self._pyaudio: Optional[pyaudio.PyAudio] = None
         self._stream = None
@@ -257,6 +271,22 @@ class AudioAnalyzer:
         # FFT setup
         self._fft_size = buffer_size
         self._freq_bins = None
+
+        # 30 seconds of spectrogram frames at 10 FPS for UI diagnostics.
+        self._spectrogram_interval = 0.1
+        self._spectrogram_last_time = 0.0
+        self._spectrogram_history: deque[List[float]] = deque(maxlen=300)
+
+        # Manual diagnostic recording. Captures the same mono stream used for analysis.
+        self._recording_lock = threading.Lock()
+        self._recording = False
+        self._recording_started_at = 0.0
+        self._recording_samples: list[np.ndarray] = []
+        self._recording_sample_count = 0
+        self._recording_sum_squares = 0.0
+        self._recording_peak = 0.0
+        self._recording_clipped_samples = 0
+        self._recording_max_seconds = 30.0
         
     def add_callback(self, callback: Callable[[AnalysisData], None]) -> None:
         """Add a callback to be called when analysis data updates."""
@@ -280,6 +310,111 @@ class AudioAnalyzer:
     def get_input_mode_used(self) -> Optional[AudioInputMode]:
         """Get the actual input mode that was used after start()."""
         return self._actual_input_mode
+
+    def get_runtime_status(self) -> dict:
+        """Get the resolved audio input status for UI display."""
+        return {
+            "configured_device_name": self._device_name,
+            "configured_mode": self.input_mode.value,
+            "actual_mode": self._actual_input_mode.value if self._actual_input_mode else "",
+            "device_index": self.device_index,
+            "device_name": self._actual_device_name,
+            "device_type": self._actual_device_type,
+            "host_api": self._actual_device_host_api,
+            "channels": self._actual_channels,
+            "sample_rate": self._actual_sample_rate,
+            "selection_reason": self._selection_reason,
+            "missing_device_name": self._requested_device_missing,
+            "running": self._running,
+            "last_error": self._last_error,
+            "simulated": False,
+        }
+
+    def start_recording(self) -> bool:
+        """Start recording the active analyzer input for diagnostics."""
+        if not self._running:
+            self._last_error = "Audio analyzer is not running"
+            return False
+
+        with self._recording_lock:
+            self._recording = True
+            self._recording_started_at = time.time()
+            self._recording_samples = []
+            self._recording_sample_count = 0
+            self._recording_sum_squares = 0.0
+            self._recording_peak = 0.0
+            self._recording_clipped_samples = 0
+
+        return True
+
+    def stop_recording(self) -> dict:
+        """Stop recording and return the final recording status."""
+        with self._recording_lock:
+            self._recording = False
+        return self.get_recording_status()
+
+    def clear_recording(self) -> None:
+        """Clear the current diagnostic recording."""
+        with self._recording_lock:
+            self._recording = False
+            self._recording_started_at = 0.0
+            self._recording_samples = []
+            self._recording_sample_count = 0
+            self._recording_sum_squares = 0.0
+            self._recording_peak = 0.0
+            self._recording_clipped_samples = 0
+
+    def get_recording_status(self) -> dict:
+        """Get diagnostic recording status and level statistics."""
+        with self._recording_lock:
+            sample_count = self._recording_sample_count
+            sample_rate = self.sample_rate
+            duration = sample_count / sample_rate if sample_rate > 0 else 0.0
+            rms = (
+                float(np.sqrt(self._recording_sum_squares / sample_count))
+                if sample_count > 0
+                else 0.0
+            )
+            return {
+                "recording": self._recording,
+                "has_recording": sample_count > 0,
+                "duration": duration,
+                "max_duration": self._recording_max_seconds,
+                "sample_rate": sample_rate,
+                "channels": 1,
+                "peak": self._recording_peak,
+                "rms": rms,
+                "clipped_samples": self._recording_clipped_samples,
+                "source": self._actual_device_name,
+            }
+
+    def get_recording_wav_bytes(self) -> bytes:
+        """Return the current diagnostic recording as 16-bit mono WAV bytes."""
+        with self._recording_lock:
+            if not self._recording_samples:
+                return b""
+            samples = np.concatenate(self._recording_samples)
+            sample_rate = self.sample_rate
+
+        samples = np.clip(samples, -1.0, 1.0)
+        pcm = (samples * 32767.0).astype(np.int16)
+
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm.tobytes())
+
+        return output.getvalue()
+
+    def get_recording_data_url(self) -> str:
+        """Return the current recording as a browser-playable data URL."""
+        wav_bytes = self.get_recording_wav_bytes()
+        if not wav_bytes:
+            return ""
+        encoded = base64.b64encode(wav_bytes).decode("ascii")
+        return f"data:audio/wav;base64,{encoded}"
     
     def start(self) -> bool:
         """Start audio capture and analysis."""
@@ -297,15 +432,32 @@ class AudioAnalyzer:
             return False
         
         try:
+            self._last_error = ""
+            self._actual_input_mode = None
+            self._actual_device_name = ""
+            self._actual_device_type = ""
+            self._actual_device_host_api = ""
+            self._actual_channels = 0
+            self._actual_sample_rate = self.sample_rate
+            self._selection_reason = "starting"
+            self._requested_device_missing = ""
             self._pyaudio = pyaudio.PyAudio()
             
             # Resolve device - either by explicit index, name, or mode
             device_info = None
+            channels = 1
             
             if self.device_index is not None:
                 # Explicit device index specified - use it directly
                 dev = self._pyaudio.get_device_info_by_index(self.device_index)
                 device_name = str(dev.get('name', 'Unknown'))
+                host_api_name = "Unknown"
+                try:
+                    host_api_index = int(dev.get("hostApi", 0) or 0)
+                    host_api = self._pyaudio.get_host_api_info_by_index(host_api_index)
+                    host_api_name = str(host_api.get("name", "Unknown"))
+                except Exception:
+                    pass
                 is_loopback = 'loopback' in device_name.lower() or 'monitor' in device_name.lower()
                 self._actual_input_mode = AudioInputMode.LOOPBACK if is_loopback else AudioInputMode.MICROPHONE
                 logger.info(f"Using specified device index {self.device_index}: {device_name}")
@@ -313,6 +465,12 @@ class AudioAnalyzer:
                 # Get device params
                 channels = min(int(dev.get('maxInputChannels', 2)), 2)
                 self.sample_rate = int(dev.get('defaultSampleRate', 44100))
+                self._actual_device_name = device_name
+                self._actual_device_type = self._actual_input_mode.value
+                self._actual_device_host_api = host_api_name
+                self._actual_channels = channels
+                self._actual_sample_rate = self.sample_rate
+                self._selection_reason = "configured_index"
             
             elif self._device_name:
                 # Device name specified - look it up
@@ -323,8 +481,15 @@ class AudioAnalyzer:
                     self._actual_input_mode = AudioInputMode.LOOPBACK if is_loopback else AudioInputMode.MICROPHONE
                     channels = min(device_info.channels, 2)
                     self.sample_rate = device_info.sample_rate
+                    self._actual_device_name = device_info.name
+                    self._actual_device_type = device_info.device_type.value
+                    self._actual_device_host_api = device_info.host_api
+                    self._actual_channels = channels
+                    self._actual_sample_rate = self.sample_rate
+                    self._selection_reason = "configured_device"
                     logger.info(f"Using device by name: {device_info.name}")
                 else:
+                    self._requested_device_missing = self._device_name
                     logger.warning(f"Device '{self._device_name}' not found, falling back to mode: {self.input_mode.value}")
             
             if self.device_index is None:
@@ -336,8 +501,21 @@ class AudioAnalyzer:
                     self._actual_input_mode = AudioInputMode.LOOPBACK if is_loopback else AudioInputMode.MICROPHONE
                     channels = min(device_info.channels, 2)
                     self.sample_rate = device_info.sample_rate
+                    self._actual_device_name = device_info.name
+                    self._actual_device_type = device_info.device_type.value
+                    self._actual_device_host_api = device_info.host_api
+                    self._actual_channels = channels
+                    self._actual_sample_rate = self.sample_rate
+                    if self._requested_device_missing:
+                        self._selection_reason = "saved_device_missing_fallback"
+                    elif self.input_mode == AudioInputMode.AUTO:
+                        self._selection_reason = "auto_loopback" if is_loopback else "auto_microphone_fallback"
+                    else:
+                        self._selection_reason = f"preferred_{self.input_mode.value}"
                     logger.info(f"Using best device for {self.input_mode.value}: {device_info.name}")
                 else:
+                    self._selection_reason = "no_device_found"
+                    self._last_error = "No audio input device found"
                     logger.error("No audio input device found")
                     return False
             
@@ -369,6 +547,8 @@ class AudioAnalyzer:
             return True
             
         except Exception as e:
+            self._last_error = str(e)
+            self._selection_reason = "start_failed"
             logger.error(f"Failed to start audio analyzer: {e}")
             self._cleanup()
             return False
@@ -421,6 +601,8 @@ class AudioAnalyzer:
             if len(audio_data) > frame_count:
                 audio_data = audio_data.reshape(-1, 2).mean(axis=1)
             
+            self._capture_recording_samples(audio_data)
+
             # Process audio
             self._process_audio(audio_data)
             
@@ -429,6 +611,31 @@ class AudioAnalyzer:
             pass
         
         return (None, pyaudio.paContinue)
+
+    def _capture_recording_samples(self, audio_data: np.ndarray) -> None:
+        """Append audio data to the current diagnostic recording if active."""
+        with self._recording_lock:
+            if not self._recording:
+                return
+
+            max_samples = int(self.sample_rate * self._recording_max_seconds)
+            remaining = max_samples - self._recording_sample_count
+            if remaining <= 0:
+                self._recording = False
+                return
+
+            chunk = np.asarray(audio_data[:remaining], dtype=np.float32).copy()
+            if len(chunk) == 0:
+                return
+
+            self._recording_samples.append(chunk)
+            self._recording_sample_count += len(chunk)
+            self._recording_sum_squares += float(np.sum(chunk ** 2))
+            self._recording_peak = max(self._recording_peak, float(np.max(np.abs(chunk))))
+            self._recording_clipped_samples += int(np.count_nonzero(np.abs(chunk) >= 0.99))
+
+            if self._recording_sample_count >= max_samples:
+                self._recording = False
     
     def _process_audio(self, audio_data: np.ndarray) -> None:
         """Process audio buffer and extract features."""
@@ -653,6 +860,11 @@ class AudioAnalyzer:
             
             # Generate spectrum data for visualization
             self._data.spectrum = self._get_spectrum_display(audio_data)
+
+            if current_time - self._spectrogram_last_time >= self._spectrogram_interval:
+                self._spectrogram_history.append(self._get_spectrogram_frame(audio_data))
+                self._spectrogram_last_time = current_time
+                self._data.spectrogram = [list(frame) for frame in self._spectrogram_history]
             
             # Store onset strength history for beat visualization
             self._data.onset_history = list(self._onset_strength_history)
@@ -731,6 +943,49 @@ class AudioAnalyzer:
                     spectrum.append(0.0)
             
             return spectrum
+        except Exception:
+            return [0.0] * num_bands
+
+    def _get_spectrogram_frame(self, audio_data: np.ndarray, num_bands: int = 64) -> List[float]:
+        """
+        Get one normalized spectrogram frame using logarithmic frequency bands.
+        Values are oldest-to-newest in time and low-to-high in frequency.
+        """
+        if len(audio_data) == 0:
+            return [0.0] * num_bands
+
+        try:
+            if len(audio_data) < self._fft_size:
+                audio_data = np.pad(audio_data, (0, self._fft_size - len(audio_data)))
+            else:
+                audio_data = audio_data[:self._fft_size]
+
+            windowed = audio_data * np.hanning(self._fft_size)
+            fft_data = np.abs(np.fft.rfft(windowed)) ** 2
+
+            min_freq = 20.0
+            max_freq = min(16000.0, self.sample_rate / 2.0)
+            if max_freq <= min_freq:
+                return [0.0] * num_bands
+
+            freq_bands = np.logspace(np.log10(min_freq), np.log10(max_freq), num_bands + 1)
+            db_floor = -92.0
+            db_ceiling = -18.0
+            gain_db = 20 * np.log10(self._gain) if self._gain > 0 else 0.0
+            frame: List[float] = []
+
+            for i in range(num_bands):
+                low_idx = int(freq_bands[i] * self._fft_size / self.sample_rate)
+                high_idx = int(freq_bands[i + 1] * self._fft_size / self.sample_rate)
+                low_idx = max(0, min(low_idx, len(fft_data) - 1))
+                high_idx = max(low_idx + 1, min(high_idx, len(fft_data)))
+
+                power = float(np.mean(fft_data[low_idx:high_idx])) if high_idx > low_idx else 0.0
+                db_value = 10.0 * np.log10(power + 1e-12) + gain_db
+                normalized = (db_value - db_floor) / (db_ceiling - db_floor)
+                frame.append(float(max(0.0, min(1.0, normalized))))
+
+            return frame
         except Exception:
             return [0.0] * num_bands
     
@@ -944,7 +1199,11 @@ class AudioAnalyzer:
                     track_name=track_name,
                     artist_name=artist_name,
                     is_playing=media_is_playing,
-                    album_colors=album_colors
+                    album_colors=album_colors,
+                    waveform=list(self._data.waveform),
+                    spectrum=list(self._data.spectrum),
+                    spectrogram=[list(frame) for frame in self._data.spectrogram],
+                    onset_history=list(self._data.onset_history)
                 )
                 # Reset beat detected flag after reading
                 self._data.features.beat_detected = False
@@ -985,7 +1244,11 @@ class AudioAnalyzer:
                 track_name=self._track_name,
                 artist_name=self._artist_name,
                 is_playing=self._is_playing,
-                album_colors=list(self._album_colors)
+                album_colors=list(self._album_colors),
+                waveform=list(self._data.waveform),
+                spectrum=list(self._data.spectrum),
+                spectrogram=[list(frame) for frame in self._data.spectrogram],
+                onset_history=list(self._data.onset_history)
             )
     
     def get_task_status(self) -> dict:

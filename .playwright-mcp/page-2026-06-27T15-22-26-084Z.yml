@@ -1,0 +1,229 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: Music Auto Show
+    - generic [ref=e6]:
+      - generic [ref=e8]: Stopped
+      - button "Start" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]:
+          - img [ref=e11]: play_arrow
+          - generic [ref=e12]: Start
+      - button "Stop" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]:
+          - img [ref=e15]: stop
+          - generic [ref=e16]: Stop
+      - button "Blackout" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]:
+          - img [ref=e19]: highlight_off
+          - generic [ref=e20]: Blackout
+  - main [ref=e22]:
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - generic [ref=e27]:
+          - button "Collapse \"DMX Settings\"" [expanded] [ref=e28] [cursor=pointer]:
+            - generic [ref=e30]: settings_ethernet
+            - generic [ref=e32]: DMX Settings
+            - generic [ref=e34]: keyboard_arrow_down
+          - generic [ref=e37]:
+            - generic [ref=e41]:
+              - generic: DMX Port
+              - textbox "DMX Port" [ref=e42]:
+                - /placeholder: Auto-detect if empty
+            - checkbox "Simulate DMX (no hardware)" [checked] [ref=e43] [cursor=pointer]:
+              - img [ref=e46]
+              - generic [ref=e48]: Simulate DMX (no hardware)
+        - generic [ref=e50]:
+          - button "Collapse \"Audio Input\"" [expanded] [ref=e51] [cursor=pointer]:
+            - generic [ref=e53]: mic
+            - generic [ref=e55]: Audio Input
+            - generic [ref=e57]: keyboard_arrow_down
+          - generic [ref=e60]:
+            - generic [ref=e61]:
+              - generic [ref=e64] [cursor=pointer]:
+                - generic [ref=e65]:
+                  - generic: Audio Device
+                  - generic [ref=e66]:
+                    - generic [ref=e67]: Auto (use fallback mode)
+                    - combobox "Audio Device" [ref=e68]: Auto (use fallback mode)
+                - generic [ref=e70]: arrow_drop_down
+              - button [ref=e71] [cursor=pointer]:
+                - img [ref=e73]: refresh
+            - generic [ref=e74]: Will auto-select based on fallback mode
+            - separator [ref=e75]
+            - generic [ref=e78] [cursor=pointer]:
+              - generic [ref=e79]:
+                - generic: Fallback Mode (if device not found)
+                - generic [ref=e80]:
+                  - generic [ref=e81]: Auto-detect
+                  - combobox "Fallback Mode (if device not found)" [ref=e82]: Auto-detect
+              - generic [ref=e84]: arrow_drop_down
+            - generic [ref=e85]: Used when "Auto" is selected or saved device is unavailable
+            - separator [ref=e86]
+            - checkbox "Simulate Audio (no capture)" [checked] [ref=e87] [cursor=pointer]:
+              - img [ref=e90]
+              - generic [ref=e92]: Simulate Audio (no capture)
+        - button "Expand \"Configuration File\"" [ref=e95] [cursor=pointer]:
+          - generic [ref=e97]: folder
+          - generic [ref=e99]: Configuration File
+          - generic [ref=e101]: keyboard_arrow_down
+        - generic [ref=e103]:
+          - button "Collapse \"Fixtures\"" [expanded] [ref=e104] [cursor=pointer]:
+            - generic [ref=e106]: lightbulb
+            - generic [ref=e108]: Fixtures
+            - generic [ref=e110]: keyboard_arrow_down
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - button "Add Fixture" [ref=e115] [cursor=pointer]:
+                - generic [ref=e116]:
+                  - img [ref=e117]: add
+                  - generic [ref=e118]: Add Fixture
+              - button "Remove" [ref=e119] [cursor=pointer]:
+                - generic [ref=e120]:
+                  - img [ref=e121]: delete
+                  - generic [ref=e122]: Remove
+            - generic [ref=e124]:
+              - generic [ref=e125]: lightbulb_outline
+              - generic [ref=e126]: No fixtures configured
+              - generic [ref=e127]: Click "Add Fixture" to get started
+        - generic [ref=e129]:
+          - button "Collapse \"Effects\"" [expanded] [ref=e130] [cursor=pointer]:
+            - generic [ref=e132]: auto_awesome
+            - generic [ref=e134]: Effects
+            - generic [ref=e136]: keyboard_arrow_down
+          - generic [ref=e139]:
+            - generic [ref=e142] [cursor=pointer]:
+              - generic [ref=e143]:
+                - generic: Mode
+                - generic [ref=e144]:
+                  - generic [ref=e145]: energy
+                  - combobox "Mode" [ref=e146]: energy
+              - generic [ref=e148]: arrow_drop_down
+            - generic [ref=e149]:
+              - generic [ref=e150]:
+                - generic [ref=e151]: Intensity
+                - generic [ref=e152]: 100%
+              - slider [ref=e153]:
+                - img [ref=e159]
+            - generic [ref=e162]:
+              - generic [ref=e163]:
+                - generic [ref=e164]: Audio Gain
+                - generic [ref=e165]: 1.0x
+              - slider [ref=e166]:
+                - img [ref=e172]
+            - generic [ref=e175]:
+              - generic [ref=e176]:
+                - generic [ref=e177]: Color Speed
+                - generic [ref=e178]: 1.0x
+              - slider [ref=e179]:
+                - img [ref=e185]
+            - generic [ref=e188]:
+              - generic [ref=e189]:
+                - generic [ref=e190]: Smoothing
+                - generic [ref=e191]: 30%
+              - slider [ref=e192]:
+                - img [ref=e198]
+            - checkbox "Strobe on Drop" [ref=e201] [cursor=pointer]:
+              - img [ref=e204]
+              - generic [ref=e206]: Strobe on Drop
+        - button "Expand \"Movement\"" [ref=e209] [cursor=pointer]:
+          - generic [ref=e211]: open_with
+          - generic [ref=e213]: Movement
+          - generic [ref=e215]: keyboard_arrow_down
+        - button "Expand \"Effect Fixtures\"" [ref=e218] [cursor=pointer]:
+          - generic [ref=e220]: blur_on
+          - generic [ref=e222]: Effect Fixtures
+          - generic [ref=e224]: keyboard_arrow_down
+      - generic [ref=e225]:
+        - generic [ref=e226]:
+          - generic [ref=e227]: Live I/O
+          - generic [ref=e228]:
+            - generic [ref=e229]:
+              - generic [ref=e230]: Audio input
+              - generic [ref=e231]: Not running
+              - generic [ref=e232]: "Auto mode: auto"
+              - generic [ref=e233]: "Configured: Auto | fallback: auto"
+            - generic [ref=e234]:
+              - generic [ref=e235]: DMX output
+              - generic [ref=e236]: Not running
+              - generic [ref=e237]: "Configured port: Auto"
+              - generic [ref=e238]: "Configured: Auto | simulated | stopped"
+        - generic [ref=e240]:
+          - generic [ref=e241]:
+            - generic [ref=e242]: Now Playing
+            - generic [ref=e243]: No track
+            - generic [ref=e244]: 120 BPM
+          - generic [ref=e246]: Album Colors
+        - generic [ref=e254]: Stage View
+        - generic [ref=e256]: Audio Visualization
+        - generic [ref=e259]:
+          - generic [ref=e260]: Input Check
+          - generic [ref=e261]:
+            - generic [ref=e262]:
+              - button "Record" [ref=e263] [cursor=pointer]:
+                - generic [ref=e264]:
+                  - img [ref=e265]: fiber_manual_record
+                  - generic [ref=e266]: Record
+              - button "Stop" [ref=e267] [cursor=pointer]:
+                - generic [ref=e268]:
+                  - img [ref=e269]: stop
+                  - generic [ref=e270]: Stop
+              - button "Clear" [ref=e271] [cursor=pointer]:
+                - generic [ref=e272]:
+                  - img [ref=e273]: delete
+                  - generic [ref=e274]: Clear
+            - generic [ref=e275]:
+              - generic [ref=e276]: Idle
+              - generic [ref=e277]: "Source: not running"
+              - generic [ref=e278]: Peak 0% | RMS 0% | clipped 0
+        - generic [ref=e281]:
+          - generic [ref=e282]: Audio Analysis
+          - generic [ref=e283]:
+            - generic [ref=e284]:
+              - generic [ref=e285]:
+                - generic [ref=e286]:
+                  - generic [ref=e287]: Energy
+                  - generic [ref=e288]: "0"
+                - progressbar [ref=e289]
+              - generic [ref=e291]:
+                - generic [ref=e292]:
+                  - generic [ref=e293]: Bass
+                  - generic [ref=e294]: "0"
+                - progressbar [ref=e295]
+              - generic [ref=e297]:
+                - generic [ref=e298]:
+                  - generic [ref=e299]: Mid
+                  - generic [ref=e300]: "0"
+                - progressbar [ref=e301]
+              - generic [ref=e303]:
+                - generic [ref=e304]:
+                  - generic [ref=e305]: High
+                  - generic [ref=e306]: "0"
+                - progressbar [ref=e307]
+            - generic [ref=e309]:
+              - generic [ref=e310]:
+                - generic [ref=e311]:
+                  - generic [ref=e312]: Tempo
+                  - generic [ref=e313]: "0"
+                - progressbar [ref=e314]
+              - generic [ref=e316]:
+                - generic [ref=e317]:
+                  - generic [ref=e318]: Beat Position
+                  - generic [ref=e319]: "0"
+                - progressbar [ref=e320]
+              - generic [ref=e322]:
+                - generic [ref=e323]:
+                  - generic [ref=e324]: Danceability
+                  - generic [ref=e325]: "0"
+                - progressbar [ref=e326]
+              - generic [ref=e328]:
+                - generic [ref=e329]:
+                  - generic [ref=e330]: Valence
+                  - generic [ref=e331]: "0"
+                - progressbar [ref=e332]
+          - button "Expand \"Background Tasks\"" [ref=e336] [cursor=pointer]:
+            - generic [ref=e338]: schedule
+            - generic [ref=e340]: Background Tasks
+            - generic [ref=e342]: keyboard_arrow_down
+        - button "Expand \"DMX Universe\"" [ref=e345] [cursor=pointer]:
+          - generic [ref=e347]: settings_input_hdmi
+          - generic [ref=e349]: DMX Universe
+          - generic [ref=e351]: keyboard_arrow_down

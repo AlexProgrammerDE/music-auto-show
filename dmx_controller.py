@@ -525,7 +525,9 @@ class SerialDMXInterface(DMXInterface):
     def get_stats(self) -> dict:
         """Get interface statistics."""
         return {
+            "type": "serial",
             "port": self.port,
+            "device_info": self._get_device_info(),
             "break_method": self._break_method,
             "send_count": self._send_count,
             "error_count": self._error_count,

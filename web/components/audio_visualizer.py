@@ -1,258 +1,336 @@
 """
-Audio visualizer component with spectrum, frequency bands, and beat pulse.
-Recreates the DearPyGui visualizations using NiceGUI canvas.
+Audio visualizer component with a 30 second spectrogram and beat context.
+Uses a single canvas so the browser updates pixels instead of thousands of SVG nodes.
 """
-import math
+import json
+from typing import Any
+
 from nicegui import ui
 
 from web.state import app_state
 
 
 class AudioVisualizer:
-    """
-    Audio visualization component with multiple displays:
-    - Frequency spectrum (FFT visualization)
-    - Frequency bands (Bass/Mid/High bars)
-    - Beat pulse circle (circular beat indicator)
-    """
-    
-    # Layout constants
-    TOTAL_WIDTH = 500
-    TOTAL_HEIGHT = 100
-    
-    # Section widths
-    SPECTRUM_WIDTH = 270
-    BANDS_WIDTH = 130
-    PULSE_WIDTH = 100
-    
+    """Audacity-style diagnostic audio visualization."""
+
+    TOTAL_WIDTH = 860
+    TOTAL_HEIGHT = 275
+    PLOT_X = 48
+    PLOT_Y = 12
+    PLOT_WIDTH = 570
+    PLOT_HEIGHT = 190
+    BEAT_X = 642
+    BEAT_Y = 12
+    BEAT_WIDTH = 190
+    BEAT_HEIGHT = 246
+    WAVEFORM_Y = 224
+    WAVEFORM_HEIGHT = 34
+
+    MAX_COLUMNS = 140
+    MAX_BINS = 48
+
     def __init__(self):
-        self._canvas = None
+        self._canvas_id = f'audio-viz-{id(self)}'
+        self._html = None
         self._create_ui()
-    
+
     def _create_ui(self) -> None:
-        """Create the visualizer UI with canvas."""
-        # Container with dark background
-        with ui.card().classes('w-full p-0 overflow-hidden').style('background: #0f0f16'):
-            # Canvas for drawing (sanitize=False since we generate the SVG ourselves)
-            # Labels are drawn inside the SVG for proper alignment
-            self._canvas = ui.html('', sanitize=False).classes('w-full')
-            self._canvas.style(f'height: {self.TOTAL_HEIGHT + 20}px')  # Extra height for labels
-        
-        # Update timer - 20 FPS for smooth animation
-        ui.timer(0.05, self._update_canvas)
-    
+        """Create the visualizer canvas."""
+        ui.add_body_html(self._draw_script())
+        self._html = ui.html(self._canvas_html(), sanitize=False).classes('w-full')
+        self._html.style(f'height: {self.TOTAL_HEIGHT}px;background:#111111;')
+        ui.timer(0.1, self._update_canvas)
+        self._update_canvas()
+
     def _update_canvas(self) -> None:
-        """Update the canvas with current audio state."""
+        """Send a compact payload to the browser canvas."""
+        payload = self._build_payload()
+        ui.run_javascript(
+            f'if (window.__musicAutoShowDrawAudioViz) '
+            f'window.__musicAutoShowDrawAudioViz({json.dumps(self._canvas_id)}, {json.dumps(payload)});'
+        )
+
+    def _build_payload(self) -> dict[str, Any]:
         state = app_state.audio_state
-        
-        # Build SVG content
-        svg = self._build_svg(state)
-        self._canvas.content = svg
-    
-    def _build_svg(self, state) -> str:
-        """Build the complete SVG visualization."""
-        w = self.TOTAL_WIDTH
-        h = self.TOTAL_HEIGHT
-        label_h = 18  # Height for labels row
-        total_h = h + label_h
-        
-        # Start SVG
-        svg = f'''<svg width="100%" height="{total_h}" viewBox="0 0 {w} {total_h}" preserveAspectRatio="xMidYMid meet" 
-                   style="background: #0f0f16;">'''
-        
-        # Draw label background
-        svg += f'<rect x="0" y="0" width="{w}" height="{label_h}" fill="#1a1a24"/>'
-        
-        # Draw section labels
-        svg += f'<text x="{self.SPECTRUM_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Spectrum</text>'
-        svg += f'<text x="{self.SPECTRUM_WIDTH + self.BANDS_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Bands</text>'
-        svg += f'<text x="{self.SPECTRUM_WIDTH + self.BANDS_WIDTH + self.PULSE_WIDTH / 2}" y="{label_h - 5}" font-size="11" fill="#6b7280" text-anchor="middle">Beat</text>'
-        
-        # Offset for content below labels
-        content_y = label_h
-        
-        # Draw sections
-        svg += self._draw_spectrum(state, 0, content_y, self.SPECTRUM_WIDTH, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH, content_y, h)
-        
-        svg += self._draw_frequency_bands(state, self.SPECTRUM_WIDTH + 2, content_y, self.BANDS_WIDTH - 4, h)
-        svg += self._draw_separator(self.SPECTRUM_WIDTH + self.BANDS_WIDTH, content_y, h)
-        
-        svg += self._draw_beat_pulse(state, self.SPECTRUM_WIDTH + self.BANDS_WIDTH, content_y, self.PULSE_WIDTH, h)
-        
-        svg += '</svg>'
-        return svg
-    
-    def _draw_separator(self, x: float, y: float, height: float) -> str:
-        """Draw a vertical separator line."""
-        return f'<line x1="{x}" y1="{y}" x2="{x}" y2="{y + height}" stroke="#32324a" stroke-width="1"/>'
-    
-    def _draw_spectrum(self, state, x: float, y: float, width: float, height: float) -> str:
-        """Draw frequency spectrum visualization."""
-        svg = ''
-        bottom = y + height  # Bottom of this section
-        
-        spectrum = state.spectrum if state.spectrum else []
-        bass, mid, high = state.bass, state.mid, state.high
-        
-        if spectrum and len(spectrum) > 0:
-            # Use actual spectrum data
-            num_bands = len(spectrum)
-            bar_width = max(2, width / num_bands)
-            
-            for i, value in enumerate(spectrum):
-                bx = x + i * bar_width
-                bar_h = value * (height - 4)
-                
-                # Color gradient: blue -> cyan -> green -> yellow -> red
-                pos = i / max(1, num_bands - 1)
-                r, g, b = self._spectrum_color(pos)
-                
-                if bar_h > 0.5:
-                    svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
-                               width="{bar_width - 1:.1f}" height="{bar_h:.1f}" 
-                               fill="rgba({r},{g},{b},0.85)"/>'''
+        return {
+            'width': self.TOTAL_WIDTH,
+            'height': self.TOTAL_HEIGHT,
+            'plotX': self.PLOT_X,
+            'plotY': self.PLOT_Y,
+            'plotWidth': self.PLOT_WIDTH,
+            'plotHeight': self.PLOT_HEIGHT,
+            'beatX': self.BEAT_X,
+            'beatY': self.BEAT_Y,
+            'beatWidth': self.BEAT_WIDTH,
+            'beatHeight': self.BEAT_HEIGHT,
+            'waveformY': self.WAVEFORM_Y,
+            'waveformHeight': self.WAVEFORM_HEIGHT,
+            'frames': self._sample_frames(state.spectrogram),
+            'waveform': self._quantize_values(state.waveform[-140:]),
+            'energy': self._quantize_value(state.energy),
+            'bass': self._quantize_value(state.bass),
+            'mid': self._quantize_value(state.mid),
+            'high': self._quantize_value(state.high),
+            'tempo': round(state.tempo),
+            'beatPosition': self._quantize_value(state.beat_position),
+        }
+
+    def _sample_frames(self, frames: list[list[float]]) -> list[list[int]]:
+        if not frames:
+            return []
+
+        sampled_frames: list[list[float]]
+        if len(frames) <= self.MAX_COLUMNS:
+            sampled_frames = frames
         else:
-            # Fallback: generate from bass/mid/high
-            num_bands = 24
-            bar_width = width / num_bands
-            
-            for i in range(num_bands):
-                pos = i / (num_bands - 1)
-                
-                # Blend values based on position
-                if pos < 0.33:
-                    value = bass * (1 - pos * 3) + mid * (pos * 3)
-                elif pos < 0.66:
-                    value = mid * (1 - (pos - 0.33) * 3) + high * ((pos - 0.33) * 3)
-                else:
-                    value = high * (1 - (pos - 0.66) * 2)
-                
-                bx = x + i * bar_width
-                bar_h = max(2, value * (height - 4))
-                
-                r, g, b = self._spectrum_color(pos)
-                
-                svg += f'''<rect x="{bx:.1f}" y="{bottom - bar_h - 2:.1f}" 
-                           width="{bar_width - 1:.1f}" height="{bar_h:.1f}" 
-                           fill="rgba({r},{g},{b},0.8)"/>'''
-        
-        return svg
-    
-    def _spectrum_color(self, pos: float) -> tuple[int, int, int]:
-        """Get spectrum color for position (0-1)."""
-        if pos < 0.33:
-            return (50, int(100 + pos * 3 * 155), 255)
-        elif pos < 0.66:
-            p = (pos - 0.33) * 3
-            return (int(p * 255), 255, int(255 * (1 - p)))
-        else:
-            p = (pos - 0.66) * 3
-            return (255, int(255 * (1 - p)), 50)
-    
-    def _draw_frequency_bands(self, state, x: float, y: float, width: float, height: float) -> str:
-        """Draw Bass/Mid/High frequency band bars."""
-        svg = ''
-        bottom = y + height  # Bottom of this section
-        
-        bass = state.bass
-        mid = state.mid
-        high = state.high
-        
-        bar_width = (width - 10) / 3
-        bar_gap = 5
-        max_height = height - 8
-        
-        # Bass bar (red/orange)
-        bass_h = bass * max_height
-        bass_x = x
-        svg += f'''<rect x="{bass_x:.1f}" y="{bottom - bass_h - 4:.1f}" 
-                   width="{bar_width:.1f}" height="{bass_h:.1f}" 
-                   fill="rgba(255,80,50,0.9)" rx="2"/>'''
-        svg += f'''<text x="{bass_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
-                   font-size="8" fill="#888" text-anchor="middle">B</text>'''
-        
-        # Mid bar (green/yellow)
-        mid_h = mid * max_height
-        mid_x = x + bar_width + bar_gap
-        svg += f'''<rect x="{mid_x:.1f}" y="{bottom - mid_h - 4:.1f}" 
-                   width="{bar_width:.1f}" height="{mid_h:.1f}" 
-                   fill="rgba(150,255,50,0.9)" rx="2"/>'''
-        svg += f'''<text x="{mid_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
-                   font-size="8" fill="#888" text-anchor="middle">M</text>'''
-        
-        # High bar (cyan/blue)
-        high_h = high * max_height
-        high_x = x + 2 * (bar_width + bar_gap)
-        svg += f'''<rect x="{high_x:.1f}" y="{bottom - high_h - 4:.1f}" 
-                   width="{bar_width:.1f}" height="{high_h:.1f}" 
-                   fill="rgba(50,200,255,0.9)" rx="2"/>'''
-        svg += f'''<text x="{high_x + bar_width/2:.1f}" y="{bottom - 1:.1f}" 
-                   font-size="8" fill="#888" text-anchor="middle">H</text>'''
-        
-        return svg
-    
-    def _draw_beat_pulse(self, state, x: float, y: float, width: float, height: float) -> str:
-        """Draw beat pulse circle with position arc."""
-        svg = ''
-        
-        beat_pos = state.beat_position
-        
-        center_x = x + width / 2
-        center_y = y + height / 2
-        
-        # Pulse size: large at beat start, shrinks through beat
-        max_radius = min(width, height) / 2 - 8
-        pulse_radius = max_radius * (1.0 - beat_pos * 0.6)
-        
-        # Intensity based on beat position
-        intensity = 1.0 - beat_pos * 0.7
-        
-        # Outer glow
-        if pulse_radius > 5:
-            glow_opacity = intensity * 0.4
-            svg += f'''<circle cx="{center_x:.1f}" cy="{center_y:.1f}" r="{pulse_radius + 4:.1f}" 
-                       fill="rgba(100,200,100,{glow_opacity:.2f})"/>'''
-        
-        # Main pulse circle
-        fill_opacity = intensity * 0.8
-        stroke_opacity = intensity
-        svg += f'''<circle cx="{center_x:.1f}" cy="{center_y:.1f}" r="{pulse_radius:.1f}" 
-                   fill="rgba(100,255,100,{fill_opacity:.2f})" 
-                   stroke="rgba(200,255,200,{stroke_opacity:.2f})" stroke-width="2"/>'''
-        
-        # Beat position arc (shows progress through beat)
-        arc_radius = max_radius + 6
-        arc_angle = beat_pos * 360
-        
-        if arc_angle > 5:
-            # Calculate arc path (starting from top, going clockwise)
-            start_angle = -90  # Start from top
-            end_angle = start_angle + arc_angle
-            
-            # Convert to radians
-            start_rad = math.radians(start_angle)
-            end_rad = math.radians(end_angle)
-            
-            # Calculate start and end points
-            start_x = center_x + arc_radius * math.cos(start_rad)
-            start_y = center_y + arc_radius * math.sin(start_rad)
-            end_x = center_x + arc_radius * math.cos(end_rad)
-            end_y = center_y + arc_radius * math.sin(end_rad)
-            
-            # Large arc flag
-            large_arc = 1 if arc_angle > 180 else 0
-            
-            # Build arc path
-            arc_path = f'M {start_x:.1f} {start_y:.1f} A {arc_radius:.1f} {arc_radius:.1f} 0 {large_arc} 1 {end_x:.1f} {end_y:.1f}'
-            
-            svg += f'''<path d="{arc_path}" fill="none" stroke="rgba(255,200,100,0.9)" 
-                       stroke-width="3" stroke-linecap="round"/>'''
-        
-        # BPM text in center
-        tempo = state.tempo
-        svg += f'''<text x="{center_x:.1f}" y="{center_y + 3:.1f}" 
-                   font-size="11" font-weight="bold" fill="rgba(255,255,255,0.8)" 
-                   text-anchor="middle">{tempo:.0f}</text>'''
-        
-        return svg
+            step = len(frames) / self.MAX_COLUMNS
+            sampled_frames = [frames[int(i * step)] for i in range(self.MAX_COLUMNS)]
+
+        return [self._sample_bins(frame) for frame in sampled_frames]
+
+    def _sample_bins(self, frame: list[float]) -> list[int]:
+        if not frame:
+            return []
+        if len(frame) <= self.MAX_BINS:
+            return self._quantize_values(frame)
+
+        step = len(frame) / self.MAX_BINS
+        return [self._quantize_value(frame[int(i * step)]) for i in range(self.MAX_BINS)]
+
+    def _quantize_values(self, values: list[float]) -> list[int]:
+        return [self._quantize_value(value) for value in values]
+
+    def _quantize_value(self, value: float) -> int:
+        return max(0, min(255, int(value * 255)))
+
+    def _canvas_html(self) -> str:
+        return f'''
+            <canvas
+                id="{self._canvas_id}"
+                width="{self.TOTAL_WIDTH}"
+                height="{self.TOTAL_HEIGHT}"
+                style="display:block;width:100%;height:{self.TOTAL_HEIGHT}px;background:#111111"
+            ></canvas>
+        '''
+
+    def _draw_script(self) -> str:
+        return '''
+            <script>
+            window.__musicAutoShowDrawAudioViz = window.__musicAutoShowDrawAudioViz || function(canvasId, payload) {
+                const canvas = document.getElementById(canvasId);
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d', { alpha: false });
+                if (!ctx) return;
+
+                const W = payload.width;
+                const H = payload.height;
+                const plotX = payload.plotX;
+                const plotY = payload.plotY;
+                const plotW = payload.plotWidth;
+                const plotH = payload.plotHeight;
+                const beatX = payload.beatX;
+                const beatY = payload.beatY;
+                const beatW = payload.beatWidth;
+                const beatH = payload.beatHeight;
+                const waveformY = payload.waveformY;
+                const waveformH = payload.waveformHeight;
+                const frames = payload.frames || [];
+
+                ctx.clearRect(0, 0, W, H);
+                ctx.fillStyle = '#111111';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#151515';
+                ctx.fillRect(plotX, plotY, plotW, plotH);
+                ctx.fillRect(plotX, waveformY, plotW, waveformH);
+                ctx.fillRect(beatX, beatY, beatW, beatH);
+
+                drawGrid(ctx, plotX, plotY, plotW, plotH);
+                if (frames.length > 0) {{
+                    drawSpectrogram(ctx, frames, plotX, plotY, plotW, plotH);
+                }} else {{
+                    drawEmpty(ctx, plotX, plotY, plotW, plotH);
+                }}
+                drawAxes(ctx, plotX, plotY, plotW, plotH);
+                drawWaveform(ctx, payload.waveform || [], plotX, waveformY, plotW, waveformH);
+                drawBeatPanel(ctx, payload, beatX, beatY, beatW);
+            };
+
+            function drawGrid(ctx, x, y, w, h) {
+                ctx.strokeStyle = '#303030';
+                ctx.lineWidth = 1;
+                for (const offset of [0, 0.333, 0.667, 1]) {
+                    const gx = x + w * offset;
+                    ctx.beginPath();
+                    ctx.moveTo(gx, y);
+                    ctx.lineTo(gx, y + h);
+                    ctx.stroke();
+                }
+            }
+
+            function drawSpectrogram(ctx, frames, x, y, w, h) {
+                const columns = frames.length;
+                const bins = frames[0]?.length || 1;
+                const cellW = w / columns;
+                const cellH = h / bins;
+                for (let column = 0; column < columns; column += 1) {
+                    const frame = frames[column];
+                    const px = x + column * cellW;
+                    for (let row = 0; row < frame.length; row += 1) {
+                        const value = frame[row];
+                        if (value < 4) continue;
+                        const py = y + (bins - row - 1) * cellH;
+                        ctx.fillStyle = heatColor(value);
+                        ctx.fillRect(px, py, cellW + 0.25, cellH + 0.25);
+                    }
+                }
+            }
+
+            function drawEmpty(ctx, x, y, w, h) {
+                ctx.fillStyle = '#777777';
+                ctx.font = '13px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Waiting for audio', x + w / 2, y + h / 2);
+            }
+
+            function drawAxes(ctx, x, y, w, h) {
+                const labels = [['16k', 0], ['4k', 0.23], ['1k', 0.46], ['250', 0.69], ['60', 0.91]];
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillStyle = '#8a8a8a';
+                ctx.strokeStyle = '#252525';
+                for (const [label, position] of labels) {
+                    const ly = y + h * position;
+                    ctx.beginPath();
+                    ctx.moveTo(x, ly);
+                    ctx.lineTo(x + w, ly);
+                    ctx.stroke();
+                    ctx.fillText(label, x - 8, ly + 4);
+                }
+
+                const times = [['-30s', 0, 'center'], ['-20s', 0.333, 'center'], ['-10s', 0.667, 'center'], ['now', 1, 'right']];
+                const axisY = y + h + 17;
+                for (const [label, position, align] of times) {
+                    ctx.textAlign = align;
+                    ctx.fillText(label, x + w * position, axisY);
+                }
+            }
+
+            function drawWaveform(ctx, waveform, x, y, w, h) {
+                ctx.strokeStyle = '#2c2c2c';
+                ctx.beginPath();
+                ctx.moveTo(x, y + h / 2);
+                ctx.lineTo(x + w, y + h / 2);
+                ctx.stroke();
+
+                if (!waveform.length) {
+                    ctx.fillStyle = '#777777';
+                    ctx.font = '11px sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('Waveform', x, y + 23);
+                    return;
+                }
+
+                const barW = w / waveform.length;
+                ctx.fillStyle = '#b78a42';
+                for (let i = 0; i < waveform.length; i += 1) {
+                    const value = waveform[i] / 255;
+                    const height = Math.max(1, value * h);
+                    ctx.fillRect(x + i * barW, y + h / 2 - height / 2, Math.max(1, barW - 0.6), height);
+                }
+            }
+
+            function drawBeatPanel(ctx, payload, x, y, w) {
+                const beatPos = (payload.beatPosition || 0) / 255;
+                const tempo = payload.tempo || 0;
+                const centerX = x + w / 2;
+                const centerY = y + 74;
+                const radius = 43;
+
+                ctx.fillStyle = '#d4d4d4';
+                ctx.font = '600 13px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText('Beat', x + 12, y + 22);
+                ctx.fillStyle = '#a8a8a8';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(`${tempo} BPM`, x + w - 12, y + 22);
+
+                ctx.fillStyle = '#101010';
+                ctx.strokeStyle = '#303030';
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                const pulseRadius = radius * (0.55 + (1 - beatPos) * 0.35);
+                const opacity = 0.22 + (1 - beatPos) * 0.34;
+                ctx.fillStyle = `rgba(183,138,66,${opacity.toFixed(2)})`;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
+                ctx.fill();
+
+                const arcRadius = radius + 7;
+                const end = -Math.PI / 2 + Math.max(0.01, beatPos * Math.PI * 2);
+                ctx.strokeStyle = '#b78a42';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, arcRadius, -Math.PI / 2, end);
+                ctx.stroke();
+                ctx.lineWidth = 1;
+
+                ctx.fillStyle = '#f1f1f1';
+                ctx.font = '600 20px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(String(tempo), centerX, centerY + 5);
+                ctx.fillStyle = '#8a8a8a';
+                ctx.font = '10px sans-serif';
+                ctx.fillText('BPM', centerX, centerY + 24);
+
+                let barY = y + 140;
+                drawPanelBar(ctx, x + 12, barY, w - 24, 'Energy', payload.energy, '#a98242');
+                drawPanelBar(ctx, x + 12, barY + 28, w - 24, 'Bass', payload.bass, '#9f5d38');
+                drawPanelBar(ctx, x + 12, barY + 56, w - 24, 'Mid', payload.mid, '#8f8846');
+                drawPanelBar(ctx, x + 12, barY + 84, w - 24, 'High', payload.high, '#b0a15c');
+            }
+
+            function drawPanelBar(ctx, x, y, width, label, rawValue, color) {
+                const value = (rawValue || 0) / 255;
+                ctx.fillStyle = '#a8a8a8';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(label, x, y);
+                ctx.textAlign = 'right';
+                ctx.fillText(`${Math.round(value * 100)}%`, x + width, y);
+                ctx.fillStyle = '#242424';
+                ctx.fillRect(x, y + 13, width, 7);
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y + 13, width * value, 7);
+            }
+
+            function heatColor(rawValue) {
+                const value = Math.max(0, Math.min(1, rawValue / 255));
+                if (value < 0.35) return mix('#181818', '#4a4030', value / 0.35);
+                if (value < 0.72) return mix('#4a4030', '#b77633', (value - 0.35) / 0.37);
+                return mix('#b77633', '#f4dc73', (value - 0.72) / 0.28);
+            }
+
+            function mix(start, end, amount) {
+                const a = hex(start);
+                const b = hex(end);
+                const r = Math.round(a[0] + (b[0] - a[0]) * amount);
+                const g = Math.round(a[1] + (b[1] - a[1]) * amount);
+                const bl = Math.round(a[2] + (b[2] - a[2]) * amount);
+                return `rgb(${r},${g},${bl})`;
+            }
+
+            function hex(value) {
+                const clean = value.replace('#', '');
+                return [
+                    parseInt(clean.slice(0, 2), 16),
+                    parseInt(clean.slice(2, 4), 16),
+                    parseInt(clean.slice(4, 6), 16),
+                ];
+            }
+            </script>
+        '''

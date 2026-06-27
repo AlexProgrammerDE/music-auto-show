@@ -36,7 +36,9 @@ class AudioState:
     track_name: str = "No track"
     artist_name: str = ""
     album_colors: list[tuple[int, int, int]] = field(default_factory=list)
+    waveform: list[float] = field(default_factory=list)
     spectrum: list[float] = field(default_factory=list)
+    spectrogram: list[list[float]] = field(default_factory=list)
     onset_history: list[float] = field(default_factory=list)
 
 
@@ -50,6 +52,58 @@ class TaskStatus:
     buffer_duration: float = 0.0
     time_until_next: float = 0.0
     effects_fps: float = 0.0
+
+
+@dataclass
+class AudioRuntimeStatus:
+    """Resolved audio input state for UI display."""
+    configured_device_name: str = ""
+    configured_mode: str = "auto"
+    actual_mode: str = ""
+    device_index: Optional[int] = None
+    device_name: str = ""
+    device_type: str = ""
+    host_api: str = ""
+    channels: int = 0
+    sample_rate: int = 0
+    selection_reason: str = "not_started"
+    missing_device_name: str = ""
+    running: bool = False
+    last_error: str = ""
+    simulated: bool = False
+
+
+@dataclass
+class DMXRuntimeStatus:
+    """Resolved DMX output state for UI display."""
+    configured_port: str = ""
+    port: str = ""
+    device_info: str = ""
+    interface_type: str = ""
+    break_method: str = ""
+    running: bool = False
+    is_open: bool = False
+    send_count: int = 0
+    error_count: int = 0
+    consecutive_errors: int = 0
+    last_error: str = ""
+    simulated: bool = False
+
+
+@dataclass
+class RecordingState:
+    """Manual input recording state for UI display."""
+    recording: bool = False
+    has_recording: bool = False
+    duration: float = 0.0
+    max_duration: float = 30.0
+    sample_rate: int = 0
+    channels: int = 1
+    peak: float = 0.0
+    rms: float = 0.0
+    clipped_samples: int = 0
+    source: str = ""
+    error: str = ""
 
 
 class AppState:
@@ -76,9 +130,13 @@ class AppState:
         # Reactive state for UI
         self.audio_state: AudioState = AudioState()
         self.task_status: TaskStatus = TaskStatus()
+        self.audio_runtime_status: AudioRuntimeStatus = AudioRuntimeStatus()
+        self.dmx_runtime_status: DMXRuntimeStatus = DMXRuntimeStatus()
+        self.recording_state: RecordingState = RecordingState()
         self.fixture_states: dict[str, FixtureState] = {}
         self.current_analysis: Optional[AnalysisData] = None
         self.dmx_channels: list[int] = [0] * 512
+        self._last_recording_data_url: str = ""
         
         # Status
         self.status_message: str = "Stopped"
@@ -87,11 +145,15 @@ class AppState:
         # Thread safety
         self._state_lock = threading.Lock()
         self._effects_thread: Optional[threading.Thread] = None
+        self._audio_monitor_thread: Optional[threading.Thread] = None
+        self._audio_monitoring: bool = False
+        self._recording_started_monitor: bool = False
         
         # FPS tracking
         self._effects_frame_count: int = 0
         self._effects_fps_time: float = time.time()
         self._effects_fps_count: int = 0
+        self._last_spectrogram_state_copy: float = 0.0
         
         # Callbacks for UI updates
         self._on_state_change: list[Callable[[], None]] = []
@@ -112,6 +174,180 @@ class AppState:
                 callback()
             except Exception as e:
                 logger.error(f"State listener error: {e}")
+
+    def _copy_audio_data_to_state_unlocked(self, data: AnalysisData) -> None:
+        """Copy analysis data into UI state. Caller must hold _state_lock."""
+        self.current_analysis = data
+        self.audio_state.energy = data.features.energy
+        self.audio_state.bass = data.features.bass
+        self.audio_state.mid = data.features.mid
+        self.audio_state.high = data.features.high
+        self.audio_state.tempo = data.features.tempo
+        self.audio_state.beat_position = data.beat_position
+        self.audio_state.danceability = data.features.danceability
+        self.audio_state.valence = data.features.valence
+        self.audio_state.track_name = data.track_name or "System Audio"
+        self.audio_state.artist_name = data.artist_name or ""
+        self.audio_state.album_colors = data.album_colors or []
+        self.audio_state.waveform = list(data.waveform) if data.waveform else []
+        self.audio_state.spectrum = list(data.spectrum) if data.spectrum else []
+        now = time.time()
+        if data.spectrogram and now - self._last_spectrogram_state_copy >= 0.1:
+            self.audio_state.spectrogram = [list(frame) for frame in data.spectrogram]
+            self._last_spectrogram_state_copy = now
+        self.audio_state.onset_history = list(data.onset_history) if data.onset_history else []
+
+    def _update_task_status_unlocked(self) -> None:
+        """Copy analyzer background task status into UI state. Caller must hold _state_lock."""
+        if not self.audio_analyzer:
+            self.task_status.madmom_status = "Idle"
+            self.task_status.madmom_processing = False
+            self.task_status.madmom_available = False
+            self.task_status.progress = 0.0
+            self.task_status.buffer_duration = 0.0
+            self.task_status.time_until_next = 0.0
+            return
+
+        task_status = self.audio_analyzer.get_task_status()
+        self.task_status.madmom_status = task_status.get("madmom_status", "Unknown")
+        self.task_status.madmom_processing = task_status.get("madmom_processing", False)
+        self.task_status.madmom_available = task_status.get("madmom_available", False)
+        self.task_status.progress = task_status.get("progress", 0.0)
+        self.task_status.buffer_duration = task_status.get("buffer_duration", 0.0)
+        self.task_status.time_until_next = task_status.get("time_until_next", 0.0)
+
+    def _update_runtime_status_unlocked(self) -> None:
+        """Copy resolved audio and DMX status into UI state. Caller must hold _state_lock."""
+        if self.audio_analyzer and hasattr(self.audio_analyzer, "get_runtime_status"):
+            audio_status = self.audio_analyzer.get_runtime_status()
+            self.audio_runtime_status = AudioRuntimeStatus(
+                configured_device_name=str(audio_status.get("configured_device_name") or self.config.audio.device_name),
+                configured_mode=str(audio_status.get("configured_mode") or self.config.audio.fallback_mode.value),
+                actual_mode=str(audio_status.get("actual_mode") or ""),
+                device_index=audio_status.get("device_index"),
+                device_name=str(audio_status.get("device_name") or ""),
+                device_type=str(audio_status.get("device_type") or ""),
+                host_api=str(audio_status.get("host_api") or ""),
+                channels=int(audio_status.get("channels") or 0),
+                sample_rate=int(audio_status.get("sample_rate") or 0),
+                selection_reason=str(audio_status.get("selection_reason") or "unknown"),
+                missing_device_name=str(audio_status.get("missing_device_name") or ""),
+                running=bool(audio_status.get("running", False)),
+                last_error=str(audio_status.get("last_error") or ""),
+                simulated=bool(audio_status.get("simulated", False)),
+            )
+        else:
+            self.audio_runtime_status = AudioRuntimeStatus(
+                configured_device_name=self.config.audio.device_name,
+                configured_mode=self.config.audio.fallback_mode.value,
+                selection_reason="not_started",
+                simulated=self.simulate_audio,
+            )
+
+        if self.dmx_controller:
+            dmx_stats = self.dmx_controller.get_stats()
+            interface_stats = dmx_stats.get("interface", {})
+            interface_type = str(interface_stats.get("type") or "")
+            self.dmx_runtime_status = DMXRuntimeStatus(
+                configured_port=self.config.dmx.port,
+                port=str(interface_stats.get("port") or self.config.dmx.port or ""),
+                device_info=str(interface_stats.get("device_info") or ""),
+                interface_type=interface_type,
+                break_method=str(interface_stats.get("break_method") or ""),
+                running=bool(dmx_stats.get("running", False)),
+                is_open=bool(interface_stats.get("is_open", False)),
+                send_count=int(interface_stats.get("send_count") or 0),
+                error_count=int(interface_stats.get("error_count") or 0),
+                consecutive_errors=int(interface_stats.get("consecutive_errors") or 0),
+                last_error=str(interface_stats.get("last_error") or ""),
+                simulated=interface_type == "simulated" or self.simulate_dmx,
+            )
+        else:
+            self.dmx_runtime_status = DMXRuntimeStatus(
+                configured_port=self.config.dmx.port,
+                simulated=self.simulate_dmx,
+            )
+
+    def _update_recording_state_unlocked(self) -> None:
+        """Copy recording status into UI state. Caller must hold _state_lock."""
+        if self.audio_analyzer and hasattr(self.audio_analyzer, "get_recording_status"):
+            status = self.audio_analyzer.get_recording_status()
+            self.recording_state = RecordingState(
+                recording=bool(status.get("recording", False)),
+                has_recording=bool(status.get("has_recording", False)),
+                duration=float(status.get("duration") or 0.0),
+                max_duration=float(status.get("max_duration") or 30.0),
+                sample_rate=int(status.get("sample_rate") or 0),
+                channels=int(status.get("channels") or 1),
+                peak=float(status.get("peak") or 0.0),
+                rms=float(status.get("rms") or 0.0),
+                clipped_samples=int(status.get("clipped_samples") or 0),
+                source=str(status.get("source") or ""),
+                error="",
+            )
+        elif not self._last_recording_data_url:
+            self.recording_state = RecordingState()
+
+    def _start_audio_monitor(self) -> bool:
+        """Start an audio-only monitor for recording and diagnostics."""
+        if self.audio_analyzer:
+            return True
+
+        logger.info("Starting audio monitor")
+        self.audio_analyzer = create_audio_analyzer(
+            simulate=self.simulate_audio,
+            device_name=self.config.audio.device_name,
+            input_mode=self.config.audio.fallback_mode
+        )
+
+        if not self.audio_analyzer.start():
+            self.status_message = "Audio monitor failed"
+            self.audio_analyzer = None
+            with self._state_lock:
+                self._update_runtime_status_unlocked()
+            return False
+
+        self.audio_analyzer.set_gain(self.config.effects.audio_gain)
+        self._audio_monitoring = True
+        self._audio_monitor_thread = threading.Thread(target=self._audio_monitor_loop, daemon=True)
+        self._audio_monitor_thread.start()
+        self.status_message = "Audio check running"
+        return True
+
+    def _stop_audio_monitor(self) -> None:
+        """Stop the audio-only monitor if it is active."""
+        self._audio_monitoring = False
+        if self._audio_monitor_thread:
+            self._audio_monitor_thread.join(timeout=2.0)
+            self._audio_monitor_thread = None
+
+        if self.audio_analyzer and not self.running:
+            logger.info("Stopping audio monitor")
+            self.audio_analyzer.stop()
+            self.audio_analyzer = None
+
+        if not self.running:
+            self.status_message = "Stopped"
+        with self._state_lock:
+            self._update_runtime_status_unlocked()
+
+    def _audio_monitor_loop(self) -> None:
+        """Audio-only update loop used by the recorder when the show is stopped."""
+        while self._audio_monitoring and not self.running:
+            if self.audio_analyzer:
+                data = self.audio_analyzer.get_data()
+                with self._state_lock:
+                    self._copy_audio_data_to_state_unlocked(data)
+                    self._update_task_status_unlocked()
+                    self._update_runtime_status_unlocked()
+                    self._update_recording_state_unlocked()
+            time.sleep(0.025)
+
+    def refresh_runtime_status(self) -> None:
+        """Refresh status snapshots for polling UI components."""
+        with self._state_lock:
+            self._update_runtime_status_unlocked()
+            self._update_recording_state_unlocked()
     
     def start_show(self) -> bool:
         """Start the light show."""
@@ -123,6 +359,9 @@ class AppState:
             logger.warning("No fixtures configured!")
             self.status_message = "No fixtures configured!"
             return False
+
+        if self._audio_monitoring:
+            self._stop_audio_monitor()
         
         # Initialize DMX
         logger.info(f"Simulate DMX: {self.simulate_dmx}")
@@ -175,6 +414,9 @@ class AppState:
         
         self.status_message = "Running"
         self.is_blackout = False
+        with self._state_lock:
+            self._update_runtime_status_unlocked()
+            self._update_recording_state_unlocked()
         logger.info("SHOW RUNNING")
         
         return True
@@ -236,6 +478,8 @@ class AppState:
         self.is_blackout = False
         self.fixture_states = {}
         self.dmx_channels = [0] * 512
+        with self._state_lock:
+            self._update_runtime_status_unlocked()
         
         logger.info("=" * 50)
         logger.info("SHOW STOPPED")
@@ -263,36 +507,17 @@ class AppState:
                 
                 # Update shared state (thread-safe)
                 with self._state_lock:
-                    self.current_analysis = data
+                    self._copy_audio_data_to_state_unlocked(data)
                     self.fixture_states = fixture_states
-                    
-                    # Update audio state for UI binding
-                    self.audio_state.energy = data.features.energy
-                    self.audio_state.bass = data.features.bass
-                    self.audio_state.mid = data.features.mid
-                    self.audio_state.high = data.features.high
-                    self.audio_state.tempo = data.features.tempo
-                    self.audio_state.beat_position = data.beat_position
-                    self.audio_state.danceability = data.features.danceability
-                    self.audio_state.valence = data.features.valence
-                    self.audio_state.track_name = data.track_name or "System Audio"
-                    self.audio_state.artist_name = data.artist_name or ""
-                    self.audio_state.album_colors = data.album_colors or []
-                    self.audio_state.spectrum = list(data.spectrum) if data.spectrum else []
-                    self.audio_state.onset_history = list(data.onset_history) if data.onset_history else []
                     
                     # Update DMX channels
                     if self.dmx_controller:
                         self.dmx_channels = list(self.dmx_controller.get_all_channels())
                     
                     # Update task status
-                    task_status = self.audio_analyzer.get_task_status()
-                    self.task_status.madmom_status = task_status.get("madmom_status", "Unknown")
-                    self.task_status.madmom_processing = task_status.get("madmom_processing", False)
-                    self.task_status.madmom_available = task_status.get("madmom_available", False)
-                    self.task_status.progress = task_status.get("progress", 0.0)
-                    self.task_status.buffer_duration = task_status.get("buffer_duration", 0.0)
-                    self.task_status.time_until_next = task_status.get("time_until_next", 0.0)
+                    self._update_task_status_unlocked()
+                    self._update_runtime_status_unlocked()
+                    self._update_recording_state_unlocked()
                 
                 # FPS tracking
                 self._effects_fps_count += 1
@@ -325,6 +550,87 @@ class AppState:
         self.config.effects.audio_gain = gain
         if self.audio_analyzer:
             self.audio_analyzer.set_gain(gain)
+
+    def start_audio_recording(self) -> tuple[bool, str]:
+        """Start a diagnostic recording from the selected audio input."""
+        self._last_recording_data_url = ""
+        self._recording_started_monitor = False
+
+        if not self.audio_analyzer:
+            if not self._start_audio_monitor():
+                with self._state_lock:
+                    self.recording_state.error = "Could not start audio input"
+                return False, "Could not start audio input"
+            self._recording_started_monitor = True
+
+        if not hasattr(self.audio_analyzer, "start_recording"):
+            return False, "Audio input does not support recording"
+
+        if not self.audio_analyzer.start_recording():
+            with self._state_lock:
+                self._update_runtime_status_unlocked()
+                self.recording_state.error = "Audio input is not running"
+            return False, "Audio input is not running"
+
+        with self._state_lock:
+            self._update_recording_state_unlocked()
+            self._update_runtime_status_unlocked()
+        return True, "Recording started"
+
+    def stop_audio_recording(self) -> tuple[bool, str]:
+        """Stop the diagnostic recording and keep a browser-playable WAV."""
+        if not self.audio_analyzer or not hasattr(self.audio_analyzer, "stop_recording"):
+            return False, "No active audio recording"
+
+        status = self.audio_analyzer.stop_recording()
+        data_url = ""
+        if hasattr(self.audio_analyzer, "get_recording_data_url"):
+            data_url = self.audio_analyzer.get_recording_data_url()
+        self._last_recording_data_url = data_url
+
+        source = str(status.get("source") or self.audio_runtime_status.device_name)
+        recording_state = RecordingState(
+            recording=False,
+            has_recording=bool(status.get("has_recording", False)),
+            duration=float(status.get("duration") or 0.0),
+            max_duration=float(status.get("max_duration") or 30.0),
+            sample_rate=int(status.get("sample_rate") or 0),
+            channels=int(status.get("channels") or 1),
+            peak=float(status.get("peak") or 0.0),
+            rms=float(status.get("rms") or 0.0),
+            clipped_samples=int(status.get("clipped_samples") or 0),
+            source=source,
+            error="" if data_url else "No audio was captured",
+        )
+
+        if self._recording_started_monitor:
+            self._stop_audio_monitor()
+            self._recording_started_monitor = False
+
+        with self._state_lock:
+            self.recording_state = recording_state
+            self._update_runtime_status_unlocked()
+
+        if not data_url:
+            return False, "No audio was captured"
+        return True, "Recording ready"
+
+    def clear_audio_recording(self) -> None:
+        """Clear the current diagnostic recording."""
+        if self.audio_analyzer and hasattr(self.audio_analyzer, "clear_recording"):
+            self.audio_analyzer.clear_recording()
+        self._last_recording_data_url = ""
+        self._recording_started_monitor = False
+        with self._state_lock:
+            self.recording_state = RecordingState()
+
+    def get_audio_recording_data_url(self) -> str:
+        """Get the latest diagnostic recording data URL."""
+        if self._last_recording_data_url:
+            return self._last_recording_data_url
+        if self.audio_analyzer and hasattr(self.audio_analyzer, "get_recording_data_url"):
+            return self.audio_analyzer.get_recording_data_url()
+        return ""
 
 
 # Global application state instance
