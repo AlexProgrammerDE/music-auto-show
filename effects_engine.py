@@ -38,6 +38,37 @@ from visualization_modes import (
 from movement_modes import apply_movement
 
 
+DIMMER_CHANNEL_TYPES = (
+    ChannelType.INTENSITY,
+    ChannelType.INTENSITY_DIMMER,
+    ChannelType.INTENSITY_MASTER_DIMMER,
+)
+
+COLOR_CHANNEL_TYPES = (
+    ChannelType.INTENSITY_RED,
+    ChannelType.INTENSITY_GREEN,
+    ChannelType.INTENSITY_BLUE,
+    ChannelType.INTENSITY_WHITE,
+    ChannelType.INTENSITY_AMBER,
+    ChannelType.INTENSITY_UV,
+    ChannelType.INTENSITY_CYAN,
+    ChannelType.INTENSITY_MAGENTA,
+    ChannelType.INTENSITY_YELLOW,
+)
+
+COLOR_STATE_ATTRS = (
+    "red",
+    "green",
+    "blue",
+    "white",
+    "amber",
+    "uv",
+    "cyan",
+    "magenta",
+    "yellow",
+)
+
+
 @dataclass
 class FixtureState:
     """Current state of a fixture - all possible channel values."""
@@ -300,6 +331,9 @@ class EffectsEngine:
         if self.config.effects.movement_enabled:
             apply_movement(self, data, beat_triggered, bar_triggered)
         
+        if self.config.effects.force_max_brightness:
+            self._apply_force_max_brightness()
+
         # Apply smoothing and output
         self._apply_smoothing()
         self._output_to_dmx()
@@ -375,6 +409,62 @@ class EffectsEngine:
             if effect_channel:
                 state.effect = self._get_rotation_value_for_channel(effect_channel)
     
+    def _apply_force_max_brightness(self) -> None:
+        """Raise active fixture output to the configured brightness cap."""
+        for fixture in self.config.fixtures:
+            state = self._states[fixture.name]
+            max_dimmer = int(255 * fixture.intensity_scale * self.config.effects.intensity)
+            max_dimmer = max(0, min(255, max_dimmer))
+
+            if max_dimmer <= 0:
+                state.dimmer = 0
+                self._scale_color_channels(state, 0)
+                continue
+
+            profile = self._get_profile(fixture)
+            channels = fixture.get_channels(profile)
+            has_dimmer = any(
+                ch.enabled
+                and ch.fixed_value is None
+                and ch.channel_type in DIMMER_CHANNEL_TYPES
+                for ch in channels
+            )
+            has_color = any(
+                ch.enabled
+                and ch.fixed_value is None
+                and ch.channel_type in COLOR_CHANNEL_TYPES
+                for ch in channels
+            )
+
+            color_active = self._max_color_channel(state) > 0
+            active = color_active or state.dimmer > 0 or state.color_macro > 0
+            if not active:
+                continue
+
+            if has_dimmer:
+                state.dimmer = max_dimmer
+
+            if has_color and color_active:
+                color_target = 255 if has_dimmer else max_dimmer
+                self._scale_color_channels(state, color_target)
+
+    def _scale_color_channels(self, state: FixtureState, target_max: int) -> None:
+        """Scale color channels to a target peak while preserving color balance."""
+        current_max = self._max_color_channel(state)
+        target_max = max(0, min(255, target_max))
+
+        if current_max <= 0:
+            return
+
+        scale = target_max / current_max
+        for attr in COLOR_STATE_ATTRS:
+            value = getattr(state, attr)
+            setattr(state, attr, max(0, min(255, int(value * scale))))
+
+    def _max_color_channel(self, state: FixtureState) -> int:
+        """Return the strongest color/intensity channel currently active."""
+        return max(getattr(state, attr) for attr in COLOR_STATE_ATTRS)
+
     def _get_strobe_value(self, data: AnalysisData, beat_triggered: bool) -> int:
         """
         Get Channel 2 (Strobe) value.

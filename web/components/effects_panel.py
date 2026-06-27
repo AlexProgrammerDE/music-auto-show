@@ -91,6 +91,12 @@ class EffectsPanel:
                     value=app_state.config.effects.strobe_on_drop,
                     on_change=lambda e: self._set_config('strobe_on_drop', e.value)
                 ).classes('mt-2')
+
+                ui.checkbox(
+                    'Force Max Brightness',
+                    value=app_state.config.effects.force_max_brightness,
+                    on_change=lambda e: self._set_config('force_max_brightness', e.value)
+                )
         
         # Movement settings
         with ui.expansion('Movement', icon='open_with').classes('w-full'):

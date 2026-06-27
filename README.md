@@ -169,6 +169,7 @@ Configuration is stored as JSON. Example structure:
   "effects": {
     "mode": "rainbow_wave",
     "intensity": 0.8,
+    "force_max_brightness": false,
     "color_speed": 1.0,
     "beat_sensitivity": 0.5,
     "smooth_factor": 0.3,
@@ -222,6 +223,8 @@ Configuration is stored as JSON. Example structure:
 | `rainbow_wave` | Rainbow effect waves across fixtures |
 | `strobe_beat` | Strobe flash on beats |
 | `random_flash` | Random fixtures flash on beats |
+
+Set `force_max_brightness` to `true` to keep active fixtures at their configured maximum brightness while effects still control color, movement, strobe, and fixture selection.
 
 ## Audio Analysis Features
 

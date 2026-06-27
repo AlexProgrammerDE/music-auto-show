@@ -472,6 +472,10 @@ class EffectsConfig(BaseModel):
     """Global effects configuration."""
     mode: VisualizationMode = Field(default=VisualizationMode.ENERGY)
     intensity: float = Field(default=1.0, ge=0.0, le=1.0)
+    force_max_brightness: bool = Field(
+        default=False,
+        description="Keep active fixtures at their configured maximum brightness",
+    )
     audio_gain: float = Field(default=1.0, ge=0.1, le=5.0, description="Audio input gain/sensitivity multiplier")
     color_speed: float = Field(default=1.0, ge=0.1, le=10.0)
     beat_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0)
