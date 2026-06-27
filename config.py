@@ -238,8 +238,10 @@ class AudioDeviceInfo(BaseModel):
     """Information about an audio input device."""
     index: int = Field(..., description="Device index for pyaudio")
     name: str = Field(..., description="Device name")
+    source_name: str = Field(default="", description="Backend source name for routed capture")
     device_type: AudioDeviceType = Field(default=AudioDeviceType.UNKNOWN)
     channels: int = Field(default=2, ge=1)
+    output_channels: int = Field(default=0, ge=0)
     sample_rate: int = Field(default=44100)
     host_api: str = Field(default="", description="Host API name (e.g., WASAPI, ALSA, CoreAudio)")
     is_default: bool = Field(default=False, description="Is this the system default input")

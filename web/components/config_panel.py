@@ -11,11 +11,11 @@ from audio_devices import list_audio_devices, AudioDeviceInfo
 
 # Order for displaying device types in dropdown
 DEVICE_TYPE_ORDER = [
+    AudioDeviceType.MICROPHONE,
+    AudioDeviceType.LINE_IN,
     AudioDeviceType.LOOPBACK,
     AudioDeviceType.MONITOR,
     AudioDeviceType.VIRTUAL,
-    AudioDeviceType.MICROPHONE,
-    AudioDeviceType.LINE_IN,
     AudioDeviceType.UNKNOWN,
 ]
 
@@ -37,7 +37,7 @@ class ConfigPanel:
         self._devices: list[AudioDeviceInfo] = []
         self._device_select: Optional[ui.select] = None
         self._device_info_label: Optional[ui.label] = None
-        # Map display name -> device name (for storage)
+        # Map display name -> persisted device key.
         self._display_to_name: dict[str, str] = {}
         self._create_ui()
     
@@ -144,6 +144,7 @@ class ConfigPanel:
         # Build options list with type prefixes, ordered by type
         options: list[str] = ['Auto (use fallback mode)']
         self._display_to_name = {'Auto (use fallback mode)': ''}
+        device_key_to_display = {'': 'Auto (use fallback mode)'}
         
         for device_type in DEVICE_TYPE_ORDER:
             if device_type not in grouped:
@@ -165,7 +166,12 @@ class ConfigPanel:
                 
                 display = f"{prefix} {device.name}{suffix}"
                 options.append(display)
-                self._display_to_name[display] = device.name
+                stored_name = device.source_name or device.name
+                self._display_to_name[display] = stored_name
+                device_key_to_display[stored_name] = display
+                device_key_to_display[device.name] = display
+                if device.source_name:
+                    device_key_to_display[device.source_name] = display
         
         # Update select options
         if self._device_select:
@@ -176,12 +182,9 @@ class ConfigPanel:
             current_display = 'Auto (use fallback mode)'
             
             if current_device:
-                # Find display name for current device
-                for display, name in self._display_to_name.items():
-                    if name == current_device:
-                        current_display = display
-                        break
-                else:
+                # Find display name for current device or older friendly-name configs.
+                current_display = device_key_to_display.get(current_device, current_display)
+                if current_display == 'Auto (use fallback mode)':
                     # Device not found - show warning in info label
                     if self._device_info_label:
                         self._device_info_label.text = f"Saved device not found: {current_device}"
@@ -213,7 +216,7 @@ class ConfigPanel:
         
         # Find the device info
         for device in self._devices:
-            if device.name == device_name:
+            if device.name == device_name or device.source_name == device_name:
                 type_name = device.device_type.value.replace('_', ' ').title()
                 self._device_info_label.text = (
                     f"{type_name} | {device.channels}ch @ {device.sample_rate}Hz | {device.host_api}"

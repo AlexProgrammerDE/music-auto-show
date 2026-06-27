@@ -15,6 +15,7 @@ import time
 import base64
 import io
 import wave
+import subprocess
 import numpy as np
 from typing import Optional, Callable
 from dataclasses import dataclass, field
@@ -183,6 +184,8 @@ class AudioAnalyzer:
         
         self._pyaudio: Optional[pyaudio.PyAudio] = None
         self._stream = None
+        self._capture_process: Optional[subprocess.Popen] = None
+        self._capture_thread: Optional[threading.Thread] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         
@@ -522,19 +525,23 @@ class AudioAnalyzer:
             # Setup FFT frequency bins
             self._freq_bins = np.fft.rfftfreq(self._fft_size, 1.0 / self.sample_rate)
             
-            # Open audio stream
-            self._stream = self._pyaudio.open(
-                format=pyaudio.paFloat32,
-                channels=channels,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.buffer_size,
-                stream_callback=self._audio_callback
-            )
-            
-            self._running = True
-            self._stream.start_stream()
+            # Open audio stream. PipeWire/PulseAudio monitor sources need direct
+            # source routing, which PyAudio's index API cannot express.
+            if device_info and getattr(device_info, "source_name", ""):
+                self._start_pulse_source_capture(device_info.source_name, channels)
+            else:
+                self._stream = self._pyaudio.open(
+                    format=pyaudio.paFloat32,
+                    channels=channels,
+                    rate=self.sample_rate,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=self.buffer_size,
+                    stream_callback=self._audio_callback
+                )
+                
+                self._running = True
+                self._stream.start_stream()
             
             # Start media info provider (for track name display)
             if self._media_info_provider:
@@ -565,11 +572,15 @@ class AudioAnalyzer:
             self._madmom_executor.shutdown(wait=False)
             self._madmom_executor = None
         
+        self._cleanup()
+
+        if self._capture_thread:
+            self._capture_thread.join(timeout=2.0)
+            self._capture_thread = None
+
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
-        
-        self._cleanup()
     
     def _cleanup(self) -> None:
         """Clean up audio resources."""
@@ -580,6 +591,16 @@ class AudioAnalyzer:
             except Exception:
                 pass
             self._stream = None
+
+        if self._capture_process:
+            try:
+                self._capture_process.terminate()
+                self._capture_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self._capture_process.kill()
+            except Exception:
+                pass
+            self._capture_process = None
         
         if self._pyaudio:
             try:
@@ -587,6 +608,71 @@ class AudioAnalyzer:
             except Exception:
                 pass
             self._pyaudio = None
+
+    def _start_pulse_source_capture(self, source_name: str, channels: int) -> None:
+        """Start a PulseAudio/PipeWire capture process for a specific source."""
+        command = [
+            "parec",
+            "--record",
+            "--raw",
+            "--format=float32le",
+            f"--rate={self.sample_rate}",
+            f"--channels={channels}",
+            f"--device={source_name}",
+            "--client-name=Music Auto Show",
+            "--stream-name=Music Auto Show audio monitor",
+        ]
+
+        self._capture_process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        self._running = True
+        self._capture_thread = threading.Thread(
+            target=self._pulse_capture_loop,
+            args=(channels,),
+            daemon=True,
+        )
+        self._capture_thread.start()
+
+    def _pulse_capture_loop(self, channels: int) -> None:
+        """Read float32 PCM from a specific PulseAudio/PipeWire source."""
+        process = self._capture_process
+        if not process or not process.stdout:
+            self._last_error = "PulseAudio/PipeWire capture process did not start"
+            self._running = False
+            return
+
+        bytes_per_sample = 4
+        bytes_per_frame = max(1, channels) * bytes_per_sample
+        chunk_size = self.buffer_size * bytes_per_frame
+
+        while self._running:
+            try:
+                chunk = process.stdout.read(chunk_size)
+            except Exception as e:
+                self._last_error = str(e)
+                break
+
+            if not chunk:
+                if self._running:
+                    self._last_error = "PulseAudio/PipeWire capture process ended"
+                break
+
+            usable_bytes = len(chunk) - (len(chunk) % bytes_per_frame)
+            if usable_bytes <= 0:
+                continue
+
+            audio_data = np.frombuffer(chunk[:usable_bytes], dtype=np.float32)
+            if channels > 1 and len(audio_data) >= channels:
+                audio_data = audio_data.reshape(-1, channels).mean(axis=1)
+
+            self._capture_recording_samples(audio_data)
+            self._process_audio(audio_data)
+
+        if self._running:
+            self._running = False
     
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - process incoming audio data."""
