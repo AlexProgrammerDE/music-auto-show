@@ -39,6 +39,7 @@ class AudioState:
     waveform: list[float] = field(default_factory=list)
     spectrum: list[float] = field(default_factory=list)
     spectrogram: list[list[float]] = field(default_factory=list)
+    spectrogram_sequence: int = 0
     onset_history: list[float] = field(default_factory=list)
 
 
@@ -194,6 +195,7 @@ class AppState:
         now = time.time()
         if data.spectrogram and now - self._last_spectrogram_state_copy >= 0.1:
             self.audio_state.spectrogram = [list(frame) for frame in data.spectrogram]
+            self.audio_state.spectrogram_sequence += 1
             self._last_spectrogram_state_copy = now
         self.audio_state.onset_history = list(data.onset_history) if data.onset_history else []
 
@@ -500,7 +502,10 @@ class AppState:
         while self.running:
             if self.effects_engine and self.audio_analyzer:
                 # Get audio analysis
-                data = self.audio_analyzer.get_data()
+                include_spectrogram = (
+                    time.time() - self._last_spectrogram_state_copy >= 0.1
+                )
+                data = self.audio_analyzer.get_data(include_spectrogram=include_spectrogram)
                 
                 # Process effects
                 fixture_states = self.effects_engine.process(data)

@@ -1304,7 +1304,7 @@ class AudioAnalyzer:
             
             time.sleep(0.025)  # 40 Hz update rate
     
-    def get_data(self) -> AnalysisData:
+    def get_data(self, include_spectrogram: bool = True) -> AnalysisData:
         """Get current analysis data."""
         with self._lock:
             return AnalysisData(
@@ -1333,7 +1333,11 @@ class AudioAnalyzer:
                 album_colors=list(self._album_colors),
                 waveform=list(self._data.waveform),
                 spectrum=list(self._data.spectrum),
-                spectrogram=[list(frame) for frame in self._data.spectrogram],
+                spectrogram=(
+                    [list(frame) for frame in self._data.spectrogram]
+                    if include_spectrogram
+                    else []
+                ),
                 onset_history=list(self._data.onset_history)
             )
     

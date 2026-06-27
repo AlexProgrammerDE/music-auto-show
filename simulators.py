@@ -199,7 +199,7 @@ class SimulatedAudioAnalyzer:
             self._thread = None
         logger.info("Simulated audio analyzer stopped")
     
-    def get_data(self):
+    def get_data(self, include_spectrogram: bool = True):
         """Get current analysis data."""
         AnalysisData, AudioFeatures = _get_analysis_classes()
         with self._lock:
@@ -229,7 +229,11 @@ class SimulatedAudioAnalyzer:
                 album_colors=list(self._data.album_colors),
                 waveform=list(self._data.waveform) if hasattr(self._data, 'waveform') else [],
                 spectrum=list(self._data.spectrum) if hasattr(self._data, 'spectrum') else [],
-                spectrogram=[list(frame) for frame in self._data.spectrogram] if hasattr(self._data, 'spectrogram') else [],
+                spectrogram=(
+                    [list(frame) for frame in self._data.spectrogram]
+                    if include_spectrogram and hasattr(self._data, 'spectrogram')
+                    else []
+                ),
                 onset_history=list(self._data.onset_history) if hasattr(self._data, 'onset_history') else []
             )
     

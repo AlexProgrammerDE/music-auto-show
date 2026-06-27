@@ -32,6 +32,8 @@ class AudioVisualizer:
     def __init__(self):
         self._canvas_id = f'audio-viz-{id(self)}'
         self._html = None
+        self._sent_history = False
+        self._last_spectrogram_sequence = -1
         self._create_ui()
 
     def _create_ui(self) -> None:
@@ -39,7 +41,7 @@ class AudioVisualizer:
         ui.add_body_html(self._draw_script())
         self._html = ui.html(self._canvas_html(), sanitize=False).classes('w-full')
         self._html.style(f'height: {self.TOTAL_HEIGHT}px;background:#111111;')
-        ui.timer(0.1, self._update_canvas)
+        ui.timer(0.05, self._update_canvas)
         self._update_canvas()
 
     def _update_canvas(self) -> None:
@@ -52,7 +54,7 @@ class AudioVisualizer:
 
     def _build_payload(self) -> dict[str, Any]:
         state = app_state.audio_state
-        return {
+        payload: dict[str, Any] = {
             'width': self.TOTAL_WIDTH,
             'height': self.TOTAL_HEIGHT,
             'plotX': self.PLOT_X,
@@ -65,7 +67,7 @@ class AudioVisualizer:
             'beatHeight': self.BEAT_HEIGHT,
             'waveformY': self.WAVEFORM_Y,
             'waveformHeight': self.WAVEFORM_HEIGHT,
-            'frames': self._sample_frames(state.spectrogram),
+            'maxColumns': self.MAX_COLUMNS,
             'waveform': self._quantize_values(state.waveform[-140:]),
             'energy': self._quantize_value(state.energy),
             'bass': self._quantize_value(state.bass),
@@ -74,6 +76,17 @@ class AudioVisualizer:
             'tempo': round(state.tempo),
             'beatPosition': self._quantize_value(state.beat_position),
         }
+
+        if not self._sent_history:
+            payload['frames'] = self._sample_frames(state.spectrogram)
+            self._sent_history = True
+            self._last_spectrogram_sequence = state.spectrogram_sequence
+        elif state.spectrogram_sequence != self._last_spectrogram_sequence:
+            if state.spectrogram:
+                payload['frame'] = self._sample_bins(state.spectrogram[-1])
+            self._last_spectrogram_sequence = state.spectrogram_sequence
+
+        return payload
 
     def _sample_frames(self, frames: list[list[float]]) -> list[list[int]]:
         if not frames:
@@ -116,7 +129,40 @@ class AudioVisualizer:
     def _draw_script(self) -> str:
         return '''
             <script>
+            window.__musicAutoShowAudioVizState = window.__musicAutoShowAudioVizState || {};
             window.__musicAutoShowDrawAudioViz = window.__musicAutoShowDrawAudioViz || function(canvasId, payload) {
+                const state = window.__musicAutoShowAudioVizState[canvasId] || {
+                    frames: [],
+                    pending: false,
+                    payload: null,
+                    heatColors: buildHeatColors(),
+                    spectrogramCanvas: document.createElement('canvas'),
+                    spectrogramDirty: true,
+                };
+                window.__musicAutoShowAudioVizState[canvasId] = state;
+
+                if (Array.isArray(payload.frames)) {
+                    state.frames = payload.frames.slice(-payload.maxColumns);
+                    state.spectrogramDirty = true;
+                } else if (Array.isArray(payload.frame) && payload.frame.length > 0) {
+                    state.frames.push(payload.frame);
+                    if (state.frames.length > payload.maxColumns) {
+                        state.frames.splice(0, state.frames.length - payload.maxColumns);
+                    }
+                    state.spectrogramDirty = true;
+                }
+
+                state.payload = payload;
+                if (state.pending) return;
+
+                state.pending = true;
+                window.requestAnimationFrame(() => {
+                    state.pending = false;
+                    drawAudioViz(canvasId, state.payload, state);
+                });
+            };
+
+            function drawAudioViz(canvasId, payload, state) {
                 const canvas = document.getElementById(canvasId);
                 if (!canvas) return;
                 const ctx = canvas.getContext('2d', { alpha: false });
@@ -134,7 +180,7 @@ class AudioVisualizer:
                 const beatH = payload.beatHeight;
                 const waveformY = payload.waveformY;
                 const waveformH = payload.waveformHeight;
-                const frames = payload.frames || [];
+                const frames = state.frames || [];
 
                 ctx.clearRect(0, 0, W, H);
                 ctx.fillStyle = '#111111';
@@ -145,15 +191,15 @@ class AudioVisualizer:
                 ctx.fillRect(beatX, beatY, beatW, beatH);
 
                 drawGrid(ctx, plotX, plotY, plotW, plotH);
-                if (frames.length > 0) {{
-                    drawSpectrogram(ctx, frames, plotX, plotY, plotW, plotH);
-                }} else {{
+                if (frames.length > 0) {
+                    drawSpectrogramLayer(ctx, state, plotX, plotY, plotW, plotH);
+                } else {
                     drawEmpty(ctx, plotX, plotY, plotW, plotH);
-                }}
+                }
                 drawAxes(ctx, plotX, plotY, plotW, plotH);
                 drawWaveform(ctx, payload.waveform || [], plotX, waveformY, plotW, waveformH);
                 drawBeatPanel(ctx, payload, beatX, beatY, beatW);
-            };
+            }
 
             function drawGrid(ctx, x, y, w, h) {
                 ctx.strokeStyle = '#303030';
@@ -167,7 +213,36 @@ class AudioVisualizer:
                 }
             }
 
-            function drawSpectrogram(ctx, frames, x, y, w, h) {
+            function drawSpectrogramLayer(ctx, state, x, y, w, h) {
+                const layer = state.spectrogramCanvas;
+                const layerW = Math.max(1, Math.ceil(w));
+                const layerH = Math.max(1, Math.ceil(h));
+                if (layer.width !== layerW || layer.height !== layerH) {
+                    layer.width = layerW;
+                    layer.height = layerH;
+                    state.spectrogramDirty = true;
+                }
+
+                if (state.spectrogramDirty) {
+                    const layerCtx = layer.getContext('2d');
+                    if (!layerCtx) return;
+                    layerCtx.clearRect(0, 0, layerW, layerH);
+                    drawSpectrogramCells(
+                        layerCtx,
+                        state.frames,
+                        0,
+                        0,
+                        layerW,
+                        layerH,
+                        state.heatColors,
+                    );
+                    state.spectrogramDirty = false;
+                }
+
+                ctx.drawImage(layer, x, y, w, h);
+            }
+
+            function drawSpectrogramCells(ctx, frames, x, y, w, h, heatColors) {
                 const columns = frames.length;
                 const bins = frames[0]?.length || 1;
                 const cellW = w / columns;
@@ -179,7 +254,7 @@ class AudioVisualizer:
                         const value = frame[row];
                         if (value < 4) continue;
                         const py = y + (bins - row - 1) * cellH;
-                        ctx.fillStyle = heatColor(value);
+                        ctx.fillStyle = heatColors[value];
                         ctx.fillRect(px, py, cellW + 0.25, cellH + 0.25);
                     }
                 }
@@ -308,29 +383,26 @@ class AudioVisualizer:
                 ctx.fillRect(x, y + 13, width * value, 7);
             }
 
+            function buildHeatColors() {
+                const colors = [];
+                for (let value = 0; value <= 255; value += 1) {
+                    colors.push(heatColor(value));
+                }
+                return colors;
+            }
+
             function heatColor(rawValue) {
                 const value = Math.max(0, Math.min(1, rawValue / 255));
-                if (value < 0.35) return mix('#181818', '#4a4030', value / 0.35);
-                if (value < 0.72) return mix('#4a4030', '#b77633', (value - 0.35) / 0.37);
-                return mix('#b77633', '#f4dc73', (value - 0.72) / 0.28);
+                if (value < 0.35) return mix([24, 24, 24], [74, 64, 48], value / 0.35);
+                if (value < 0.72) return mix([74, 64, 48], [183, 118, 51], (value - 0.35) / 0.37);
+                return mix([183, 118, 51], [244, 220, 115], (value - 0.72) / 0.28);
             }
 
             function mix(start, end, amount) {
-                const a = hex(start);
-                const b = hex(end);
-                const r = Math.round(a[0] + (b[0] - a[0]) * amount);
-                const g = Math.round(a[1] + (b[1] - a[1]) * amount);
-                const bl = Math.round(a[2] + (b[2] - a[2]) * amount);
+                const r = Math.round(start[0] + (end[0] - start[0]) * amount);
+                const g = Math.round(start[1] + (end[1] - start[1]) * amount);
+                const bl = Math.round(start[2] + (end[2] - start[2]) * amount);
                 return `rgb(${r},${g},${bl})`;
-            }
-
-            function hex(value) {
-                const clean = value.replace('#', '');
-                return [
-                    parseInt(clean.slice(0, 2), 16),
-                    parseInt(clean.slice(2, 4), 16),
-                    parseInt(clean.slice(4, 6), 16),
-                ];
             }
             </script>
         '''
