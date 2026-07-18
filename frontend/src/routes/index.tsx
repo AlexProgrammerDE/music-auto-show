@@ -18,6 +18,7 @@ import { ConfirmCredenza } from "@/components/confirm-credenza"
 import { MediaPanel } from "@/components/media-panel"
 import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
+import { TempoPulse } from "@/components/tempo-pulse"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -61,10 +62,8 @@ export const Route = createFileRoute("/")({
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="border-r px-4 py-3 last:border-r-0">
-      <p className="font-heading text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-        {label}
-      </p>
+    <div className="border-b px-4 py-3 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
+      <p className="font-heading text-[11px] font-medium text-muted-foreground">{label}</p>
       <p className="mt-1.5 text-xl leading-none font-semibold tabular-nums">{value}</p>
       {detail ? <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p> : null}
     </div>
@@ -227,22 +226,8 @@ function LiveDashboard() {
         </div>
       </section>
 
-      <section className="grid border bg-card sm:grid-cols-2 lg:grid-cols-6">
-        <Metric
-          label="Tempo"
-          value={runtime.audioActive ? `${Math.round(audio?.tempo ?? 0)}` : "Idle"}
-          detail={runtime.audioActive ? "BPM" : "Audio stopped"}
-        />
-        <Metric
-          label="Beat"
-          value={runtime.audioActive ? `${audio?.estimatedBeat ?? 0n}` : "Idle"}
-          detail={runtime.audioActive ? `Bar ${audio?.estimatedBar ?? 0n}` : "Audio stopped"}
-        />
-        <Metric
-          label="Confidence"
-          value={runtime.audioActive ? formatPercent(audio?.beatConfidence ?? 0) : "Idle"}
-          detail={runtime.audioActive ? "BeatNet+" : "Audio stopped"}
-        />
+      <section className="grid border bg-card sm:grid-cols-3 lg:grid-cols-[minmax(24rem,3fr)_repeat(3,minmax(0,1fr))]">
+        <TempoPulse active={runtime.audioActive} analysis={audio} />
         <Metric
           label="Energy"
           value={runtime.audioActive ? formatPercent(audio?.energy ?? 0) : "Idle"}
