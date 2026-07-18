@@ -9,6 +9,10 @@ import { Toaster } from "@/components/ui/sonner.tsx"
 
 import { routeTree } from "./routeTree.gen"
 
+window.addEventListener("vite:preloadError", () => {
+  window.location.reload()
+})
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
