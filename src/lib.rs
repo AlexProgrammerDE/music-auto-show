@@ -3,6 +3,7 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod beatnet;
+pub mod checkpoint;
 pub mod config;
 pub mod dmx;
 pub mod effects;

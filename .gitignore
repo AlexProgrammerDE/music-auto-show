@@ -21,7 +21,7 @@ frontend/node_modules/
 frontend/dist/
 target/
 
-# BeatNet+ weights are user-supplied because upstream does not license
-# redistribution of the published checkpoint files.
+# BeatNet+ weights are downloaded from upstream at runtime and are not
+# redistributed with the application.
 models/*.pt
 models/*.pth

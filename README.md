@@ -19,7 +19,7 @@ Music Auto Show turns live system audio into real-time DMX lighting. A Rust serv
 
 - Rust 1.88 or newer
 - Bun 1.3.13 or a compatible newer release
-- A BeatNet+ checkpoint if neural beat tracking should be enabled
+- Network access on the first run if the BeatNet+ checkpoint is not already available
 
 Linux builds need ALSA and udev development libraries. PipeWire system-audio capture also uses `pactl` and `parec` at runtime.
 
@@ -62,9 +62,9 @@ The configuration file is created with defaults when it does not exist. The Sett
 
 ### BeatNet+ checkpoint
 
-The binary expects the checkpoint at `models/beatnet-plus.pt` by default. You can select another path in Settings. The loader accepts a PyTorch state dictionary matching the [official BeatNet+ architecture](https://github.com/mjhydri/BeatNet-Plus).
+The binary expects the checkpoint at `models/beatnet-plus.pt` by default. You can select another path in Settings. Before runtime tasks start, the application checks the configured path and downloads the official general-purpose `generic_weights.pt` checkpoint when the file is missing. The download is pinned to a known upstream revision, verified with SHA-256, and moved into place only after verification. Existing checkpoint files are never replaced.
 
-Checkpoint files are intentionally not committed or embedded. The upstream repository does not currently provide a license for redistributing its published weights, so obtain the model from the upstream project and review its terms before use. Without a compatible checkpoint, the app keeps running and reports the detector error in the live BeatNet+ panel.
+Checkpoint files are intentionally not committed or embedded. The upstream repository does not currently provide a license for redistributing its published weights, so review its terms before use. If the download fails or the configured file is incompatible, the app keeps running and reports the detector error in the live BeatNet+ panel.
 
 ## Frontend development
 
@@ -141,4 +141,4 @@ See [the migration notes](docs/migration.md) for the parity contract and design 
 
 ## License
 
-The application is MIT licensed. BeatNet+ code and checkpoint terms are governed by their upstream project and are not redistributed here.
+The application is MIT licensed. BeatNet+ code and checkpoint terms are governed by their upstream project. The checkpoint is downloaded directly from upstream at runtime and is not redistributed with this application.

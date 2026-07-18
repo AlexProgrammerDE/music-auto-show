@@ -8,7 +8,10 @@ use axum::Router;
 use clap::Parser;
 use cli::Cli;
 use music_auto_show::{
-    api::GrpcApi, app::App, assets,
+    api::GrpcApi,
+    app::App,
+    assets,
+    checkpoint::{CheckpointProvision, ensure_beatnet_checkpoint},
     proto::v1::music_auto_show_service_server::MusicAutoShowServiceServer,
 };
 use shutdown::ShutdownSignals;
@@ -35,6 +38,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind {}", cli.listen))?;
     let app_state = Arc::new(App::load(cli.config, cli.simulate).await?);
+    prepare_beatnet_checkpoint(&app_state).await;
     app_state.start_runtime().await?;
 
     let grpc = MusicAutoShowServiceServer::new(GrpcApi::new(Arc::clone(&app_state)));
@@ -106,4 +110,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
     info!("Music Auto Show stopped");
     Ok(())
+}
+
+async fn prepare_beatnet_checkpoint(app: &App) {
+    let config = app.config().await;
+    let Some(audio) = config.audio else {
+        warn!("cannot prepare BeatNet+ checkpoint because audio configuration is missing");
+        return;
+    };
+    let path = audio.beatnet_model_path;
+    match ensure_beatnet_checkpoint(&path).await {
+        Ok(CheckpointProvision::Present) => {}
+        Ok(CheckpointProvision::Downloaded) => {
+            info!(path, "downloaded BeatNet+ checkpoint");
+        }
+        Err(error) => {
+            warn!(
+                %error,
+                path,
+                "BeatNet+ checkpoint download failed; continuing with fallback analysis"
+            );
+        }
+    }
 }
