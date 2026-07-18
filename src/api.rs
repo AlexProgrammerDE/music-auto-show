@@ -50,12 +50,22 @@ impl MusicAutoShowService for GrpcApi {
         let interval =
             Duration::from_millis(request.into_inner().interval_ms.clamp(25, 5_000) as u64);
         let mut receiver = self.app.subscribe();
+        let app = Arc::clone(&self.app);
         let stream = async_stream::try_stream! {
             let initial = receiver.borrow().clone();
             yield WatchSnapshotsResponse { snapshot: Some(initial) };
             loop {
-                receiver.changed().await.map_err(|_| Status::unavailable("show state stream closed"))?;
-                tokio::time::sleep(interval).await;
+                let changed = tokio::select! {
+                    biased;
+                    () = app.wait_for_shutdown() => break,
+                    changed = receiver.changed() => changed,
+                };
+                changed.map_err(|_| Status::unavailable("show state stream closed"))?;
+                tokio::select! {
+                    biased;
+                    () = app.wait_for_shutdown() => break,
+                    () = tokio::time::sleep(interval) => {}
+                }
                 let snapshot = receiver.borrow_and_update().clone();
                 yield WatchSnapshotsResponse { snapshot: Some(snapshot) };
             }
@@ -224,4 +234,40 @@ fn internal_status(error: anyhow::Error) -> Status {
 
 fn failed_precondition(error: anyhow::Error) -> Status {
     Status::failed_precondition(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn snapshot_stream_closes_when_application_stops() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = Arc::new(
+            App::load(directory.path().join("config.json"), true)
+                .await
+                .expect("simulated application should load"),
+        );
+        let api = GrpcApi::new(Arc::clone(&app));
+        let response = api
+            .watch_snapshots(Request::new(WatchSnapshotsRequest { interval_ms: 25 }))
+            .await
+            .expect("snapshot stream should start");
+        let mut stream = response.into_inner();
+
+        let initial = stream
+            .next()
+            .await
+            .expect("snapshot stream should yield an initial item")
+            .expect("initial snapshot should be valid");
+        assert!(initial.snapshot.is_some());
+
+        app.stop_runtime().await;
+
+        let next = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("snapshot stream should stop promptly");
+        assert!(next.is_none());
+    }
 }

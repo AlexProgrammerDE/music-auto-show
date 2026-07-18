@@ -149,6 +149,10 @@ impl App {
         self.snapshot_tx.subscribe()
     }
 
+    pub(crate) async fn wait_for_shutdown(&self) {
+        self.shutdown.cancelled().await;
+    }
+
     pub async fn config(&self) -> ShowConfig {
         self.config.read().await.clone()
     }
