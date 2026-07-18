@@ -472,7 +472,7 @@ impl AudioAnalyzer {
                     model_path: model_path.into(),
                     status: "Ready".into(),
                     last_error: String::new(),
-                    buffer_duration_seconds: 0.08,
+                    buffer_duration_seconds: BeatNetPlus::TEMPO_WINDOW_SECONDS,
                 },
             ),
             Err(error) => (

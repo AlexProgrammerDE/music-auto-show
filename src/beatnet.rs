@@ -55,9 +55,12 @@ pub struct BeatNetPlus {
     feature_extractor: FeatureExtractor,
     network: BeatNetNetwork,
     decoder: ParticleDecoder,
+    rolling_tempo: RollingTempoEstimator,
 }
 
 impl BeatNetPlus {
+    pub const TEMPO_WINDOW_SECONDS: f32 = 8.0;
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BeatNetError> {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
@@ -71,6 +74,7 @@ impl BeatNetPlus {
             feature_extractor: FeatureExtractor::new()?,
             network: BeatNetNetwork::load(path)?,
             decoder: ParticleDecoder::new(),
+            rolling_tempo: RollingTempoEstimator::new(),
         })
     }
 
@@ -85,10 +89,14 @@ impl BeatNetPlus {
         let mut latest = None;
         for features in self.feature_extractor.push(samples_22khz)? {
             let activations = self.network.infer(&features);
-            latest = Some(merge_frame_estimate(
-                latest,
-                self.decoder.update(activations[0], activations[1]),
-            ));
+            if let Some(tempo) = self.rolling_tempo.push(activations) {
+                self.decoder.align_tempo(tempo);
+            }
+            let mut estimate = self.decoder.update(activations[0], activations[1]);
+            if self.rolling_tempo.has_refreshed() {
+                estimate.tempo = self.rolling_tempo.tempo().unwrap_or(0.0);
+            }
+            latest = Some(merge_frame_estimate(latest, estimate));
         }
         Ok(latest)
     }
@@ -97,6 +105,7 @@ impl BeatNetPlus {
         self.feature_extractor.reset();
         self.network.reset();
         self.decoder.reset();
+        self.rolling_tempo.reset();
     }
 }
 
@@ -434,9 +443,151 @@ struct ParticleDecoder {
     last_beat_probability: f32,
 }
 
+#[derive(Clone, Copy)]
+struct ActivationFrame {
+    beat: f32,
+    downbeat: f32,
+}
+
+struct RollingTempoEstimator {
+    activations: VecDeque<ActivationFrame>,
+    frames_since_refresh: usize,
+    has_refreshed: bool,
+    tempo: Option<f32>,
+}
+
+impl RollingTempoEstimator {
+    const REFRESH_FRAMES: usize = ParticleDecoder::FPS as usize * 2;
+    const ANALYSIS_FRAMES: usize =
+        ParticleDecoder::FPS as usize * BeatNetPlus::TEMPO_WINDOW_SECONDS as usize;
+    const RETENTION_FRAMES: usize = ParticleDecoder::FPS as usize * 10;
+    const MIN_PEAK_DISTANCE: f32 = 14.0;
+    const MAX_PEAK_DISTANCE: f32 = 55.0;
+
+    fn new() -> Self {
+        Self {
+            activations: VecDeque::with_capacity(Self::RETENTION_FRAMES),
+            frames_since_refresh: 0,
+            has_refreshed: false,
+            tempo: None,
+        }
+    }
+
+    fn push(&mut self, activations: [f32; 3]) -> Option<f32> {
+        self.activations.push_back(ActivationFrame {
+            beat: activations[0],
+            downbeat: activations[1],
+        });
+        while self.activations.len() > Self::RETENTION_FRAMES {
+            self.activations.pop_front();
+        }
+
+        self.frames_since_refresh += 1;
+        if self.frames_since_refresh < Self::REFRESH_FRAMES {
+            return None;
+        }
+        self.frames_since_refresh = 0;
+        self.has_refreshed = true;
+
+        let window: Vec<_> = self
+            .activations
+            .iter()
+            .skip(self.activations.len().saturating_sub(Self::ANALYSIS_FRAMES))
+            .copied()
+            .collect();
+        self.tempo = estimate_window_tempo(&window);
+        self.tempo
+    }
+
+    fn has_refreshed(&self) -> bool {
+        self.has_refreshed
+    }
+
+    fn tempo(&self) -> Option<f32> {
+        self.tempo
+    }
+
+    fn reset(&mut self) {
+        self.activations.clear();
+        self.frames_since_refresh = 0;
+        self.has_refreshed = false;
+        self.tempo = None;
+    }
+}
+
+fn estimate_window_tempo(activations: &[ActivationFrame]) -> Option<f32> {
+    if activations.len() < RollingTempoEstimator::REFRESH_FRAMES {
+        return None;
+    }
+
+    let strongest = activations
+        .iter()
+        .map(|activation| activation.beat.max(activation.downbeat))
+        .fold(0.0_f32, f32::max);
+    let threshold = (strongest * 0.4).max(0.1);
+    let mut peaks: Vec<(f32, f32)> = Vec::new();
+    for index in 1..activations.len().saturating_sub(1) {
+        let previous = activations[index - 1]
+            .beat
+            .max(activations[index - 1].downbeat);
+        let current = activations[index].beat.max(activations[index].downbeat);
+        let next = activations[index + 1]
+            .beat
+            .max(activations[index + 1].downbeat);
+        if current < threshold || current < previous || current <= next {
+            continue;
+        }
+
+        let curvature = previous - 2.0 * current + next;
+        let offset = if curvature.abs() > f32::EPSILON {
+            (0.5 * (previous - next) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        let position = index as f32 + offset;
+
+        if let Some((last_position, last_strength)) = peaks.last_mut()
+            && position - *last_position < RollingTempoEstimator::MIN_PEAK_DISTANCE
+        {
+            if current > *last_strength {
+                *last_position = position;
+                *last_strength = current;
+            }
+            continue;
+        }
+        peaks.push((position, current));
+    }
+
+    let mut intervals: Vec<f32> = peaks
+        .windows(2)
+        .filter_map(|peaks| {
+            let interval = peaks[1].0 - peaks[0].0;
+            (RollingTempoEstimator::MIN_PEAK_DISTANCE..=RollingTempoEstimator::MAX_PEAK_DISTANCE)
+                .contains(&interval)
+                .then_some(interval)
+        })
+        .collect();
+    if intervals.is_empty() {
+        return None;
+    }
+    intervals.sort_by(f32::total_cmp);
+    let middle = intervals.len() / 2;
+    let median_interval = if intervals.len().is_multiple_of(2) {
+        (intervals[middle - 1] + intervals[middle]) * 0.5
+    } else {
+        intervals[middle]
+    };
+    Some(
+        (60.0 * ParticleDecoder::FPS / median_interval)
+            .clamp(ParticleDecoder::MIN_TEMPO, ParticleDecoder::MAX_TEMPO),
+    )
+}
+
 impl ParticleDecoder {
     const PARTICLES: usize = 1_500;
     const FPS: f32 = 50.0;
+    const MIN_TEMPO: f32 = 55.0;
+    const MAX_TEMPO: f32 = 215.0;
 
     fn new() -> Self {
         let mut decoder = Self {
@@ -454,7 +605,7 @@ impl ParticleDecoder {
         self.particles.clear();
         for _ in 0..Self::PARTICLES {
             self.particles.push(Particle {
-                tempo: self.rng.random_range(55.0..=215.0),
+                tempo: self.rng.random_range(Self::MIN_TEMPO..=Self::MAX_TEMPO),
                 phase: self.rng.random(),
                 beat_in_bar: self.rng.random_range(0..4),
                 meter: self.rng.random_range(2..=4),
@@ -467,14 +618,22 @@ impl ParticleDecoder {
         self.last_beat_probability = 0.0;
     }
 
+    fn align_tempo(&mut self, tempo: f32) {
+        let tempo = tempo.clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
+        for particle in &mut self.particles {
+            particle.tempo =
+                (tempo + self.rng.random_range(-2.0..=2.0)).clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
+        }
+    }
+
     fn update(&mut self, beat_activation: f32, downbeat_activation: f32) -> BeatEstimate {
         let non_beat = (1.0 - beat_activation.max(downbeat_activation)).clamp(0.001, 1.0);
         let mut weight_sum = 0.0;
         let mut wrapped_weight = 0.0;
         let mut downbeat_weight = 0.0;
         for particle in &mut self.particles {
-            particle.tempo =
-                (particle.tempo + self.rng.random_range(-0.35..=0.35)).clamp(55.0, 215.0);
+            particle.tempo = (particle.tempo + self.rng.random_range(-0.35..=0.35))
+                .clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
             particle.phase += particle.tempo / 60.0 / Self::FPS;
             particle.wrapped = particle.phase >= 1.0;
             if particle.wrapped {
@@ -673,5 +832,103 @@ mod tests {
         assert_eq!(merged.tempo, 128.0);
         assert_eq!(merged.beat_position, 0.12);
         assert_eq!(merged.estimated_beat, 12);
+    }
+
+    #[test]
+    fn rolling_window_relearns_a_changed_tempo() {
+        let mut rolling = RollingTempoEstimator::new();
+        let mut phase = 0.0;
+        let mut beat_count = 0_u64;
+
+        let initial = feed_synthetic_tempo(
+            &mut rolling,
+            &mut phase,
+            &mut beat_count,
+            80.0,
+            ParticleDecoder::FPS as usize * 16,
+        );
+        let initial_tempo = *initial
+            .last()
+            .expect("the initial rolling window should produce an estimate");
+        approx::assert_abs_diff_eq!(initial_tempo, 80.0, epsilon = 5.0);
+
+        let changed = feed_synthetic_tempo(
+            &mut rolling,
+            &mut phase,
+            &mut beat_count,
+            120.0,
+            ParticleDecoder::FPS as usize * 10,
+        );
+        let changed_tempo = *changed
+            .last()
+            .expect("the changed rolling window should produce an estimate");
+        approx::assert_abs_diff_eq!(changed_tempo, 120.0, epsilon = 5.0);
+        assert!(rolling.activations.len() <= RollingTempoEstimator::RETENTION_FRAMES);
+    }
+
+    #[test]
+    fn rolling_window_refreshes_every_two_seconds_and_forgets_silence() {
+        let mut rolling = RollingTempoEstimator::new();
+        let mut phase = 0.0;
+        let mut beat_count = 0_u64;
+
+        feed_synthetic_tempo(
+            &mut rolling,
+            &mut phase,
+            &mut beat_count,
+            120.0,
+            RollingTempoEstimator::REFRESH_FRAMES - 1,
+        );
+        assert!(!rolling.has_refreshed());
+
+        rolling.push([0.01, 0.01, 0.98]);
+        assert!(rolling.has_refreshed());
+        assert!(rolling.tempo().is_some());
+
+        for _ in 0..RollingTempoEstimator::RETENTION_FRAMES {
+            rolling.push([0.01, 0.01, 0.98]);
+        }
+        assert_eq!(rolling.tempo(), None);
+    }
+
+    #[test]
+    fn rolling_tempo_recenters_live_particles() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.align_tempo(120.0);
+
+        let tempo = decoder
+            .particles
+            .iter()
+            .map(|particle| particle.tempo * particle.weight)
+            .sum::<f32>();
+        approx::assert_abs_diff_eq!(tempo, 120.0, epsilon = 0.2);
+    }
+
+    fn feed_synthetic_tempo(
+        rolling: &mut RollingTempoEstimator,
+        phase: &mut f32,
+        beat_count: &mut u64,
+        tempo: f32,
+        frames: usize,
+    ) -> Vec<f32> {
+        let mut estimates = Vec::new();
+        for _ in 0..frames {
+            *phase += tempo / 60.0 / ParticleDecoder::FPS;
+            let beat = *phase >= 1.0;
+            if beat {
+                *phase -= 1.0;
+                *beat_count += 1;
+            }
+            let downbeat = beat && (*beat_count - 1).is_multiple_of(4);
+            let activations = [
+                if beat { 0.95 } else { 0.02 },
+                if downbeat { 0.9 } else { 0.01 },
+                if beat { 0.04 } else { 0.97 },
+            ];
+            if let Some(tempo) = rolling.push(activations) {
+                estimates.push(tempo);
+            }
+        }
+        estimates
     }
 }
