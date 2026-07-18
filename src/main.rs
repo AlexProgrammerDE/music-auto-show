@@ -50,7 +50,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         .fallback(assets::serve)
         .layer(TraceLayer::new_for_http());
 
-    info!(address = %cli.listen, "Music Auto Show is ready");
+    info!("Music Auto Show is ready at http://{}", cli.listen);
 
     let server_shutdown = CancellationToken::new();
     let shutdown_requested = server_shutdown.clone();

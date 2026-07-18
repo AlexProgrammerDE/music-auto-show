@@ -66,6 +66,7 @@ import {
   showQueryKeys,
   snapshotQueryOptions,
 } from "@/lib/queries"
+import { deriveDmxPresentation } from "@/lib/runtime-status"
 import { ShowApi, runShowApi } from "@/lib/show-api"
 
 type FixtureRow = {
@@ -171,6 +172,7 @@ function FixturesPage() {
   const { data: config } = useSuspenseQuery(configQueryOptions)
   const { data: snapshot } = useSuspenseQuery(snapshotQueryOptions)
   const { data: profiles } = useSuspenseQuery(fixtureProfilesQueryOptions)
+  const dmx = deriveDmxPresentation(snapshot.dmxRuntime)
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingFixtureId, setEditingFixtureId] = useState<string>()
@@ -492,8 +494,11 @@ function FixturesPage() {
         </div>
         <div className="p-4">
           <p className="text-xs text-muted-foreground">Output status</p>
-          <Badge className="mt-1" variant={snapshot.dmxRuntime?.running ? "secondary" : "outline"}>
-            {snapshot.dmxRuntime?.running ? "Active" : "Stopped"}
+          <Badge
+            className="mt-1"
+            variant={dmx.failed ? "destructive" : dmx.active ? "secondary" : "outline"}
+          >
+            {dmx.label}
           </Badge>
         </div>
       </section>

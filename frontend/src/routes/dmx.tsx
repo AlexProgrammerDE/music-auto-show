@@ -6,6 +6,7 @@ import { SectionPanel } from "@/components/section-panel"
 import { Badge } from "@/components/ui/badge"
 import { generateN } from "@/lib/format"
 import { snapshotQueryOptions } from "@/lib/queries"
+import { deriveDmxPresentation } from "@/lib/runtime-status"
 import { cn } from "@/lib/utils"
 
 const dmxChannels = generateN(512)
@@ -20,6 +21,7 @@ function DmxUniversePage() {
   const { data: snapshot } = useSuspenseQuery(snapshotQueryOptions)
   const universe = snapshot.dmxUniverse
   const activeChannels = universe.reduce((count, value) => count + (value > 0 ? 1 : 0), 0)
+  const dmx = deriveDmxPresentation(snapshot.dmxRuntime)
 
   return (
     <div className="grid gap-5">
@@ -55,12 +57,8 @@ function DmxUniversePage() {
         title="Universe 1"
         description="Open DMX output, channels 1 through 512"
         action={
-          <Badge variant={snapshot.dmxRuntime?.isOpen ? "secondary" : "outline"}>
-            {snapshot.dmxRuntime?.simulated
-              ? "Simulated"
-              : snapshot.dmxRuntime?.isOpen
-                ? "Connected"
-                : "Offline"}
+          <Badge variant={dmx.failed ? "destructive" : dmx.active ? "secondary" : "outline"}>
+            {dmx.label}
           </Badge>
         }
       >

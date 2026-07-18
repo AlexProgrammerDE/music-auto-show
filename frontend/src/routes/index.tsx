@@ -40,6 +40,7 @@ import {
   showQueryKeys,
   snapshotQueryOptions,
 } from "@/lib/queries"
+import { deriveRuntimePresentation } from "@/lib/runtime-status"
 import { ShowApi, runShowApi } from "@/lib/show-api"
 import { cn } from "@/lib/utils"
 
@@ -85,6 +86,7 @@ function LiveDashboard() {
   const running = snapshot.runState === RunState.RUNNING
   const transitioning =
     snapshot.runState === RunState.STARTING || snapshot.runState === RunState.STOPPING
+  const runtime = deriveRuntimePresentation(snapshot)
   const audio = snapshot.audio
   const recording = snapshot.recording
   const [recordingUrl, setRecordingUrl] = useState<string>()
@@ -223,27 +225,39 @@ function LiveDashboard() {
       </section>
 
       <section className="grid border bg-card sm:grid-cols-2 lg:grid-cols-6">
-        <Metric label="Tempo" value={`${Math.round(audio?.tempo ?? 0)}`} detail="BPM" />
+        <Metric
+          label="Tempo"
+          value={runtime.audioActive ? `${Math.round(audio?.tempo ?? 0)}` : "Idle"}
+          detail={runtime.audioActive ? "BPM" : "Audio stopped"}
+        />
         <Metric
           label="Beat"
-          value={`${audio?.estimatedBeat ?? 0n}`}
-          detail={`Bar ${audio?.estimatedBar ?? 0n}`}
+          value={runtime.audioActive ? `${audio?.estimatedBeat ?? 0n}` : "Idle"}
+          detail={runtime.audioActive ? `Bar ${audio?.estimatedBar ?? 0n}` : "Audio stopped"}
         />
         <Metric
           label="Confidence"
-          value={formatPercent(audio?.beatConfidence ?? 0)}
-          detail="BeatNet+"
+          value={runtime.audioActive ? formatPercent(audio?.beatConfidence ?? 0) : "Idle"}
+          detail={runtime.audioActive ? "BeatNet+" : "Audio stopped"}
         />
-        <Metric label="Energy" value={formatPercent(audio?.energy ?? 0)} />
-        <Metric label="Effects" value={snapshot.effectsFps.toFixed(1)} detail="frames/sec" />
+        <Metric
+          label="Energy"
+          value={runtime.audioActive ? formatPercent(audio?.energy ?? 0) : "Idle"}
+          detail={runtime.audioActive ? undefined : "Audio stopped"}
+        />
+        <Metric
+          label="Effects"
+          value={runtime.effectsActive ? snapshot.effectsFps.toFixed(1) : "Idle"}
+          detail={runtime.effectsActive ? "frames/sec" : "Show stopped"}
+        />
         <Metric
           label="DMX"
-          value={`${snapshot.dmxRuntime?.sendCount ?? 0n}`}
-          detail="frames sent"
+          value={runtime.dmx.active ? `${snapshot.dmxRuntime?.sendCount ?? 0n}` : "Idle"}
+          detail={runtime.dmx.active ? "frames sent" : "Output stopped"}
         />
       </section>
 
-      <MediaPanel media={snapshot.media} tempo={audio?.tempo ?? 0} />
+      <MediaPanel active={runtime.audioActive} media={snapshot.media} tempo={audio?.tempo ?? 0} />
 
       <SectionPanel
         title="Stage view"
@@ -311,32 +325,53 @@ function LiveDashboard() {
             title="BeatNet+"
             description={snapshot.beatnet?.modelName || "Native detector"}
             action={
-              <Badge variant={snapshot.beatnet?.available ? "secondary" : "outline"}>
-                {snapshot.beatnet?.status || "Unavailable"}
+              <Badge
+                variant={
+                  runtime.beatnetFailed
+                    ? "destructive"
+                    : runtime.beatnetAvailable
+                      ? "secondary"
+                      : "outline"
+                }
+              >
+                {runtime.beatnetStatus}
               </Badge>
             }
           >
-            {!snapshot.beatnet?.available ? (
+            {runtime.beatnetFailed ? (
               <Alert variant="destructive" className="m-4 mb-0">
                 <WarningOctagonIcon aria-hidden="true" />
                 <AlertTitle>BeatNet+ is unavailable</AlertTitle>
                 <AlertDescription>
-                  {snapshot.beatnet?.status ||
-                    "Add a valid checkpoint in Audio settings. The show continues with fallback analysis."}
+                  {runtime.beatnetError} The show continues with fallback analysis.
                 </AlertDescription>
               </Alert>
             ) : null}
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
               <dt className="text-muted-foreground">Model buffer</dt>
               <dd className="text-right tabular-nums">
-                {(snapshot.beatnet?.bufferDurationSeconds ?? 0).toFixed(2)} s
+                {runtime.beatnetAvailable
+                  ? `${(snapshot.beatnet?.bufferDurationSeconds ?? 0).toFixed(2)} s`
+                  : runtime.beatnetStatus}
               </dd>
               <dt className="text-muted-foreground">Beat phase</dt>
-              <dd className="text-right tabular-nums">{formatPercent(audio?.beatPosition ?? 0)}</dd>
+              <dd className="text-right tabular-nums">
+                {runtime.beatnetAvailable
+                  ? formatPercent(audio?.beatPosition ?? 0)
+                  : runtime.beatnetFailed
+                    ? "Unavailable"
+                    : "Idle"}
+              </dd>
               <dt className="text-muted-foreground">Bar phase</dt>
-              <dd className="text-right tabular-nums">{formatPercent(audio?.barPosition ?? 0)}</dd>
+              <dd className="text-right tabular-nums">
+                {runtime.beatnetAvailable
+                  ? formatPercent(audio?.barPosition ?? 0)
+                  : runtime.beatnetFailed
+                    ? "Unavailable"
+                    : "Idle"}
+              </dd>
               <dt className="text-muted-foreground">Downbeat</dt>
-              <dd className="text-right">{audio?.downbeatDetected ? "Detected" : "Tracking"}</dd>
+              <dd className="text-right">{runtime.downbeatStatus}</dd>
             </dl>
           </SectionPanel>
 

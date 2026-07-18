@@ -194,11 +194,7 @@ impl App {
             self.start_show().await?;
         } else {
             let mut snapshot = self.snapshot.write().await;
-            snapshot.fixture_states.clear();
-            snapshot.dmx_universe =
-                vec![0; updated.dmx.as_ref().map_or(512, |dmx| dmx.universe_size) as usize];
-            snapshot.audio_runtime = Some(stopped_audio_status(&updated, self.cli_simulate));
-            snapshot.dmx_runtime = Some(stopped_dmx_status(&updated, self.cli_simulate));
+            reset_inactive_runtime_snapshot(&mut snapshot, &updated, self.cli_simulate);
             self.publish(&mut snapshot);
         }
         Ok(updated)
@@ -231,47 +227,57 @@ impl App {
         drop(snapshot);
         self.set_run_state(RunState::Starting, "Starting audio and DMX")
             .await;
-        let config = self.config.read().await.clone();
-        let dmx_config = config
-            .dmx
-            .as_ref()
-            .context("DMX configuration is missing")?;
-        let audio_config = config
-            .audio
-            .as_ref()
-            .context("audio configuration is missing")?;
-        validate_config(dmx_config)?;
-        let simulate_audio = self.cli_simulate || audio_config.simulate;
-        let simulate_dmx = self.cli_simulate || dmx_config.simulate;
+        let startup = async {
+            let config = self.config.read().await.clone();
+            let dmx_config = config
+                .dmx
+                .as_ref()
+                .context("DMX configuration is missing")?;
+            let audio_config = config
+                .audio
+                .as_ref()
+                .context("audio configuration is missing")?;
+            validate_config(dmx_config)?;
+            let simulate_audio = self.cli_simulate || audio_config.simulate;
+            let simulate_dmx = self.cli_simulate || dmx_config.simulate;
 
-        let mut effective_dmx = dmx_config.clone();
-        effective_dmx.simulate = simulate_dmx;
-        let dmx = DmxOutput::open(&effective_dmx)?;
-        let capture = if simulate_audio {
-            None
-        } else {
-            Some(start_capture(audio_config)?)
+            let mut effective_dmx = dmx_config.clone();
+            effective_dmx.simulate = simulate_dmx;
+            let dmx = DmxOutput::open(&effective_dmx)?;
+            let capture = if simulate_audio {
+                None
+            } else {
+                Some(start_capture(audio_config)?)
+            };
+            let sample_rate = capture
+                .as_ref()
+                .map_or(44_100, |capture| capture.status.sample_rate);
+            let analyzer = AudioAnalyzer::new(
+                sample_rate,
+                audio_config.gain,
+                &audio_config.beatnet_model_path,
+            );
+            let mut runtime = self.runtime.lock().await;
+            runtime.analyzer = Some(analyzer);
+            runtime.capture = capture;
+            runtime.dmx = Some(dmx);
+            runtime.effects = EffectsEngine::default();
+            runtime.simulation_started = Instant::now();
+            runtime.simulation_beat = 0;
+            runtime.simulation_was_beat = false;
+            runtime.recording_monitor = false;
+            runtime.frame_count = 0;
+            runtime.fps_started = Instant::now();
+            Ok::<_, anyhow::Error>((simulate_audio, simulate_dmx))
+        }
+        .await;
+        let (simulate_audio, simulate_dmx) = match startup {
+            Ok(simulation) => simulation,
+            Err(error) => {
+                self.fail_show(error.to_string()).await;
+                return Err(error);
+            }
         };
-        let sample_rate = capture
-            .as_ref()
-            .map_or(44_100, |capture| capture.status.sample_rate);
-        let analyzer = AudioAnalyzer::new(
-            sample_rate,
-            audio_config.gain,
-            &audio_config.beatnet_model_path,
-        );
-        let mut runtime = self.runtime.lock().await;
-        runtime.analyzer = Some(analyzer);
-        runtime.capture = capture;
-        runtime.dmx = Some(dmx);
-        runtime.effects = EffectsEngine::default();
-        runtime.simulation_started = Instant::now();
-        runtime.simulation_beat = 0;
-        runtime.simulation_was_beat = false;
-        runtime.recording_monitor = false;
-        runtime.frame_count = 0;
-        runtime.fps_started = Instant::now();
-        drop(runtime);
         self.set_run_state(RunState::Running, "Show running").await;
         info!(simulate_audio, simulate_dmx, "show started");
         Ok(self.command_result(true, "Show started").await)
@@ -293,11 +299,8 @@ impl App {
         let mut snapshot = self.snapshot.write().await;
         snapshot.run_state = RunState::Stopped as i32;
         snapshot.status_message = "Stopped".into();
-        snapshot.audio_runtime = Some(stopped_audio_status(&config, self.cli_simulate));
-        snapshot.dmx_runtime = Some(stopped_dmx_status(&config, self.cli_simulate));
-        snapshot.fixture_states.clear();
-        snapshot.dmx_universe.fill(0);
-        snapshot.effects_fps = 0.0;
+        snapshot.recording = Some(stopped_recording_status());
+        reset_inactive_runtime_snapshot(&mut snapshot, &config, self.cli_simulate);
         self.publish(&mut snapshot);
     }
 
@@ -377,21 +380,21 @@ impl App {
         let stopped_monitor = runtime.recording_monitor;
         if stopped_monitor {
             runtime.capture = None;
+            runtime.analyzer = None;
             runtime.recording_monitor = false;
         }
         drop(runtime);
-        let stopped_audio = if stopped_monitor {
-            let config = self.config.read().await.clone();
-            Some(stopped_audio_status(&config, self.cli_simulate))
+        let config = if stopped_monitor {
+            Some(self.config.read().await.clone())
         } else {
             None
         };
         if let Some(status) = recording.status.clone() {
             let mut snapshot = self.snapshot.write().await;
             snapshot.recording = Some(status);
-            if let Some(stopped_audio) = stopped_audio {
+            if let Some(config) = config {
                 snapshot.status_message = "Stopped".into();
-                snapshot.audio_runtime = Some(stopped_audio);
+                reset_inactive_runtime_snapshot(&mut snapshot, &config, self.cli_simulate);
             }
             self.publish(&mut snapshot);
         }
@@ -409,20 +412,20 @@ impl App {
         let stopped_monitor = runtime.recording_monitor;
         if stopped_monitor {
             runtime.capture = None;
+            runtime.analyzer = None;
             runtime.recording_monitor = false;
         }
         drop(runtime);
-        let stopped_audio = if stopped_monitor {
-            let config = self.config.read().await.clone();
-            Some(stopped_audio_status(&config, self.cli_simulate))
+        let config = if stopped_monitor {
+            Some(self.config.read().await.clone())
         } else {
             None
         };
         let mut snapshot = self.snapshot.write().await;
         snapshot.recording = Some(status.clone());
-        if let Some(stopped_audio) = stopped_audio {
+        if let Some(config) = config {
             snapshot.status_message = "Stopped".into();
-            snapshot.audio_runtime = Some(stopped_audio);
+            reset_inactive_runtime_snapshot(&mut snapshot, &config, self.cli_simulate);
         }
         self.publish(&mut snapshot);
         Ok(status)
@@ -625,10 +628,14 @@ impl App {
         runtime.capture = None;
         runtime.dmx = None;
         runtime.analyzer = None;
+        runtime.recording_monitor = false;
         drop(runtime);
+        let config = self.config.read().await.clone();
         let mut snapshot = self.snapshot.write().await;
         snapshot.run_state = RunState::Error as i32;
         snapshot.status_message = message;
+        snapshot.recording = Some(stopped_recording_status());
+        reset_inactive_runtime_snapshot(&mut snapshot, &config, self.cli_simulate);
         self.publish(&mut snapshot);
     }
 
@@ -823,27 +830,51 @@ fn config_filename(name: &str) -> String {
 }
 
 fn stopped_snapshot(config: &ShowConfig, simulate: bool) -> ShowSnapshot {
-    ShowSnapshot {
+    let mut snapshot = ShowSnapshot {
         captured_at_unix_ms: unix_millis(),
         run_state: RunState::Stopped as i32,
         status_message: "Stopped".into(),
-        audio: Some(Default::default()),
-        audio_runtime: Some(stopped_audio_status(config, simulate)),
-        dmx_runtime: Some(stopped_dmx_status(config, simulate)),
-        recording: Some(RecordingStatus {
-            max_duration_seconds: 30.0,
-            ..Default::default()
-        }),
-        beatnet: Some(BeatNetStatus {
-            model_name: "BeatNet+".into(),
-            status: "Idle".into(),
-            ..Default::default()
-        }),
-        media: Some(MediaInfo {
-            track_name: "No track".into(),
-            ..Default::default()
-        }),
-        dmx_universe: vec![0; config.dmx.as_ref().map_or(512, |dmx| dmx.universe_size) as usize],
+        recording: Some(stopped_recording_status()),
+        ..Default::default()
+    };
+    reset_inactive_runtime_snapshot(&mut snapshot, config, simulate);
+    snapshot
+}
+
+fn reset_inactive_runtime_snapshot(
+    snapshot: &mut ShowSnapshot,
+    config: &ShowConfig,
+    simulate: bool,
+) {
+    snapshot.audio = Some(Default::default());
+    snapshot.audio_runtime = Some(stopped_audio_status(config, simulate));
+    snapshot.dmx_runtime = Some(stopped_dmx_status(config, simulate));
+    snapshot.beatnet = Some(stopped_beatnet_status(config));
+    snapshot.media = Some(MediaInfo {
+        track_name: "No track".into(),
+        ..Default::default()
+    });
+    snapshot.fixture_states.clear();
+    snapshot.dmx_universe =
+        vec![0; config.dmx.as_ref().map_or(512, |dmx| dmx.universe_size) as usize];
+    snapshot.effects_fps = 0.0;
+}
+
+fn stopped_recording_status() -> RecordingStatus {
+    RecordingStatus {
+        max_duration_seconds: 30.0,
+        ..Default::default()
+    }
+}
+
+fn stopped_beatnet_status(config: &ShowConfig) -> BeatNetStatus {
+    BeatNetStatus {
+        model_name: "BeatNet+".into(),
+        model_path: config
+            .audio
+            .as_ref()
+            .map_or_else(String::new, |audio| audio.beatnet_model_path.clone()),
+        status: "Idle".into(),
         ..Default::default()
     }
 }
@@ -925,5 +956,57 @@ mod tests {
         let mut config = config::default_show_config(true);
         config.fixtures[1].name = config.fixtures[0].name.to_uppercase();
         assert!(normalize_config(&mut config, true).is_err());
+    }
+
+    #[test]
+    fn inactive_snapshot_clears_live_subsystem_values() {
+        let config = config::default_show_config(true);
+        let mut snapshot = stopped_snapshot(&config, true);
+        snapshot.audio.as_mut().unwrap().tempo = 128.0;
+        snapshot.beatnet.as_mut().unwrap().available = true;
+        snapshot.beatnet.as_mut().unwrap().processing = true;
+        snapshot.beatnet.as_mut().unwrap().last_error = "stale error".into();
+        snapshot.media.as_mut().unwrap().track_name = "Old track".into();
+        snapshot.fixture_states.push(Default::default());
+        snapshot.dmx_universe[0] = 255;
+        snapshot.effects_fps = 40.0;
+
+        reset_inactive_runtime_snapshot(&mut snapshot, &config, true);
+
+        assert_eq!(snapshot.audio.unwrap().tempo, 0.0);
+        let beatnet = snapshot.beatnet.unwrap();
+        assert!(!beatnet.available);
+        assert!(!beatnet.processing);
+        assert_eq!(beatnet.status, "Idle");
+        assert!(beatnet.last_error.is_empty());
+        assert_eq!(beatnet.model_path, "models/beatnet-plus.pt");
+        assert_eq!(snapshot.media.unwrap().track_name, "No track");
+        assert!(snapshot.fixture_states.is_empty());
+        assert!(snapshot.dmx_universe.iter().all(|value| *value == 0));
+        assert_eq!(snapshot.effects_fps, 0.0);
+    }
+
+    #[tokio::test]
+    async fn failed_start_leaves_a_consistent_error_snapshot() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = App::load(directory.path().join("config.json"), true)
+            .await
+            .expect("simulated application should load");
+        app.config.write().await.dmx = None;
+        app.runtime.lock().await.recording_monitor = true;
+
+        let error = app
+            .start_show()
+            .await
+            .expect_err("show startup should fail");
+
+        assert_eq!(error.to_string(), "DMX configuration is missing");
+        let snapshot = app.snapshot().await;
+        assert_eq!(snapshot.run_state, RunState::Error as i32);
+        assert_eq!(snapshot.status_message, "DMX configuration is missing");
+        assert!(!snapshot.audio_runtime.unwrap().running);
+        assert!(!snapshot.dmx_runtime.unwrap().running);
+        assert_eq!(snapshot.beatnet.unwrap().status, "Idle");
+        assert!(!app.runtime.lock().await.recording_monitor);
     }
 }

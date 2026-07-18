@@ -39,9 +39,11 @@ function Palette({ media }: { readonly media: MediaInfo | undefined }) {
 }
 
 export function MediaPanel({
+  active,
   media,
   tempo,
 }: {
+  readonly active: boolean
   readonly media: MediaInfo | undefined
   readonly tempo: number
 }) {
@@ -62,13 +64,17 @@ export function MediaPanel({
       <div className="flex items-center gap-3">
         <Palette media={media} />
         <Badge variant="outline">
-          {media?.isPlaying ? (
-            <PlayIcon weight="fill" aria-hidden="true" />
-          ) : (
-            <PauseIcon weight="fill" aria-hidden="true" />
-          )}
-          <span className="sr-only">{media?.isPlaying ? "Playing" : "Paused"}</span>
-          {Math.round(tempo)} BPM
+          {active ? (
+            media?.isPlaying ? (
+              <PlayIcon weight="fill" aria-hidden="true" />
+            ) : (
+              <PauseIcon weight="fill" aria-hidden="true" />
+            )
+          ) : null}
+          <span className="sr-only">
+            {active ? (media?.isPlaying ? "Playing" : "Paused") : "Audio stopped"}
+          </span>
+          {active ? `${Math.round(tempo)} BPM` : "Idle"}
         </Badge>
       </div>
     </section>
