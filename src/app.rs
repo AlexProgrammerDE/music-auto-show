@@ -249,9 +249,7 @@ impl App {
             } else {
                 Some(start_capture(audio_config)?)
             };
-            let sample_rate = capture
-                .as_ref()
-                .map_or(44_100, |capture| capture.status.sample_rate);
+            let sample_rate = capture.as_ref().map_or(44_100, AudioCapture::sample_rate);
             let analyzer = AudioAnalyzer::new(
                 sample_rate,
                 audio_config.gain,
@@ -338,9 +336,7 @@ impl App {
             } else {
                 Some(start_capture(audio_config)?)
             };
-            let sample_rate = capture
-                .as_ref()
-                .map_or(44_100, |capture| capture.status.sample_rate);
+            let sample_rate = capture.as_ref().map_or(44_100, AudioCapture::sample_rate);
             let analyzer = AudioAnalyzer::new(
                 sample_rate,
                 audio_config.gain,
@@ -523,10 +519,10 @@ impl App {
         } else {
             previous_effects_fps
         };
-        let audio_runtime = runtime.capture.as_ref().map_or_else(
-            || simulated_audio_status(&config),
-            |capture| capture.status.clone(),
-        );
+        let audio_runtime = runtime
+            .capture
+            .as_ref()
+            .map_or_else(|| simulated_audio_status(&config), AudioCapture::status);
         let dmx_runtime = runtime
             .dmx
             .as_ref()
@@ -599,10 +595,10 @@ impl App {
             .context("audio analyzer is not initialized")?;
         let recording = analyzer.recording_status();
         let beatnet = analyzer.beatnet_status();
-        let audio_runtime = runtime.capture.as_ref().map_or_else(
-            || simulated_audio_status(&config),
-            |capture| capture.status.clone(),
-        );
+        let audio_runtime = runtime
+            .capture
+            .as_ref()
+            .map_or_else(|| simulated_audio_status(&config), AudioCapture::status);
         drop(runtime);
         let media = self.media.read().await.clone();
         let mut snapshot = self.snapshot.write().await;
@@ -882,8 +878,8 @@ fn stopped_beatnet_status(config: &ShowConfig) -> BeatNetStatus {
 fn stopped_audio_status(config: &ShowConfig, simulate: bool) -> AudioRuntimeStatus {
     let audio = config.audio.as_ref();
     AudioRuntimeStatus {
-        configured_device_name: audio.map_or_else(String::new, |audio| audio.device_name.clone()),
         configured_mode: audio.map_or(AudioInputMode::Auto as i32, |audio| audio.mode),
+        configured_device_id: audio.map_or_else(String::new, |audio| audio.device_id.clone()),
         selection_reason: "not_started".into(),
         simulated: simulate || audio.is_some_and(|audio| audio.simulate),
         ..Default::default()

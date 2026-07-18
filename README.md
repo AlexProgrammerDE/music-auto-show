@@ -5,7 +5,7 @@ Music Auto Show turns live system audio into real-time DMX lighting. A Rust serv
 ## What is included
 
 - Native BeatNet+ inference with the official 288-feature network shape and causal beat, downbeat, tempo, phase, and bar tracking
-- System audio, microphone, PipeWire/PulseAudio monitor, and deterministic simulation inputs
+- System audio, microphone, and deterministic simulation inputs through CPAL
 - Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash visualizations
 - All movement modes from the original app, including sweeps, circles, figure eight, ballyhoo, fan, chase, strobe position, and crazy movement
 - Per-fixture channel mapping, fixed values, channel ranges, movement limits, intensity scaling, and built-in profiles
@@ -21,17 +21,17 @@ Music Auto Show turns live system audio into real-time DMX lighting. A Rust serv
 - Bun 1.3.13 or a compatible newer release
 - Network access on the first run if the BeatNet+ checkpoint is not already available
 
-Linux builds need ALSA and udev development libraries. PipeWire system-audio capture also uses `pactl` and `parec` at runtime.
+Linux builds need ALSA, udev, and PipeWire development libraries. CPAL builds its native PipeWire backend with bindgen, so Clang is also required. Audio capture does not shell out to command-line utilities.
 
 ```bash
 # Debian or Ubuntu
-sudo apt install libasound2-dev libudev-dev pkg-config pulseaudio-utils
+sudo apt install clang libasound2-dev libpipewire-0.3-dev libudev-dev pkg-config
 
 # Fedora
-sudo dnf install alsa-lib-devel systemd-devel pkgconf-pkg-config pulseaudio-utils
+sudo dnf install alsa-lib-devel clang pipewire-devel pkgconf-pkg-config systemd-devel
 
 # Arch Linux
-sudo pacman -S alsa-lib systemd-libs pkgconf libpulse
+sudo pacman -S alsa-lib clang pipewire pkgconf systemd-libs
 ```
 
 On Linux, add the hardware user to the serial-port group before using Open DMX:
@@ -57,6 +57,8 @@ For real audio and DMX:
 ```bash
 cargo run --release -- --config show.json --listen 127.0.0.1:3000
 ```
+
+On Linux, Automatic and System Audio capture the current PipeWire default sink and follow later output-device changes. CPAL falls back to its native PulseAudio host, then ALSA, when PipeWire is unavailable. Manual selections are stored as CPAL device IDs instead of display names or PulseAudio source strings.
 
 The configuration file is created with defaults when it does not exist. The Settings page can load an older JSON configuration, migrate it through Rust, save the active file, or export a portable copy.
 

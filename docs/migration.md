@@ -15,7 +15,7 @@ After:  Rust capture, BeatNet+, effects, DMX, tonic-web + Vite SPA
 
 | Surface | Rust and Vite implementation |
 | --- | --- |
-| Audio capture | CPAL device capture plus PipeWire/PulseAudio monitor capture through `pactl` and `parec` |
+| Audio capture | Native CPAL capture with stable device IDs, PipeWire or PulseAudio sink monitoring on Linux, and WASAPI loopback on Windows |
 | Simulation | Deterministic generated audio and an in-memory DMX universe |
 | Audio features | Energy, RMS, bass, mid, high, spectrum, waveform, onset history, danceability, and valence |
 | Beat tracking | Native [BeatNet+](https://github.com/mjhydri/BeatNet-Plus) feature extraction and inference with causal tempo, phase, beat, downbeat, and bar decoding |

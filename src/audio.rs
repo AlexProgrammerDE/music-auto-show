@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
-    io::Read,
-    process::{Child, Command, Stdio},
+    str::FromStr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -26,123 +25,103 @@ use crate::{
 const ANALYSIS_RATE: u32 = 44_100;
 const FFT_SIZE: usize = 1_024;
 const MAX_RECORDING_SECONDS: f32 = 30.0;
+const PIPEWIRE_DEFAULT_SINK_ID: &str = "pipewire:sink_default";
 
 pub struct AudioCapture {
     pub receiver: Receiver<Vec<f32>>,
-    pub status: AudioRuntimeStatus,
+    status: AudioRuntimeStatus,
+    stream_error: Arc<Mutex<String>>,
     _guard: CaptureGuard,
 }
 
-enum CaptureGuard {
-    Cpal {
-        running: Arc<AtomicBool>,
-        thread: Option<thread::JoinHandle<()>>,
-    },
-    Pulse {
-        child: Arc<Mutex<Child>>,
-        running: Arc<AtomicBool>,
-        thread: Option<thread::JoinHandle<()>>,
-    },
+impl AudioCapture {
+    pub fn sample_rate(&self) -> u32 {
+        self.status.sample_rate
+    }
+
+    pub fn status(&self) -> AudioRuntimeStatus {
+        let mut status = self.status.clone();
+        if let Ok(error) = self.stream_error.lock()
+            && !error.is_empty()
+        {
+            status.running = false;
+            status.last_error = error.clone();
+        }
+        status
+    }
+}
+
+struct CaptureGuard {
+    running: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
-        match self {
-            Self::Cpal { running, thread } => {
-                running.store(false, Ordering::Relaxed);
-                if let Some(thread) = thread.take() {
-                    let _ = thread.join();
-                }
-            }
-            Self::Pulse {
-                child,
-                running,
-                thread,
-            } => {
-                running.store(false, Ordering::Relaxed);
-                if let Ok(mut child) = child.lock() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                if let Some(thread) = thread.take() {
-                    let _ = thread.join();
-                }
-            }
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
     }
 }
 
 pub fn list_devices() -> Vec<AudioDevice> {
     let host = cpal::default_host();
-    let default_name = host
+    let default_id = host
         .default_input_device()
-        .and_then(|device| device.name().ok());
-    let host_name = format!("{:?}", host.id());
+        .and_then(|device| device.id().ok())
+        .map(|id| id.to_string());
+    let default_loopback_id = default_system_output(&host)
+        .and_then(|device| device.id().ok())
+        .map(|id| id.to_string());
+    let host_name = host.id().to_string();
     let mut devices = Vec::new();
-    if let Ok(inputs) = host.input_devices() {
-        for (index, device) in inputs.enumerate() {
-            let Ok(name) = device.name() else { continue };
-            let configuration = device.default_input_config().ok();
+    if let Ok(inputs) = host.devices() {
+        for device in inputs
+            .filter(|device| device.supports_input() || supports_system_output_capture(device))
+        {
+            let (Ok(id), Ok(description)) = (device.id(), device.description()) else {
+                continue;
+            };
+            let id = id.to_string();
+            let configuration = capture_stream_config(&device).ok();
             let channels = configuration
                 .as_ref()
                 .map_or(0, |config| config.channels() as u32);
             let sample_rate = configuration
                 .as_ref()
-                .map_or(0, |config| config.sample_rate().0);
-            let lowered = name.to_lowercase();
-            let device_type = if lowered.contains("monitor") || lowered.contains("loopback") {
-                "monitor"
-            } else if lowered.contains("line") {
-                "line_in"
-            } else {
-                "microphone"
-            };
+                .map_or(0, |config| config.sample_rate());
+            let output_channels = device
+                .default_output_config()
+                .ok()
+                .map_or(0, |config| config.channels() as u32);
+            let is_default_loopback = default_loopback_id.as_deref() == Some(id.as_str());
+            let name = display_device_name(&id, description.name());
             devices.push(AudioDevice {
-                id: format!("cpal:{index}"),
+                id: id.clone(),
                 name: name.clone(),
-                source_name: String::new(),
-                device_type: device_type.into(),
+                device_type: capture_device_type(&id, &description).into(),
                 channels,
-                output_channels: 0,
+                output_channels,
                 sample_rate,
                 host_api: host_name.clone(),
-                is_default: default_name.as_deref() == Some(name.as_str()),
-                is_default_loopback: false,
+                is_default: default_id.as_deref() == Some(id.as_str()),
+                is_default_loopback,
             });
         }
     }
-    for source in pulse_sources() {
-        let is_monitor = source.ends_with(".monitor");
-        if !devices.iter().any(|device| device.source_name == source) {
-            devices.push(AudioDevice {
-                id: format!("pulse:{source}"),
-                name: source.clone(),
-                source_name: source,
-                device_type: if is_monitor { "monitor" } else { "microphone" }.into(),
-                channels: 2,
-                output_channels: 0,
-                sample_rate: ANALYSIS_RATE,
-                host_api: "PipeWire/PulseAudio".into(),
-                is_default: false,
-                is_default_loopback: is_monitor,
-            });
-        }
-    }
+    devices.sort_by(|left, right| {
+        right
+            .is_default_loopback
+            .cmp(&left.is_default_loopback)
+            .then_with(|| right.is_default.cmp(&left.is_default))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
     devices
 }
 
 pub fn start_capture(config: &AudioConfig) -> Result<AudioCapture> {
     let mode = AudioInputMode::try_from(config.mode).unwrap_or(AudioInputMode::Auto);
-    if matches!(
-        mode,
-        AudioInputMode::SystemAudio | AudioInputMode::PipewireSink
-    ) || (mode == AudioInputMode::Auto
-        && !pulse_sources()
-            .iter()
-            .all(|name| !name.ends_with(".monitor")))
-    {
-        return start_pulse_capture(config, mode);
-    }
     start_cpal_capture(config, mode)
 }
 
@@ -150,24 +129,28 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     let config = config.clone();
     let running = Arc::new(AtomicBool::new(true));
     let running_thread = Arc::clone(&running);
+    let stream_error = Arc::new(Mutex::new(String::new()));
+    let stream_error_thread = Arc::clone(&stream_error);
     let (sender, receiver) = mpsc::sync_channel(32);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
         .name("cpal-audio-capture".into())
-        .spawn(move || match build_cpal_stream(&config, mode, sender) {
-            Ok((stream, status)) => {
-                if ready_sender.send(Ok(status)).is_err() {
-                    return;
+        .spawn(
+            move || match build_cpal_stream(&config, mode, sender, stream_error_thread) {
+                Ok((stream, status)) => {
+                    if ready_sender.send(Ok(status)).is_err() {
+                        return;
+                    }
+                    while running_thread.load(Ordering::Relaxed) {
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    drop(stream);
                 }
-                while running_thread.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_millis(20));
+                Err(error) => {
+                    let _ = ready_sender.send(Err(format!("{error:#}")));
                 }
-                drop(stream);
-            }
-            Err(error) => {
-                let _ = ready_sender.send(Err(format!("{error:#}")));
-            }
-        })?;
+            },
+        )?;
     let status = match ready_receiver.recv() {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
@@ -184,7 +167,8 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     Ok(AudioCapture {
         receiver,
         status,
-        _guard: CaptureGuard::Cpal {
+        stream_error,
+        _guard: CaptureGuard {
             running,
             thread: Some(thread),
         },
@@ -195,82 +179,243 @@ fn build_cpal_stream(
     config: &AudioConfig,
     mode: AudioInputMode,
     sender: mpsc::SyncSender<Vec<f32>>,
+    stream_error: Arc<Mutex<String>>,
 ) -> Result<(cpal::Stream, AudioRuntimeStatus)> {
-    let host = cpal::default_host();
-    let selected = if config.device_name.is_empty() {
-        host.default_input_device()
-    } else {
-        host.input_devices()?
-            .find(|device| device.name().is_ok_and(|name| name == config.device_name))
-            .or_else(|| host.default_input_device())
-    }
-    .context("no audio input device is available")?;
-    let name = selected.name().unwrap_or_else(|_| "Unknown input".into());
-    let supported = selected.default_input_config()?;
+    let selection = select_capture_device(config, mode)?;
+    let selected = selection.device;
+    let id = selected.id()?.to_string();
+    let description = selected.description()?;
+    let name = display_device_name(&id, description.name());
+    let supported = capture_stream_config(&selected)
+        .with_context(|| format!("audio device {name} cannot be captured"))?;
     let channels = supported.channels() as usize;
-    let sample_rate = supported.sample_rate().0;
-    let stream_config: cpal::StreamConfig = supported.clone().into();
-    let error_callback = |error| tracing::error!(%error, "audio input stream failed");
+    let sample_rate = supported.sample_rate();
+    let stream_config: cpal::StreamConfig = supported.into();
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => selected.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[f32], _| send_mono(data, channels, &sender, |sample| sample),
-            error_callback,
+            capture_error_callback(Arc::clone(&stream_error)),
             None,
         )?,
         cpal::SampleFormat::I16 => selected.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[i16], _| {
                 send_mono(data, channels, &sender, |sample| sample as f32 / 32_768.0)
             },
-            error_callback,
+            capture_error_callback(Arc::clone(&stream_error)),
             None,
         )?,
         cpal::SampleFormat::U16 => selected.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[u16], _| {
                 send_mono(data, channels, &sender, |sample| {
                     sample as f32 / 32_768.0 - 1.0
                 })
             },
-            error_callback,
+            capture_error_callback(Arc::clone(&stream_error)),
             None,
         )?,
         format => bail!("unsupported input sample format {format:?}"),
     };
     stream.play()?;
-    let missing = if !config.device_name.is_empty() && config.device_name != name {
-        config.device_name.clone()
-    } else {
-        String::new()
-    };
     Ok((
         stream,
         AudioRuntimeStatus {
-            configured_device_name: config.device_name.clone(),
             configured_mode: mode as i32,
-            actual_mode: if mode == AudioInputMode::Auto {
-                AudioInputMode::Microphone as i32
-            } else {
-                mode as i32
-            },
+            actual_mode: selection.actual_mode as i32,
             device_name: name,
-            device_type: "microphone".into(),
-            host_api: format!("{:?}", host.id()),
+            device_type: capture_device_type(&id, &description).into(),
+            host_api: selected.id()?.host().to_string(),
             channels: channels as u32,
             sample_rate,
-            selection_reason: if missing.is_empty() {
-                "configured_or_default"
-            } else {
-                "configured_device_missing_fallback"
-            }
-            .into(),
-            missing_device_name: missing,
+            selection_reason: selection.reason,
             running: true,
             last_error: String::new(),
             simulated: false,
+            configured_device_id: config.device_id.clone(),
+            device_id: id,
+            missing_device_id: selection.missing_device_id,
         },
     ))
+}
+
+struct DeviceSelection {
+    device: cpal::Device,
+    actual_mode: AudioInputMode,
+    reason: String,
+    missing_device_id: String,
+}
+
+fn select_capture_device(config: &AudioConfig, mode: AudioInputMode) -> Result<DeviceSelection> {
+    let host = cpal::default_host();
+    let mut missing_device_id = String::new();
+
+    let selected = match mode {
+        AudioInputMode::ManualDevice | AudioInputMode::PipewireSink => (!config
+            .device_id
+            .is_empty())
+        .then_some(config.device_id.as_str())
+        .and_then(|configured| match resolve_configured_device(configured) {
+            Some(device) if mode != AudioInputMode::PipewireSink || is_pipewire_sink(&device) => {
+                Some((device, "configured_device"))
+            }
+            _ => {
+                missing_device_id = config.device_id.clone();
+                None
+            }
+        })
+        .or_else(|| {
+            if mode == AudioInputMode::PipewireSink {
+                default_system_output(&host)
+                    .map(|device| (device, "default_system_output"))
+                    .or_else(|| {
+                        host.default_input_device()
+                            .map(|device| (device, "default_input"))
+                    })
+            } else {
+                host.default_input_device()
+                    .map(|device| (device, "default_input"))
+            }
+        }),
+        AudioInputMode::SystemAudio => default_system_output(&host)
+            .map(|device| (device, "default_system_output"))
+            .or_else(|| {
+                host.default_input_device()
+                    .map(|device| (device, "default_input"))
+            }),
+        AudioInputMode::Microphone => host
+            .default_input_device()
+            .map(|device| (device, "default_input")),
+        AudioInputMode::Auto | AudioInputMode::Unspecified => default_system_output(&host)
+            .map(|device| (device, "auto_default_system_output"))
+            .or_else(|| {
+                host.default_input_device()
+                    .map(|device| (device, "auto_default_input"))
+            }),
+    }
+    .context("no capturable audio device is available")?;
+
+    let actual_mode = if is_pipewire_sink(&selected.0) {
+        AudioInputMode::PipewireSink
+    } else if supports_system_output_capture(&selected.0) {
+        AudioInputMode::SystemAudio
+    } else if mode == AudioInputMode::ManualDevice {
+        AudioInputMode::ManualDevice
+    } else {
+        AudioInputMode::Microphone
+    };
+    let reason = if missing_device_id.is_empty() {
+        selected.1.to_owned()
+    } else {
+        format!("configured_device_missing_fallback_to_{}", selected.1)
+    };
+
+    Ok(DeviceSelection {
+        device: selected.0,
+        actual_mode,
+        reason,
+        missing_device_id,
+    })
+}
+
+fn resolve_configured_device(configured: &str) -> Option<cpal::Device> {
+    let id = cpal::DeviceId::from_str(configured).ok()?;
+    cpal::host_from_id(id.host())
+        .ok()
+        .and_then(|configured_host| configured_host.device_by_id(&id))
+}
+
+fn default_system_output(host: &cpal::Host) -> Option<cpal::Device> {
+    match host.id().to_string().as_str() {
+        "pipewire" => {
+            let id = cpal::DeviceId::from_str(PIPEWIRE_DEFAULT_SINK_ID).ok()?;
+            host.device_by_id(&id)
+        }
+        "pulseaudio" => {
+            let sink_id = host.default_output_device()?.id().ok()?;
+            let monitor_id =
+                cpal::DeviceId::new(sink_id.host(), format!("{}.monitor", sink_id.id()));
+            host.device_by_id(&monitor_id)
+        }
+        "wasapi" => host.default_output_device(),
+        _ => None,
+    }
+}
+
+fn is_pipewire_sink(device: &cpal::Device) -> bool {
+    let (Ok(id), Ok(description)) = (device.id(), device.description()) else {
+        return false;
+    };
+    id.host().to_string() == "pipewire"
+        && (id.id() == "sink_default" || description.direction() == cpal::DeviceDirection::Duplex)
+}
+
+fn supports_system_output_capture(device: &cpal::Device) -> bool {
+    let (Ok(id), Ok(description)) = (device.id(), device.description()) else {
+        return false;
+    };
+    match id.host().to_string().as_str() {
+        "pipewire" => {
+            id.id() == "sink_default" || description.direction() == cpal::DeviceDirection::Duplex
+        }
+        "pulseaudio" => id.id().ends_with(".monitor"),
+        "wasapi" => description.direction() == cpal::DeviceDirection::Output,
+        _ => false,
+    }
+}
+
+fn capture_stream_config(
+    device: &cpal::Device,
+) -> Result<cpal::SupportedStreamConfig, cpal::Error> {
+    if device.supports_input() {
+        device.default_input_config()
+    } else {
+        device.default_output_config()
+    }
+}
+
+fn capture_device_type(id: &str, description: &cpal::DeviceDescription) -> &'static str {
+    let system_output = (id.starts_with("pipewire:")
+        && (id == PIPEWIRE_DEFAULT_SINK_ID
+            || description.direction() == cpal::DeviceDirection::Duplex))
+        || (id.starts_with("pulseaudio:") && id.ends_with(".monitor"))
+        || (id.starts_with("wasapi:") && description.direction() == cpal::DeviceDirection::Output);
+    if system_output {
+        "monitor"
+    } else if description.interface_type() == cpal::InterfaceType::Line {
+        "line_in"
+    } else {
+        "microphone"
+    }
+}
+
+fn display_device_name(id: &str, name: &str) -> String {
+    match id {
+        PIPEWIRE_DEFAULT_SINK_ID => "Default system output".into(),
+        "pipewire:input_default" => "Default audio input".into(),
+        _ => name.into(),
+    }
+}
+
+fn capture_error_callback(
+    stream_error: Arc<Mutex<String>>,
+) -> impl FnMut(cpal::Error) + Send + 'static {
+    move |error| {
+        if matches!(
+            error.kind(),
+            cpal::ErrorKind::DeviceChanged
+                | cpal::ErrorKind::Xrun
+                | cpal::ErrorKind::RealtimeDenied
+        ) {
+            tracing::warn!(%error, "audio input stream reported a recoverable event");
+            return;
+        }
+        tracing::error!(%error, "audio input stream failed");
+        if let Ok(mut current_error) = stream_error.lock() {
+            *current_error = error.to_string();
+        }
+    }
 }
 
 fn send_mono<T: Copy>(
@@ -284,108 +429,6 @@ fn send_mono<T: Copy>(
         .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len() as f32)
         .collect();
     let _ = sender.try_send(mono);
-}
-
-fn start_pulse_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<AudioCapture> {
-    let sources = pulse_sources();
-    let source = if !config.pipewire_source_name.is_empty() {
-        sources
-            .iter()
-            .find(|source| **source == config.pipewire_source_name)
-            .cloned()
-    } else if !config.device_name.is_empty() {
-        sources
-            .iter()
-            .find(|source| source.contains(&config.device_name))
-            .cloned()
-    } else {
-        sources
-            .iter()
-            .find(|source| source.ends_with(".monitor"))
-            .cloned()
-    }
-    .context("no PipeWire/PulseAudio monitor source is available")?;
-
-    let mut child = Command::new("parec")
-        .args([
-            "--raw",
-            "--format=float32le",
-            "--rate=44100",
-            "--channels=2",
-            "--device",
-            &source,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to start parec for {source}"))?;
-    let mut stdout = child.stdout.take().context("parec did not expose stdout")?;
-    let child = Arc::new(Mutex::new(child));
-    let running = Arc::new(AtomicBool::new(true));
-    let running_thread = Arc::clone(&running);
-    let (sender, receiver) = mpsc::sync_channel(32);
-    let thread = thread::Builder::new()
-        .name("pipewire-audio-capture".into())
-        .spawn(move || {
-            let mut bytes = vec![0_u8; 8_192];
-            while running_thread.load(Ordering::Relaxed) {
-                let Ok(read) = stdout.read(&mut bytes) else {
-                    break;
-                };
-                if read == 0 {
-                    break;
-                }
-                let samples: Vec<f32> = bytes[..read - read % 8]
-                    .chunks_exact(8)
-                    .map(|stereo| {
-                        let left = f32::from_le_bytes(stereo[..4].try_into().expect("four bytes"));
-                        let right = f32::from_le_bytes(stereo[4..].try_into().expect("four bytes"));
-                        (left + right) * 0.5
-                    })
-                    .collect();
-                if sender.send(samples).is_err() {
-                    break;
-                }
-            }
-        })?;
-    Ok(AudioCapture {
-        receiver,
-        status: AudioRuntimeStatus {
-            configured_device_name: config.device_name.clone(),
-            configured_mode: mode as i32,
-            actual_mode: AudioInputMode::PipewireSink as i32,
-            device_name: source.clone(),
-            device_type: "monitor".into(),
-            host_api: "PipeWire/PulseAudio".into(),
-            channels: 2,
-            sample_rate: ANALYSIS_RATE,
-            selection_reason: "pipewire_monitor_source".into(),
-            missing_device_name: String::new(),
-            running: true,
-            last_error: String::new(),
-            simulated: false,
-        },
-        _guard: CaptureGuard::Pulse {
-            child,
-            running,
-            thread: Some(thread),
-        },
-    })
-}
-
-fn pulse_sources() -> Vec<String> {
-    Command::new("pactl")
-        .args(["list", "short", "sources"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| line.split_whitespace().nth(1).map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 pub struct AudioAnalyzer {

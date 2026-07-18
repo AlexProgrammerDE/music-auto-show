@@ -84,11 +84,10 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
         }),
         audio: Some(AudioConfig {
             mode: AudioInputMode::Auto as i32,
-            device_name: String::new(),
-            pipewire_source_name: String::new(),
             simulate,
             gain: 1.0,
             beatnet_model_path: "models/beatnet-plus.pt".into(),
+            device_id: String::new(),
         }),
         effects: Some(EffectsConfig {
             mode: VisualizationMode::Energy as i32,
@@ -501,11 +500,10 @@ fn migrate_legacy_config(mut value: Value, simulate: bool) -> Value {
             audio.insert("mode".into(), Value::String(mode.into()));
         }
         normalize_audio_mode(audio);
+        audio.remove("pipewire_source_name");
+        audio.remove("device_name");
         audio
-            .entry("pipewire_source_name")
-            .or_insert(Value::String(String::new()));
-        audio
-            .entry("device_name")
+            .entry("device_id")
             .or_insert(Value::String(String::new()));
         audio.entry("simulate").or_insert(Value::Bool(simulate));
         audio
@@ -794,6 +792,8 @@ mod tests {
             migrated["audio"]["mode"],
             AudioInputMode::SystemAudio as i32
         );
+        assert_eq!(migrated["audio"]["device_id"], "");
+        assert!(migrated["audio"].get("device_name").is_none());
         assert_eq!(
             migrated["effects"]["movement_mode"],
             MovementMode::Figure8 as i32

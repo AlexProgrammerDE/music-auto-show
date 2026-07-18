@@ -99,8 +99,7 @@ function configFormValues(config: ShowConfig) {
     dmxFps: config.dmx?.fps ?? 40,
     dmxSimulate: config.dmx?.simulate ?? false,
     audioMode: config.audio?.mode ?? AudioInputMode.AUTO,
-    audioDeviceName: config.audio?.deviceName ?? "",
-    pipewireSourceName: config.audio?.pipewireSourceName ?? "",
+    audioDeviceId: config.audio?.deviceId ?? "",
     audioSimulate: config.audio?.simulate ?? false,
     audioGain: cleanFloat(config.audio?.gain ?? 1),
     beatnetModelPath: config.audio?.beatnetModelPath || "models/beatnet-plus.pt",
@@ -221,9 +220,6 @@ function SettingsPage() {
     readonly json: string
     readonly name: string
   }>()
-  const audioDeviceNames = Array.from(new Set(audioDevices.map((device) => device.name)))
-  const audioDeviceOptions = ["Automatic", ...audioDeviceNames]
-
   const saveMutation = useMutation({
     mutationFn: (nextConfig: typeof config) =>
       runShowApi(Effect.flatMap(ShowApi, (api) => api.updateConfig(nextConfig))),
@@ -248,8 +244,7 @@ function SettingsPage() {
       })
       next.audio = create(AudioConfigSchema, {
         mode: value.audioMode,
-        deviceName: value.audioDeviceName,
-        pipewireSourceName: value.pipewireSourceName,
+        deviceId: value.audioDeviceId,
         simulate: value.audioSimulate,
         gain: value.audioGain,
         beatnetModelPath: value.beatnetModelPath,
@@ -465,53 +460,88 @@ function SettingsPage() {
                   />
                 )}
               </form.Field>
-              <form.Field name="audioDeviceName">
-                {(field) => (
-                  <Field>
-                    <FieldLabel htmlFor={field.name}>Capture device</FieldLabel>
-                    <Combobox
-                      items={audioDeviceOptions}
-                      value={field.state.value || "Automatic"}
-                      onValueChange={(value) =>
-                        field.handleChange(value === "Automatic" ? "" : (value ?? ""))
-                      }
-                    >
-                      <ComboboxInput
-                        id={field.name}
-                        name={field.name}
-                        autoComplete="off"
-                        placeholder="Search capture devices…"
-                      />
-                      <ComboboxContent>
-                        <ComboboxEmpty>No capture device found.</ComboboxEmpty>
-                        <ComboboxList>
-                          {audioDeviceOptions.map((deviceName) => (
-                            <ComboboxItem key={deviceName} value={deviceName}>
-                              {deviceName}
-                            </ComboboxItem>
-                          ))}
-                        </ComboboxList>
-                      </ComboboxContent>
-                    </Combobox>
-                  </Field>
-                )}
-              </form.Field>
-              <form.Field name="pipewireSourceName">
-                {(field) => (
-                  <Field>
-                    <FieldLabel htmlFor={field.name}>PipeWire source</FieldLabel>
-                    <Input
-                      id={field.name}
-                      name={field.name}
-                      autoComplete="off"
-                      value={field.state.value}
-                      placeholder="Default sink monitor…"
-                      onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
-                    />
-                  </Field>
-                )}
-              </form.Field>
+              <form.Subscribe selector={(state) => state.values.audioMode}>
+                {(audioMode) => {
+                  if (
+                    audioMode !== AudioInputMode.MANUAL_DEVICE &&
+                    audioMode !== AudioInputMode.PIPEWIRE_SINK
+                  ) {
+                    const description =
+                      audioMode === AudioInputMode.MICROPHONE
+                        ? "Captures the default audio input."
+                        : audioMode === AudioInputMode.SYSTEM_AUDIO
+                          ? "Captures the current default system output and follows output changes."
+                          : "Captures system output when the host supports it, then falls back to the default input."
+                    return (
+                      <Field>
+                        <FieldLabel>Capture routing</FieldLabel>
+                        <FieldDescription>{description}</FieldDescription>
+                      </Field>
+                    )
+                  }
+
+                  const automaticOption = {
+                    id: "",
+                    label:
+                      audioMode === AudioInputMode.PIPEWIRE_SINK
+                        ? "Default system output"
+                        : "Default audio input",
+                  }
+                  const deviceOptions = [
+                    automaticOption,
+                    ...audioDevices
+                      .filter(
+                        (device) =>
+                          audioMode !== AudioInputMode.PIPEWIRE_SINK ||
+                          (device.hostApi === "pipewire" && device.deviceType === "monitor"),
+                      )
+                      .map((device) => ({
+                        id: device.id,
+                        label: `${device.name} · ${device.hostApi}`,
+                      })),
+                  ]
+
+                  return (
+                    <form.Field name="audioDeviceId">
+                      {(field) => {
+                        const selected =
+                          deviceOptions.find((option) => option.id === field.state.value) ??
+                          automaticOption
+                        return (
+                          <Field>
+                            <FieldLabel htmlFor={field.name}>Capture device</FieldLabel>
+                            <Combobox
+                              items={deviceOptions}
+                              value={selected}
+                              itemToStringLabel={(option) => option.label}
+                              itemToStringValue={(option) => option.id}
+                              isItemEqualToValue={(option, value) => option.id === value.id}
+                              onValueChange={(option) => field.handleChange(option?.id ?? "")}
+                            >
+                              <ComboboxInput
+                                id={field.name}
+                                name={field.name}
+                                autoComplete="off"
+                                placeholder="Search capture devices…"
+                              />
+                              <ComboboxContent>
+                                <ComboboxEmpty>No capture device found.</ComboboxEmpty>
+                                <ComboboxList>
+                                  {deviceOptions.map((option) => (
+                                    <ComboboxItem key={option.id || "automatic"} value={option}>
+                                      {option.label}
+                                    </ComboboxItem>
+                                  ))}
+                                </ComboboxList>
+                              </ComboboxContent>
+                            </Combobox>
+                          </Field>
+                        )
+                      }}
+                    </form.Field>
+                  )
+                }}
+              </form.Subscribe>
               <form.Field name="audioGain">
                 {(field) => (
                   <Field>

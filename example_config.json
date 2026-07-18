@@ -8,8 +8,7 @@
   },
   "audio": {
     "mode": "auto",
-    "device_name": "",
-    "pipewire_source_name": "",
+    "device_id": "",
     "simulate": true,
     "gain": 1.0,
     "beatnet_model_path": "models/beatnet-plus.pt"
