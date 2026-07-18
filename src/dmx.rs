@@ -50,6 +50,7 @@ impl DmxOutput {
             .parity(Parity::None)
             .flow_control(FlowControl::None)
             .timeout(Duration::from_millis(100))
+            .exclusive(true)
             .open()
             .with_context(|| format!("failed to open DMX interface {port_name}"))?;
         let _ = port.write_request_to_send(false);
@@ -71,26 +72,10 @@ impl DmxOutput {
         })
     }
 
-    pub fn send(&mut self, universe: &[u8]) {
+    pub fn send(&mut self, universe: &[u8]) -> Result<()> {
         match self {
-            Self::Simulated { status } => {
-                status.send_count += 1;
-            }
-            Self::Serial { port, status } => match send_open_dmx(port.as_mut(), universe) {
-                Ok(()) => {
-                    status.send_count += 1;
-                    status.consecutive_errors = 0;
-                    status.last_error.clear();
-                }
-                Err(error) => {
-                    status.error_count += 1;
-                    status.consecutive_errors += 1;
-                    status.last_error = error.to_string();
-                    if status.consecutive_errors == 1 {
-                        tracing::warn!(%error, "DMX output failed");
-                    }
-                }
-            },
+            Self::Simulated { .. } => Ok(()),
+            Self::Serial { port, .. } => send_open_dmx(port.as_mut(), universe),
         }
     }
 

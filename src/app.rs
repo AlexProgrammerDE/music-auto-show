@@ -15,7 +15,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     audio::{AudioAnalyzer, AudioCapture, list_devices, simulated_audio, start_capture},
@@ -24,13 +24,16 @@ use crate::{
     effects::EffectsEngine,
     media::MediaState,
     proto::v1::{
-        AudioInputMode, AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxRuntimeStatus,
-        MediaInfo, Recording, RecordingStatus, RunState, ShowCommand, ShowConfig, ShowSnapshot,
+        AudioInputMode, AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxConfig,
+        DmxRuntimeStatus, MediaInfo, Recording, RecordingStatus, RunState, ShowCommand, ShowConfig,
+        ShowSnapshot,
     },
 };
 
-const FRAME_INTERVAL: Duration = Duration::from_millis(25);
-const IDLE_COMMAND_POLL: Duration = Duration::from_millis(100);
+const DMX_RECONNECT_INITIAL: Duration = Duration::from_secs(1);
+const DMX_RECONNECT_MAX: Duration = Duration::from_secs(30);
+const IDLE_DMX_STATUS_INTERVAL: Duration = Duration::from_secs(1);
+const SHUTDOWN_BLACKOUT_FRAMES: usize = 3;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -54,6 +57,11 @@ struct Runtime {
     analyzer: Option<AudioAnalyzer>,
     capture: Option<AudioCapture>,
     dmx: Option<DmxOutput>,
+    dmx_status: DmxRuntimeStatus,
+    dmx_retry_at: Instant,
+    dmx_retry_delay: Duration,
+    dmx_status_dirty: bool,
+    last_idle_dmx_publish: Instant,
     effects: EffectsEngine,
     simulation_started: Instant,
     simulation_beat: u64,
@@ -69,6 +77,11 @@ impl Default for Runtime {
             analyzer: None,
             capture: None,
             dmx: None,
+            dmx_status: DmxRuntimeStatus::default(),
+            dmx_retry_at: Instant::now(),
+            dmx_retry_delay: DMX_RECONNECT_INITIAL,
+            dmx_status_dirty: true,
+            last_idle_dmx_publish: Instant::now(),
             effects: EffectsEngine::default(),
             simulation_started: Instant::now(),
             simulation_beat: 0,
@@ -301,25 +314,26 @@ impl RuntimeLoop {
     fn new(app: Arc<App>) -> Self {
         let config = app.config_tx.borrow().clone();
         let snapshot = app.snapshot_tx.borrow().as_ref().clone();
+        let runtime = Runtime {
+            dmx_status: active_dmx_status(&config, app.cli_simulate),
+            ..Default::default()
+        };
         Self {
             app,
             config,
             snapshot,
-            runtime: Runtime::default(),
+            runtime,
         }
     }
 
     fn run(mut self, receiver: Receiver<RuntimeCommand>) {
         let mut next_frame = Instant::now();
         loop {
-            let timeout = if self.is_active() {
-                next_frame.saturating_duration_since(Instant::now())
-            } else {
-                IDLE_COMMAND_POLL
-            };
+            let timeout = next_frame.saturating_duration_since(Instant::now());
             match receiver.recv_timeout(timeout) {
                 Ok(RuntimeCommand::Shutdown { reply }) => {
                     self.stop_show();
+                    self.shutdown_dmx();
                     let _ = reply.send(());
                     return;
                 }
@@ -327,16 +341,17 @@ impl RuntimeLoop {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     self.stop_show();
+                    self.shutdown_dmx();
                     return;
                 }
             }
 
-            if self.is_active() && Instant::now() >= next_frame {
+            if Instant::now() >= next_frame {
                 if let Err(error) = self.tick() {
                     error!(%error, "show frame failed");
                     self.fail_show(error.to_string());
                 }
-                next_frame = Instant::now() + FRAME_INTERVAL;
+                next_frame = Instant::now() + self.frame_interval();
             }
         }
     }
@@ -367,8 +382,8 @@ impl RuntimeLoop {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.snapshot.run_state == RunState::Running as i32 || self.runtime.recording_monitor
+    fn frame_interval(&self) -> Duration {
+        dmx_frame_interval(self.config.dmx().fps)
     }
 
     fn update_config(&mut self, updated: ShowConfig) -> Result<ShowConfig, AppError> {
@@ -385,11 +400,18 @@ impl RuntimeLoop {
         let updated = Arc::new(ValidatedShowConfig::new(updated, self.app.cli_simulate)?);
         config::save(&self.app.config_path, &updated)?;
         let was_running = self.snapshot.run_state == RunState::Running as i32;
+        let dmx_changed = self.config.dmx() != updated.dmx();
         if was_running {
             self.stop_show();
         }
+        if dmx_changed {
+            self.blank_and_release_dmx(SHUTDOWN_BLACKOUT_FRAMES);
+        }
         self.config = Arc::clone(&updated);
         self.app.config_tx.send_replace(updated);
+        if dmx_changed {
+            self.reset_dmx_manager();
+        }
         if was_running {
             self.start_show()?;
         } else {
@@ -430,15 +452,10 @@ impl RuntimeLoop {
                 "stop the audio recording before starting the show".into(),
             ));
         }
-        self.set_run_state(RunState::Starting, "Starting audio and DMX");
+        self.set_run_state(RunState::Starting, "Starting audio and effects");
         let startup = (|| {
-            let dmx_config = self.config.dmx();
             let audio_config = self.config.audio();
             let simulate_audio = self.app.cli_simulate || audio_config.simulate;
-            let simulate_dmx = self.app.cli_simulate || dmx_config.simulate;
-            let mut effective_dmx = dmx_config.clone();
-            effective_dmx.simulate = simulate_dmx;
-            let dmx = DmxOutput::open(&effective_dmx)?;
             let capture = if simulate_audio {
                 None
             } else {
@@ -452,7 +469,6 @@ impl RuntimeLoop {
             );
             self.runtime.analyzer = Some(analyzer);
             self.runtime.capture = capture;
-            self.runtime.dmx = Some(dmx);
             self.runtime.effects = EffectsEngine::default();
             self.runtime.simulation_started = Instant::now();
             self.runtime.simulation_beat = 0;
@@ -460,9 +476,9 @@ impl RuntimeLoop {
             self.runtime.recording_monitor = false;
             self.runtime.frame_count = 0;
             self.runtime.fps_started = Instant::now();
-            Ok::<_, anyhow::Error>((simulate_audio, simulate_dmx))
+            Ok::<_, anyhow::Error>(simulate_audio)
         })();
-        let (simulate_audio, simulate_dmx) = match startup {
+        let simulate_audio = match startup {
             Ok(simulation) => simulation,
             Err(error) => {
                 self.fail_show(error.to_string());
@@ -470,7 +486,11 @@ impl RuntimeLoop {
             }
         };
         self.set_run_state(RunState::Running, "Show running");
-        info!(simulate_audio, simulate_dmx, "show started");
+        info!(
+            simulate_audio,
+            simulate_dmx = self.runtime.dmx_status.simulated,
+            "show started"
+        );
         Ok(self.command_result(true, "Show started"))
     }
 
@@ -479,19 +499,25 @@ impl RuntimeLoop {
             return;
         }
         self.set_run_state(RunState::Stopping, "Stopping show");
+        self.send_connected_blackout(1);
         self.runtime.capture = None;
-        self.runtime.dmx = None;
         self.runtime.analyzer = None;
         self.runtime.recording_monitor = false;
         self.snapshot.run_state = RunState::Stopped as i32;
         self.snapshot.status_message = "Stopped".into();
         self.snapshot.recording = Some(stopped_recording_status());
         reset_inactive_runtime_snapshot(&mut self.snapshot, &self.config, self.app.cli_simulate);
+        self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
         self.publish();
     }
 
     fn set_blackout(&mut self, enabled: bool) -> CommandResult {
         self.snapshot.blackout = enabled;
+        if enabled {
+            self.send_connected_blackout(1);
+            self.snapshot.dmx_universe = self.zero_universe();
+            self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
+        }
         self.snapshot.status_message = if enabled {
             "Blackout active"
         } else if self.snapshot.run_state == RunState::Running as i32 {
@@ -604,8 +630,19 @@ impl RuntimeLoop {
 
     fn tick(&mut self) -> Result<(), AppError> {
         if self.snapshot.run_state != RunState::Running as i32 {
+            let universe = self.zero_universe();
+            self.send_dmx_frame(&universe);
             if self.runtime.recording_monitor {
                 return self.tick_recording_monitor();
+            }
+            self.snapshot.dmx_universe = universe;
+            if self.runtime.dmx_status_dirty
+                || self.runtime.last_idle_dmx_publish.elapsed() >= IDLE_DMX_STATUS_INTERVAL
+            {
+                self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
+                self.runtime.dmx_status_dirty = false;
+                self.runtime.last_idle_dmx_publish = Instant::now();
+                self.publish();
             }
             return Ok(());
         }
@@ -672,9 +709,7 @@ impl RuntimeLoop {
             self.runtime
                 .effects
                 .process(&self.config, &audio, &media.album_colors, blackout);
-        if let Some(dmx) = self.runtime.dmx.as_mut() {
-            dmx.send(&output.universe);
-        }
+        self.send_dmx_frame(&output.universe);
         self.runtime.frame_count += 1;
         let elapsed = self.runtime.fps_started.elapsed().as_secs_f32();
         let effects_fps = if elapsed >= 1.0 {
@@ -689,12 +724,6 @@ impl RuntimeLoop {
             || simulated_audio_status(&self.config),
             AudioCapture::status,
         );
-        let dmx_runtime = self
-            .runtime
-            .dmx
-            .as_ref()
-            .map_or_else(DmxRuntimeStatus::default, DmxOutput::status);
-
         self.snapshot.status_message = if blackout {
             "Blackout active"
         } else {
@@ -703,7 +732,7 @@ impl RuntimeLoop {
         .into();
         self.snapshot.audio = Some(audio);
         self.snapshot.audio_runtime = Some(audio_runtime);
-        self.snapshot.dmx_runtime = Some(dmx_runtime);
+        self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
         self.snapshot.recording = Some(recording);
         self.snapshot.beatnet = Some(beatnet);
         self.snapshot.media = Some(media);
@@ -766,8 +795,133 @@ impl RuntimeLoop {
         self.snapshot.recording = Some(analyzer.recording_status());
         self.snapshot.beatnet = Some(analyzer.beatnet_status());
         self.snapshot.media = Some(self.app.media_tx.borrow().info().clone());
+        self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
+        self.snapshot.dmx_universe = self.zero_universe();
         self.publish();
         Ok(())
+    }
+
+    fn effective_dmx_config(&self) -> DmxConfig {
+        let mut config = self.config.dmx().clone();
+        config.simulate = self.app.cli_simulate || config.simulate;
+        config
+    }
+
+    fn zero_universe(&self) -> Vec<u8> {
+        vec![0; self.config.dmx().universe_size as usize]
+    }
+
+    fn ensure_dmx_connected(&mut self) {
+        if self.runtime.dmx.is_some() || Instant::now() < self.runtime.dmx_retry_at {
+            return;
+        }
+
+        let config = self.effective_dmx_config();
+        match DmxOutput::open(&config) {
+            Ok(output) => {
+                let send_count = self.runtime.dmx_status.send_count;
+                let error_count = self.runtime.dmx_status.error_count;
+                let mut status = output.status();
+                status.send_count = send_count;
+                status.error_count = error_count;
+                self.runtime.dmx = Some(output);
+                self.runtime.dmx_status = status;
+                self.runtime.dmx_retry_delay = DMX_RECONNECT_INITIAL;
+                self.runtime.dmx_retry_at = Instant::now();
+                self.runtime.dmx_status_dirty = true;
+                info!(
+                    port = %self.runtime.dmx_status.port,
+                    simulated = self.runtime.dmx_status.simulated,
+                    "DMX output acquired"
+                );
+            }
+            Err(error) => {
+                self.record_dmx_error(error.to_string());
+                warn!(
+                    error = %self.runtime.dmx_status.last_error,
+                    retry_seconds = self.runtime.dmx_retry_delay.as_secs_f32(),
+                    "DMX output unavailable; retrying"
+                );
+                self.schedule_dmx_retry();
+            }
+        }
+    }
+
+    fn send_dmx_frame(&mut self, universe: &[u8]) {
+        self.ensure_dmx_connected();
+        self.send_connected_frame(universe);
+    }
+
+    fn send_connected_frame(&mut self, universe: &[u8]) {
+        let result = match self.runtime.dmx.as_mut() {
+            Some(dmx) => dmx.send(universe),
+            None => return,
+        };
+
+        match result {
+            Ok(()) => {
+                self.runtime.dmx_status.send_count += 1;
+                self.runtime.dmx_status.consecutive_errors = 0;
+                self.runtime.dmx_status.last_error.clear();
+            }
+            Err(error) => {
+                warn!(%error, "DMX output failed; reconnecting");
+                self.runtime.dmx = None;
+                self.record_dmx_error(error.to_string());
+                self.schedule_dmx_retry();
+            }
+        }
+    }
+
+    fn record_dmx_error(&mut self, message: String) {
+        self.runtime.dmx_status.configured_port = self.config.dmx().port.clone();
+        self.runtime.dmx_status.running = true;
+        self.runtime.dmx_status.is_open = false;
+        self.runtime.dmx_status.simulated = self.app.cli_simulate || self.config.dmx().simulate;
+        self.runtime.dmx_status.error_count += 1;
+        self.runtime.dmx_status.consecutive_errors += 1;
+        self.runtime.dmx_status.last_error = message;
+        self.runtime.dmx_status_dirty = true;
+    }
+
+    fn schedule_dmx_retry(&mut self) {
+        self.runtime.dmx_retry_at = Instant::now() + self.runtime.dmx_retry_delay;
+        self.runtime.dmx_retry_delay = self
+            .runtime
+            .dmx_retry_delay
+            .saturating_mul(2)
+            .min(DMX_RECONNECT_MAX);
+    }
+
+    fn send_connected_blackout(&mut self, frames: usize) {
+        let universe = self.zero_universe();
+        for _ in 0..frames {
+            if self.runtime.dmx.is_none() {
+                break;
+            }
+            self.send_connected_frame(&universe);
+        }
+    }
+
+    fn blank_and_release_dmx(&mut self, frames: usize) {
+        self.send_connected_blackout(frames);
+        self.runtime.dmx = None;
+    }
+
+    fn reset_dmx_manager(&mut self) {
+        self.runtime.dmx = None;
+        self.runtime.dmx_status = active_dmx_status(&self.config, self.app.cli_simulate);
+        self.runtime.dmx_retry_at = Instant::now();
+        self.runtime.dmx_retry_delay = DMX_RECONNECT_INITIAL;
+        self.runtime.dmx_status_dirty = true;
+        self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
+        self.snapshot.dmx_universe = self.zero_universe();
+    }
+
+    fn shutdown_dmx(&mut self) {
+        self.blank_and_release_dmx(SHUTDOWN_BLACKOUT_FRAMES);
+        self.runtime.dmx_status.running = false;
+        self.runtime.dmx_status.is_open = false;
     }
 
     fn set_run_state(&mut self, state: RunState, message: &str) {
@@ -777,14 +931,15 @@ impl RuntimeLoop {
     }
 
     fn fail_show(&mut self, message: String) {
+        self.send_connected_blackout(1);
         self.runtime.capture = None;
-        self.runtime.dmx = None;
         self.runtime.analyzer = None;
         self.runtime.recording_monitor = false;
         self.snapshot.run_state = RunState::Error as i32;
         self.snapshot.status_message = message;
         self.snapshot.recording = Some(stopped_recording_status());
         reset_inactive_runtime_snapshot(&mut self.snapshot, &self.config, self.app.cli_simulate);
+        self.snapshot.dmx_runtime = Some(self.runtime.dmx_status.clone());
         self.publish();
     }
 
@@ -837,6 +992,7 @@ fn stopped_snapshot(config: &ValidatedShowConfig, simulate: bool) -> ShowSnapsho
         run_state: RunState::Stopped as i32,
         status_message: "Stopped".into(),
         recording: Some(stopped_recording_status()),
+        dmx_runtime: Some(stopped_dmx_status(config, simulate)),
         ..Default::default()
     };
     reset_inactive_runtime_snapshot(&mut snapshot, config, simulate);
@@ -850,7 +1006,6 @@ fn reset_inactive_runtime_snapshot(
 ) {
     snapshot.audio = Some(Default::default());
     snapshot.audio_runtime = Some(stopped_audio_status(config, simulate));
-    snapshot.dmx_runtime = Some(stopped_dmx_status(config, simulate));
     snapshot.beatnet = Some(stopped_beatnet_status(config));
     snapshot.media = Some(MediaInfo {
         track_name: "No track".into(),
@@ -909,6 +1064,17 @@ fn stopped_dmx_status(config: &ValidatedShowConfig, simulate: bool) -> DmxRuntim
     }
 }
 
+fn active_dmx_status(config: &ValidatedShowConfig, simulate: bool) -> DmxRuntimeStatus {
+    DmxRuntimeStatus {
+        running: true,
+        ..stopped_dmx_status(config, simulate)
+    }
+}
+
+fn dmx_frame_interval(fps: u32) -> Duration {
+    Duration::from_secs_f64(1.0 / f64::from(fps.max(1)))
+}
+
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -920,10 +1086,37 @@ fn unix_millis() -> u64 {
 mod tests {
     use super::*;
 
+    async fn wait_for_snapshot(
+        app: &App,
+        condition: impl Fn(&ShowSnapshot) -> bool,
+    ) -> ShowSnapshot {
+        let mut snapshots = app.subscribe();
+        tokio::time::timeout(Duration::from_secs(3), async move {
+            loop {
+                let snapshot = snapshots.borrow().as_ref().clone();
+                if condition(&snapshot) {
+                    return snapshot;
+                }
+                snapshots
+                    .changed()
+                    .await
+                    .expect("snapshot stream should remain available");
+            }
+        })
+        .await
+        .expect("expected runtime snapshot was not published")
+    }
+
     #[test]
     fn config_filename_is_safe_and_readable() {
         assert_eq!(config_filename("Friday Night #1"), "friday-night-1.json");
         assert_eq!(config_filename("***"), "show.json");
+    }
+
+    #[test]
+    fn dmx_frame_interval_uses_the_configured_rate() {
+        assert_eq!(dmx_frame_interval(20), Duration::from_millis(50));
+        assert_eq!(dmx_frame_interval(40), Duration::from_millis(25));
     }
 
     #[test]
@@ -940,6 +1133,12 @@ mod tests {
         snapshot.fixture_states.push(Default::default());
         snapshot.dmx_universe[0] = 255;
         snapshot.effects_fps = 40.0;
+        snapshot.dmx_runtime = Some(DmxRuntimeStatus {
+            running: true,
+            is_open: true,
+            send_count: 17,
+            ..Default::default()
+        });
 
         reset_inactive_runtime_snapshot(&mut snapshot, &config, true);
 
@@ -957,6 +1156,45 @@ mod tests {
         assert!(snapshot.fixture_states.is_empty());
         assert!(snapshot.dmx_universe.iter().all(|value| *value == 0));
         assert_eq!(snapshot.effects_fps, 0.0);
+        let dmx = snapshot.dmx_runtime.expect("DMX runtime snapshot");
+        assert!(dmx.running);
+        assert!(dmx.is_open);
+        assert_eq!(dmx.send_count, 17);
+    }
+
+    #[tokio::test]
+    async fn dmx_sends_zero_universes_while_the_show_is_stopped() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = Arc::new(
+            App::load(directory.path().join("config.json"), true)
+                .await
+                .expect("simulated application should load"),
+        );
+        app.start_runtime()
+            .await
+            .expect("show runtime should start");
+
+        let first = wait_for_snapshot(&app, |snapshot| {
+            snapshot
+                .dmx_runtime
+                .as_ref()
+                .is_some_and(|dmx| dmx.is_open && dmx.send_count >= 2)
+        })
+        .await;
+        let first_send_count = first.dmx_runtime.expect("DMX runtime snapshot").send_count;
+        assert_eq!(first.run_state, RunState::Stopped as i32);
+        assert!(first.dmx_universe.iter().all(|value| *value == 0));
+
+        let later = wait_for_snapshot(&app, |snapshot| {
+            snapshot
+                .dmx_runtime
+                .as_ref()
+                .is_some_and(|dmx| dmx.send_count > first_send_count)
+        })
+        .await;
+        assert_eq!(later.run_state, RunState::Stopped as i32);
+        assert!(later.dmx_universe.iter().all(|value| *value == 0));
+        app.stop_runtime().await;
     }
 
     #[tokio::test]
@@ -983,50 +1221,103 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_start_leaves_a_consistent_error_snapshot() {
+    async fn stopping_the_show_keeps_dmx_connected_and_sending_zeros() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let app = Arc::new(
-            App::load(directory.path().join("config.json"), false)
+            App::load(directory.path().join("config.json"), true)
                 .await
-                .expect("application should load"),
+                .expect("simulated application should load"),
         );
         app.start_runtime()
             .await
             .expect("show runtime should start");
-        let mut config = app.config().await;
-        let dmx = config.dmx.as_mut().expect("DMX configuration");
+        wait_for_snapshot(&app, |snapshot| {
+            snapshot
+                .dmx_runtime
+                .as_ref()
+                .is_some_and(|dmx| dmx.is_open && dmx.send_count > 0)
+        })
+        .await;
+        app.control(ShowCommand::Start)
+            .await
+            .expect("show should start");
+        app.control(ShowCommand::Stop)
+            .await
+            .expect("show should stop");
+
+        let stopped = app.snapshot().await;
+        let stopped_dmx = stopped.dmx_runtime.expect("DMX runtime snapshot");
+        assert_eq!(stopped.run_state, RunState::Stopped as i32);
+        assert!(stopped_dmx.running);
+        assert!(stopped_dmx.is_open);
+        assert!(stopped.dmx_universe.iter().all(|value| *value == 0));
+
+        let later = wait_for_snapshot(&app, |snapshot| {
+            snapshot.run_state == RunState::Stopped as i32
+                && snapshot
+                    .dmx_runtime
+                    .as_ref()
+                    .is_some_and(|dmx| dmx.send_count > stopped_dmx.send_count)
+        })
+        .await;
+        assert!(later.dmx_universe.iter().all(|value| *value == 0));
+        app.stop_runtime().await;
+    }
+
+    #[tokio::test]
+    async fn missing_dmx_does_not_prevent_the_show_from_starting() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let config_path = directory.path().join("config.json");
+        let mut show_config = config::default_show_config(false);
+        let dmx = show_config.dmx.as_mut().expect("DMX configuration");
         dmx.port = directory
             .path()
             .join("missing-dmx-device")
             .display()
             .to_string();
         dmx.simulate = false;
-        config.audio.as_mut().expect("audio configuration").simulate = true;
-        app.update_config(config)
+        show_config
+            .audio
+            .as_mut()
+            .expect("audio configuration")
+            .simulate = true;
+        let config = ValidatedShowConfig::new(show_config, false)
+            .expect("test configuration should validate");
+        config::save(&config_path, &config).expect("test configuration should save");
+        let app = Arc::new(
+            App::load(config_path, false)
+                .await
+                .expect("application should load"),
+        );
+        app.start_runtime()
             .await
-            .expect("configuration should update");
+            .expect("show runtime should start");
 
-        let error = app
-            .control(ShowCommand::Start)
-            .await
-            .expect_err("show startup should fail");
-
-        assert!(error.to_string().contains("failed to open DMX interface"));
-        let snapshot = app.snapshot().await;
-        assert_eq!(snapshot.run_state, RunState::Error as i32);
-        assert!(
+        let unavailable = wait_for_snapshot(&app, |snapshot| {
             snapshot
-                .status_message
+                .dmx_runtime
+                .as_ref()
+                .is_some_and(|dmx| !dmx.last_error.is_empty())
+        })
+        .await;
+        let unavailable_dmx = unavailable.dmx_runtime.expect("DMX runtime snapshot");
+        assert!(unavailable_dmx.running);
+        assert!(!unavailable_dmx.is_open);
+        assert!(
+            unavailable_dmx
+                .last_error
                 .contains("failed to open DMX interface")
         );
-        assert!(
-            !snapshot
-                .audio_runtime
-                .expect("audio runtime snapshot")
-                .running
-        );
-        assert!(!snapshot.dmx_runtime.expect("DMX runtime snapshot").running);
-        assert_eq!(snapshot.beatnet.expect("BeatNet snapshot").status, "Idle");
+
+        let result = app
+            .control(ShowCommand::Start)
+            .await
+            .expect("show should start while DMX reconnects");
+
+        assert!(result.success);
+        let snapshot = app.snapshot().await;
+        assert_eq!(snapshot.run_state, RunState::Running as i32);
+        assert!(snapshot.dmx_runtime.expect("DMX runtime snapshot").running);
         app.stop_runtime().await;
     }
 }
