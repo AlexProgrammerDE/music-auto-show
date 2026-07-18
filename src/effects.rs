@@ -422,6 +422,7 @@ impl EffectsEngine {
         self.update_rotation(config, audio, beat);
         let strobe = self.strobe_value(config, audio, beat);
         let pattern = self.strobe_effect_value(config, audio);
+        let effect_rotation = self.preview_rotation(config);
         for fixture in &config.fixtures {
             let profile = find_profile(config, fixture);
             let channels = effective_channels(fixture, profile);
@@ -452,9 +453,11 @@ impl EffectsEngine {
                     state.strobe = strobe;
                     state.effect = rotation.unwrap_or_default();
                     state.effect_pattern = pattern;
+                    state.effect_rotation = effect_rotation;
                 }
             } else if let (Some(rotation), Some(state)) = (rotation, self.states.get_mut(&key)) {
                 state.effect = rotation;
+                state.effect_rotation = effect_rotation;
             }
         }
     }
@@ -551,6 +554,21 @@ impl EffectsEngine {
             scale_range(position, range)
         } else {
             scale_range(position, usable_range(channel))
+        }
+    }
+
+    fn preview_rotation(&self, config: &ShowConfig) -> f32 {
+        let mode = RotationMode::try_from(effects(config).rotation_mode)
+            .unwrap_or(RotationMode::ManualSlow);
+        match mode {
+            RotationMode::Off | RotationMode::Unspecified => 0.0,
+            RotationMode::AutoSlow
+            | RotationMode::AutoMedium
+            | RotationMode::AutoFast
+            | RotationMode::AutoMusic => self.rotation_phase,
+            RotationMode::ManualSlow | RotationMode::ManualBeat => {
+                0.5 + 0.5 * (self.rotation_phase * TAU).sin()
+            }
         }
     }
 
@@ -1219,6 +1237,7 @@ impl EffectsEngine {
             smoothed.effect = current.effect;
             smoothed.effect_speed = current.effect_speed;
             smoothed.effect_pattern = current.effect_pattern;
+            smoothed.effect_rotation = current.effect_rotation;
             smoothed.gobo = current.gobo;
             smoothed.prism = current.prism;
             smoothed.iris = current.iris;
@@ -1639,6 +1658,7 @@ fn zero_light(state: &mut FixtureState) {
     state.color_macro = 0;
     state.effect = 0;
     state.effect_pattern = 0;
+    state.effect_rotation = 0.0;
 }
 
 #[cfg(test)]
@@ -1689,6 +1709,38 @@ mod tests {
     #[test]
     fn hue_wrap_distance_is_shortest_path() {
         approx::assert_abs_diff_eq!(hue_distance(0.98, 0.02), 0.04, epsilon = 0.0001);
+    }
+
+    #[test]
+    fn stage_rotation_matches_manual_and_automatic_modes() {
+        let mut config = default_show_config(true);
+        let engine = EffectsEngine {
+            rotation_phase: 0.25,
+            ..Default::default()
+        };
+
+        config.effects.as_mut().unwrap().rotation_mode = RotationMode::ManualSlow as i32;
+        approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 1.0, epsilon = 0.0001);
+
+        config.effects.as_mut().unwrap().rotation_mode = RotationMode::AutoSlow as i32;
+        approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 0.25, epsilon = 0.0001);
+    }
+
+    #[test]
+    fn stage_rotation_survives_fixture_smoothing() {
+        let config = default_show_config(true);
+        let fixture_key = fixture_key(&config.fixtures[0]);
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        engine.states.get_mut(&fixture_key).unwrap().effect_rotation = 0.75;
+
+        engine.apply_smoothing(&config);
+
+        approx::assert_abs_diff_eq!(
+            engine.smoothed.get(&fixture_key).unwrap().effect_rotation,
+            0.75,
+            epsilon = 0.0001
+        );
     }
 
     #[test]

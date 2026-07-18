@@ -1,8 +1,9 @@
 import { MusicNotesIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import type { MediaInfo } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 
 const fallbackPalette = [
   [124, 58, 237],
@@ -37,23 +38,43 @@ function Artwork({ media }: { readonly media: MediaInfo | undefined }) {
 
 function Palette({ media }: { readonly media: MediaInfo | undefined }) {
   const ref = useRef<HTMLCanvasElement>(null)
-  useEffect(() => {
-    const canvas = ref.current
-    const context = canvas?.getContext("2d")
-    if (!canvas || !context) return
+  const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
+
+  const render = useEffectEvent(() => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const { context, width, height } = surface
     const colors = media?.albumColors.length
       ? media.albumColors
       : fallbackPalette.map(([red, green, blue]) => ({ red, green, blue }))
-    const width = canvas.width / colors.length
+    context.clearRect(0, 0, width, height)
+    const swatchWidth = width / colors.length
     colors.forEach((color, position) => {
       context.fillStyle = `rgb(${color.red} ${color.green} ${color.blue})`
-      context.fillRect(position * width, 0, Math.ceil(width), canvas.height)
+      context.fillRect(position * swatchWidth, 0, Math.ceil(swatchWidth), height)
     })
+  })
+
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
+      render()
+    })
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    render()
   }, [media])
+
   return (
     <canvas
       ref={ref}
-      width={240}
+      width={160}
       height={32}
       className="h-8 w-40 border"
       aria-label="Dominant album artwork colors"

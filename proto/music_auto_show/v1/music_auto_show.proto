@@ -481,4 +481,6 @@ message FixtureState {
   uint32 zoom = 25;
   uint32 focus = 26;
   uint32 iris = 27;
+  // Normalized physical rotation phase used by the live stage preview.
+  float effect_rotation = 28;
 }

@@ -10,7 +10,7 @@ import {
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { Effect } from "effect"
-import { useEffect, useMemo, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { AudioScope } from "@/components/audio-scope"
@@ -18,7 +18,6 @@ import { ConfirmCredenza } from "@/components/confirm-credenza"
 import { MediaPanel } from "@/components/media-panel"
 import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
-import { StageView } from "@/components/stage-view"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -43,6 +42,10 @@ import {
 import { deriveRuntimePresentation } from "@/lib/runtime-status"
 import { ShowApi, runShowApi } from "@/lib/show-api"
 import { cn } from "@/lib/utils"
+
+const StageView = lazy(() =>
+  import("@/components/stage-view").then((module) => ({ default: module.StageView })),
+)
 
 export const Route = createFileRoute("/")({
   loader: async ({ context }) => {
@@ -260,10 +263,22 @@ function LiveDashboard() {
       <MediaPanel active={runtime.audioActive} media={snapshot.media} tempo={audio?.tempo ?? 0} />
 
       <SectionPanel
-        title="Stage view"
+        title="3D stage view"
         description="Live color, intensity, movement, strobe, and effect beams"
       >
-        <StageView fixtures={config.fixtures} profiles={profiles} states={snapshot.fixtureStates} />
+        <Suspense
+          fallback={
+            <div className="flex h-80 items-center justify-center bg-background text-xs text-muted-foreground">
+              Preparing stage preview
+            </div>
+          }
+        >
+          <StageView
+            fixtures={config.fixtures}
+            profiles={profiles}
+            states={snapshot.fixtureStates}
+          />
+        </Suspense>
       </SectionPanel>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(290px,.75fr)]">

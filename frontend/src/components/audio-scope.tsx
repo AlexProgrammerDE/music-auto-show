@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useEffectEvent, useRef } from "react"
 
 import type { AudioAnalysis } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 
 type ScopeMode = "waveform" | "spectrum" | "spectrogram"
 
@@ -8,23 +9,14 @@ function themeColor(variable: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(variable).trim()
 }
 
-function setupCanvas(canvas: HTMLCanvasElement) {
-  const bounds = canvas.getBoundingClientRect()
-  const scale = window.devicePixelRatio || 1
-  const width = Math.max(1, Math.floor(bounds.width * scale))
-  const height = Math.max(1, Math.floor(bounds.height * scale))
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width
-    canvas.height = height
-  }
-  const context = canvas.getContext("2d")
-  context?.setTransform(scale, 0, 0, scale, 0, 0)
-  return { context, width: bounds.width, height: bounds.height }
-}
-
-function drawGrid(context: CanvasRenderingContext2D, width: number, height: number) {
+function drawGrid(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  borderColor: string,
+) {
   context.globalAlpha = 0.35
-  context.strokeStyle = themeColor("--border")
+  context.strokeStyle = borderColor
   context.lineWidth = 1
   for (let x = 0; x <= width; x += 32) {
     context.beginPath()
@@ -46,11 +38,13 @@ function drawWaveform(
   width: number,
   height: number,
   values: readonly number[],
+  borderColor: string,
+  waveformColor: string,
 ) {
-  drawGrid(context, width, height)
+  drawGrid(context, width, height, borderColor)
   if (values.length < 2) return
   context.beginPath()
-  context.strokeStyle = themeColor("--chart-2")
+  context.strokeStyle = waveformColor
   context.lineWidth = 1.5
   values.forEach((value, position) => {
     const x = (position / (values.length - 1)) * width
@@ -66,8 +60,9 @@ function drawSpectrum(
   width: number,
   height: number,
   values: readonly number[],
+  borderColor: string,
 ) {
-  drawGrid(context, width, height)
+  drawGrid(context, width, height, borderColor)
   if (values.length === 0) return
   const barWidth = width / values.length
   values.forEach((value, position) => {
@@ -84,10 +79,11 @@ function drawSpectrogram(
   width: number,
   height: number,
   analysis: AudioAnalysis,
+  borderColor: string,
 ) {
   const frames = analysis.spectrogram
   if (frames.length === 0) {
-    drawGrid(context, width, height)
+    drawGrid(context, width, height, borderColor)
     return
   }
   const frameWidth = width / frames.length
@@ -117,28 +113,45 @@ export function AudioScope({
   readonly label: string
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
+
+  const render = useEffectEvent(() => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const { context, width, height } = surface
+    const borderColor = themeColor("--border")
+    context.clearRect(0, 0, width, height)
+    if (!analysis) {
+      drawGrid(context, width, height, borderColor)
+      return
+    }
+    if (mode === "waveform") {
+      drawWaveform(context, width, height, analysis.waveform, borderColor, themeColor("--chart-2"))
+    } else if (mode === "spectrum") {
+      drawSpectrum(context, width, height, analysis.spectrum, borderColor)
+    } else {
+      drawSpectrogram(context, width, height, analysis, borderColor)
+    }
+  })
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const render = () => {
-      const { context, width, height } = setupCanvas(canvas)
-      if (!context) return
-      context.clearRect(0, 0, width, height)
-      if (!analysis) {
-        drawGrid(context, width, height)
-        return
-      }
-      if (mode === "waveform") drawWaveform(context, width, height, analysis.waveform)
-      else if (mode === "spectrum") drawSpectrum(context, width, height, analysis.spectrum)
-      else drawSpectrogram(context, width, height, analysis)
-    }
-
-    render()
-    const observer = new ResizeObserver(render)
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
+      render()
+    })
     observer.observe(canvas)
-    return () => observer.disconnect()
-  }, [analysis, mode])
+    const themeObserver = new MutationObserver(render)
+    themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
+    return () => {
+      observer.disconnect()
+      themeObserver.disconnect()
+    }
+  }, [])
+
+  useEffect(() => render(), [analysis, mode])
 
   return (
     <figure className="relative min-h-36 overflow-hidden bg-background">
