@@ -1,0 +1,19 @@
+{
+  "name": "music-auto-show",
+  "private": true,
+  "scripts": {
+    "proto:format": "bunx --bun @bufbuild/buf format -w",
+    "proto:lint": "bunx --bun @bufbuild/buf lint",
+    "proto:generate": "bunx --bun @bufbuild/buf generate",
+    "frontend:dev": "bun run --cwd frontend dev",
+    "frontend:build": "bun run --cwd frontend build",
+    "frontend:test": "bun run --cwd frontend test",
+    "frontend:check": "bun run --cwd frontend check",
+    "build": "bun run proto:generate && bun run frontend:build && cargo build --release --locked",
+    "check": "bun run proto:lint && bun run proto:generate && bun run frontend:check && cargo clippy --all-targets --locked -- -D warnings && cargo test --all-targets --locked",
+    "dev": "cargo run -- --simulate"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.72.0"
+  }
+}

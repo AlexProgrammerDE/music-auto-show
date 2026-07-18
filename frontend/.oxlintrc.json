@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "off",
+    "suspicious": "error"
+  },
+  "env": {
+    "browser": true,
+    "builtin": true
+  },
+  "ignorePatterns": ["dist/**", "src/components/ui/**", "src/gen/**", "src/routeTree.gen.ts"],
+  "plugins": ["import", "jsx-a11y", "oxc", "react", "typescript", "unicorn"],
+  "rules": {
+    "import/no-named-as-default": "off",
+    "import/no-unassigned-import": "off",
+    "jsx-a11y/media-has-caption": "off",
+    "react/react-in-jsx-scope": "off",
+    "unicorn/prefer-set-has": "off"
+  }
+}

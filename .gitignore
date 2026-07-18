@@ -1,50 +1,27 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-ENV/
-env/
-.venv/
-
-# IDE settings
+# Editors and operating systems
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# OS files
 .DS_Store
 Thumbs.db
 
-# Local configuration (may contain secrets)
+# Local configuration and logs
 .env
 *.local.json
-
-# Logs
 *.log
-.nicegui/
+
+# Local source reference used for Effect implementation research
+.repos/effect
+
+# JavaScript and Rust build outputs
+node_modules/
+frontend/node_modules/
+frontend/dist/
+target/
+
+# BeatNet+ weights are user-supplied because upstream does not license
+# redistribution of the published checkpoint files.
+models/*.pt
+models/*.pth

@@ -1,0 +1,408 @@
+import {
+  CircleNotchIcon,
+  DownloadSimpleIcon,
+  PauseIcon,
+  PlayIcon,
+  RecordIcon,
+  StopIcon,
+  WarningOctagonIcon,
+} from "@phosphor-icons/react"
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
+import { createFileRoute } from "@tanstack/react-router"
+import { Effect } from "effect"
+import { useEffect, useMemo, useState } from "react"
+import { toast } from "sonner"
+
+import { AudioScope } from "@/components/audio-scope"
+import { MediaPanel } from "@/components/media-panel"
+import { SectionPanel } from "@/components/section-panel"
+import { StageView } from "@/components/stage-view"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { RunState, ShowCommand } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { formatDuration, formatPercent } from "@/lib/format"
+import {
+  configQueryOptions,
+  fixtureProfilesQueryOptions,
+  showQueryKeys,
+  snapshotQueryOptions,
+} from "@/lib/queries"
+import { ShowApi, runShowApi } from "@/lib/show-api"
+import { cn } from "@/lib/utils"
+
+export const Route = createFileRoute("/")({
+  loader: async ({ context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(snapshotQueryOptions),
+      context.queryClient.ensureQueryData(configQueryOptions),
+      context.queryClient.ensureQueryData(fixtureProfilesQueryOptions),
+    ])
+  },
+  component: LiveDashboard,
+})
+
+function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="border-r px-4 py-3 last:border-r-0">
+      <p className="font-heading text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+        {label}
+      </p>
+      <p className="mt-1.5 text-xl leading-none font-semibold tabular-nums">{value}</p>
+      {detail ? <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p> : null}
+    </div>
+  )
+}
+
+function Level({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="grid grid-cols-[3.5rem_1fr_2.5rem] items-center gap-3">
+      <span className="font-heading text-[11px] font-medium text-muted-foreground">{label}</span>
+      <Progress value={value * 100} className={cn(color)} />
+      <span className="text-right text-[11px] tabular-nums">{formatPercent(value)}</span>
+    </div>
+  )
+}
+
+function LiveDashboard() {
+  const { data: snapshot } = useSuspenseQuery(snapshotQueryOptions)
+  const { data: config } = useSuspenseQuery(configQueryOptions)
+  const { data: profiles } = useSuspenseQuery(fixtureProfilesQueryOptions)
+  const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
+  const running = snapshot.runState === RunState.RUNNING
+  const transitioning =
+    snapshot.runState === RunState.STARTING || snapshot.runState === RunState.STOPPING
+  const audio = snapshot.audio
+  const recording = snapshot.recording
+  const [recordingUrl, setRecordingUrl] = useState<string>()
+
+  useEffect(
+    () => () => {
+      if (recordingUrl) URL.revokeObjectURL(recordingUrl)
+    },
+    [recordingUrl],
+  )
+
+  const commandMutation = useMutation({
+    mutationFn: (command: ShowCommand) =>
+      runShowApi(Effect.flatMap(ShowApi, (api) => api.controlShow(command))),
+    onSuccess: (result) => {
+      toast[result.success ? "success" : "error"](result.message)
+      void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
+    },
+    onError: (error) => toast.error(error.message),
+  })
+
+  const blackoutMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      runShowApi(Effect.flatMap(ShowApi, (api) => api.setBlackout(enabled))),
+    onSuccess: (result) => {
+      toast[result.success ? "success" : "error"](result.message)
+      void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
+    },
+    onError: (error) => toast.error(error.message),
+  })
+
+  const recordingMutation = useMutation({
+    mutationFn: async (action: "start" | "stop" | "clear") => {
+      if (action === "start") {
+        await runShowApi(Effect.flatMap(ShowApi, (api) => api.startRecording))
+        return
+      }
+      if (action === "clear") {
+        await runShowApi(Effect.flatMap(ShowApi, (api) => api.clearRecording))
+        return
+      }
+      const result = await runShowApi(Effect.flatMap(ShowApi, (api) => api.stopRecording))
+      if (result.wav.length > 0) {
+        const bytes = Uint8Array.from(result.wav)
+        const blob = new Blob([bytes.buffer], { type: "audio/wav" })
+        const url = URL.createObjectURL(blob)
+        setRecordingUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous)
+          return url
+        })
+      }
+    },
+    onSuccess: (_, action) => {
+      if (action === "clear") {
+        setRecordingUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous)
+          return undefined
+        })
+      }
+      toast.success(action === "stop" ? "Recording saved" : `Recording ${action}ed`)
+      void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
+    },
+    onError: (error) => toast.error(error.message),
+  })
+
+  const fixtures = useMemo(
+    () => snapshot.fixtureStates.filter((fixture) => fixture.fixtureId !== ""),
+    [snapshot.fixtureStates],
+  )
+
+  return (
+    <div className="grid gap-5">
+      <section className="flex flex-col gap-4 border bg-card p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className={cn(
+              "size-2.5 shrink-0 rounded-full",
+              running && "bg-chart-1 shadow-sm",
+              snapshot.runState === RunState.ERROR && "bg-destructive",
+              !running && snapshot.runState !== RunState.ERROR && "bg-muted-foreground/50",
+            )}
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="font-heading text-base font-semibold">Live show</h1>
+              <Badge variant="outline">{RunState[snapshot.runState]}</Badge>
+            </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {snapshot.statusMessage || "Ready for audio input"}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant={snapshot.blackout ? "destructive" : "outline"}
+            disabled={blackoutMutation.isPending}
+            onClick={() => blackoutMutation.mutate(!snapshot.blackout)}
+          >
+            <WarningOctagonIcon weight={snapshot.blackout ? "fill" : "regular"} />
+            {snapshot.blackout ? "Release blackout" : "Blackout"}
+          </Button>
+          <Button
+            disabled={transitioning || commandMutation.isPending}
+            onClick={() => commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)}
+          >
+            {commandMutation.isPending || transitioning ? (
+              <CircleNotchIcon className="animate-spin" />
+            ) : running ? (
+              <PauseIcon weight="fill" />
+            ) : (
+              <PlayIcon weight="fill" />
+            )}
+            {running ? "Stop show" : "Start show"}
+          </Button>
+        </div>
+      </section>
+
+      <section className="grid border bg-card sm:grid-cols-2 lg:grid-cols-6">
+        <Metric label="Tempo" value={`${Math.round(audio?.tempo ?? 0)}`} detail="BPM" />
+        <Metric
+          label="Beat"
+          value={`${audio?.estimatedBeat ?? 0n}`}
+          detail={`Bar ${audio?.estimatedBar ?? 0n}`}
+        />
+        <Metric
+          label="Confidence"
+          value={formatPercent(audio?.beatConfidence ?? 0)}
+          detail="BeatNet+"
+        />
+        <Metric label="Energy" value={formatPercent(audio?.energy ?? 0)} />
+        <Metric label="Effects" value={snapshot.effectsFps.toFixed(1)} detail="frames/sec" />
+        <Metric
+          label="DMX"
+          value={`${snapshot.dmxRuntime?.sendCount ?? 0n}`}
+          detail="frames sent"
+        />
+      </section>
+
+      <MediaPanel media={snapshot.media} tempo={audio?.tempo ?? 0} />
+
+      <SectionPanel
+        title="Stage view"
+        description="Live color, intensity, movement, strobe, and effect beams"
+      >
+        <StageView fixtures={config.fixtures} profiles={profiles} states={snapshot.fixtureStates} />
+      </SectionPanel>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(290px,.75fr)]">
+        <SectionPanel
+          title="Audio analysis"
+          description={snapshot.audioRuntime?.deviceName || "No active input device"}
+          action={
+            <Badge variant="outline">
+              {snapshot.audioRuntime?.sampleRate
+                ? `${snapshot.audioRuntime.sampleRate.toLocaleString()} Hz`
+                : "Waiting"}
+            </Badge>
+          }
+        >
+          <div className="grid border-b md:grid-cols-2">
+            <AudioScope analysis={audio} mode="waveform" label="Waveform" />
+            <AudioScope analysis={audio} mode="spectrum" label="Spectrum" />
+          </div>
+          <AudioScope analysis={audio} mode="spectrogram" label="Spectrogram" />
+        </SectionPanel>
+
+        <div className="grid content-start gap-5">
+          <SectionPanel title="Frequency bands" description="Normalized live energy">
+            <div className="grid gap-4 p-4">
+              <Level
+                label="Bass"
+                value={audio?.bass ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-chart-2"
+              />
+              <Level
+                label="Mid"
+                value={audio?.mid ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-chart-3"
+              />
+              <Level
+                label="High"
+                value={audio?.high ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-chart-4"
+              />
+              <Level
+                label="RMS"
+                value={audio?.rms ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-chart-1"
+              />
+              <Level
+                label="Dance"
+                value={audio?.danceability ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-chart-5"
+              />
+              <Level
+                label="Valence"
+                value={audio?.valence ?? 0}
+                color="[&_[data-slot=progress-indicator]]:bg-primary"
+              />
+            </div>
+          </SectionPanel>
+
+          <SectionPanel
+            title="BeatNet+"
+            description={snapshot.beatnet?.modelName || "Native detector"}
+            action={
+              <Badge variant={snapshot.beatnet?.available ? "secondary" : "outline"}>
+                {snapshot.beatnet?.status || "Unavailable"}
+              </Badge>
+            }
+          >
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
+              <dt className="text-muted-foreground">Model buffer</dt>
+              <dd className="text-right tabular-nums">
+                {(snapshot.beatnet?.bufferDurationSeconds ?? 0).toFixed(2)} s
+              </dd>
+              <dt className="text-muted-foreground">Beat phase</dt>
+              <dd className="text-right tabular-nums">{formatPercent(audio?.beatPosition ?? 0)}</dd>
+              <dt className="text-muted-foreground">Bar phase</dt>
+              <dd className="text-right tabular-nums">{formatPercent(audio?.barPosition ?? 0)}</dd>
+              <dt className="text-muted-foreground">Downbeat</dt>
+              <dd className="text-right">{audio?.downbeatDetected ? "Detected" : "Tracking"}</dd>
+            </dl>
+          </SectionPanel>
+
+          <SectionPanel title="Recording" description="Capture the active analysis source">
+            <div className="grid gap-3 p-4">
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="text-muted-foreground">Duration</span>
+                <span className="tabular-nums">
+                  {formatDuration(recording?.durationSeconds ?? 0)} /{" "}
+                  {formatDuration(recording?.maxDurationSeconds ?? 0)}
+                </span>
+              </div>
+              <Progress
+                value={
+                  recording?.maxDurationSeconds
+                    ? (recording.durationSeconds / recording.maxDurationSeconds) * 100
+                    : 0
+                }
+                className={cn(
+                  recording?.recording && "[&_[data-slot=progress-indicator]]:bg-destructive",
+                )}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant={recording?.recording ? "destructive" : "outline"}
+                  disabled={recordingMutation.isPending}
+                  onClick={() => recordingMutation.mutate(recording?.recording ? "stop" : "start")}
+                >
+                  {recording?.recording ? <StopIcon weight="fill" /> : <RecordIcon weight="fill" />}
+                  {recording?.recording ? "Stop and save" : "Record"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!recording?.hasRecording || recordingMutation.isPending}
+                  onClick={() => recordingMutation.mutate("clear")}
+                >
+                  <DownloadSimpleIcon /> Clear
+                </Button>
+                {recordingUrl ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    render={
+                      <a
+                        href={recordingUrl}
+                        download={`music-auto-show-${new Date().toISOString().slice(0, 10)}.wav`}
+                        aria-label="Download recorded audio"
+                      />
+                    }
+                  >
+                    <DownloadSimpleIcon /> Download
+                  </Button>
+                ) : null}
+              </div>
+              {recordingUrl ? (
+                <audio
+                  controls
+                  src={recordingUrl}
+                  className="h-9 w-full"
+                  aria-label="Recorded audio preview"
+                />
+              ) : null}
+            </div>
+          </SectionPanel>
+        </div>
+      </div>
+
+      <SectionPanel
+        title="Stage output"
+        description={`${fixtures.length} configured fixture${fixtures.length === 1 ? "" : "s"}`}
+      >
+        {fixtures.length === 0 ? (
+          <p className="p-6 text-sm text-muted-foreground">No fixtures are configured yet.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+            {fixtures.map((fixture) => (
+              <div
+                key={fixture.fixtureId}
+                className="flex items-center gap-3 border-r border-b p-3 last:border-r-0"
+              >
+                <span className="grid size-10 shrink-0 grid-cols-3 items-end gap-0.5 border bg-muted p-1">
+                  <Progress
+                    value={(fixture.red / 255) * 100}
+                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-2 [&_[data-slot=progress-track]]:h-full"
+                  />
+                  <Progress
+                    value={(fixture.green / 255) * 100}
+                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-3 [&_[data-slot=progress-track]]:h-full"
+                  />
+                  <Progress
+                    value={(fixture.blue / 255) * 100}
+                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-4 [&_[data-slot=progress-track]]:h-full"
+                  />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate font-heading text-xs font-semibold">
+                    {fixture.fixtureName}
+                  </p>
+                  <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                    RGB {fixture.red} · {fixture.green} · {fixture.blue}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionPanel>
+    </div>
+  )
+}

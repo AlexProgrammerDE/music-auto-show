@@ -1,0 +1,475 @@
+syntax = "proto3";
+
+package music_auto_show.v1;
+
+service MusicAutoShowService {
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc WatchSnapshots(WatchSnapshotsRequest) returns (stream WatchSnapshotsResponse);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc ExportConfig(ExportConfigRequest) returns (ExportConfigResponse);
+  rpc ImportConfig(ImportConfigRequest) returns (ImportConfigResponse);
+  rpc ResetConfig(ResetConfigRequest) returns (ResetConfigResponse);
+  rpc ListAudioDevices(ListAudioDevicesRequest) returns (ListAudioDevicesResponse);
+  rpc ListFixtureProfiles(ListFixtureProfilesRequest) returns (ListFixtureProfilesResponse);
+  rpc ControlShow(ControlShowRequest) returns (ControlShowResponse);
+  rpc SetBlackout(SetBlackoutRequest) returns (SetBlackoutResponse);
+  rpc StartRecording(StartRecordingRequest) returns (StartRecordingResponse);
+  rpc StopRecording(StopRecordingRequest) returns (StopRecordingResponse);
+  rpc ClearRecording(ClearRecordingRequest) returns (ClearRecordingResponse);
+}
+
+message GetSnapshotRequest {}
+
+message GetSnapshotResponse {
+  ShowSnapshot snapshot = 1;
+}
+
+message WatchSnapshotsRequest {
+  uint32 interval_ms = 1;
+}
+
+message WatchSnapshotsResponse {
+  ShowSnapshot snapshot = 1;
+}
+
+message GetConfigRequest {}
+
+message GetConfigResponse {
+  ShowConfig config = 1;
+}
+
+message UpdateConfigRequest {
+  ShowConfig config = 1;
+}
+
+message UpdateConfigResponse {
+  ShowConfig config = 1;
+}
+
+message ExportConfigRequest {}
+
+message ExportConfigResponse {
+  string json = 1;
+  string filename = 2;
+}
+
+message ImportConfigRequest {
+  string json = 1;
+}
+
+message ImportConfigResponse {
+  ShowConfig config = 1;
+}
+
+message ResetConfigRequest {}
+
+message ResetConfigResponse {
+  ShowConfig config = 1;
+}
+
+message ListAudioDevicesRequest {}
+
+message ListAudioDevicesResponse {
+  repeated AudioDevice devices = 1;
+}
+
+message ListFixtureProfilesRequest {}
+
+message ListFixtureProfilesResponse {
+  repeated FixtureProfile profiles = 1;
+}
+
+message ControlShowRequest {
+  ShowCommand command = 1;
+}
+
+message SetBlackoutRequest {
+  bool enabled = 1;
+}
+
+message StartRecordingRequest {}
+
+message StopRecordingRequest {}
+
+message ClearRecordingRequest {}
+
+message ControlShowResponse {
+  CommandResult result = 1;
+}
+
+message SetBlackoutResponse {
+  CommandResult result = 1;
+}
+
+message StartRecordingResponse {
+  RecordingStatus status = 1;
+}
+
+message StopRecordingResponse {
+  Recording recording = 1;
+}
+
+message ClearRecordingResponse {
+  RecordingStatus status = 1;
+}
+
+message CommandResult {
+  bool success = 1;
+  string message = 2;
+  RunState run_state = 3;
+  bool blackout = 4;
+}
+
+enum ShowCommand {
+  SHOW_COMMAND_UNSPECIFIED = 0;
+  SHOW_COMMAND_START = 1;
+  SHOW_COMMAND_STOP = 2;
+}
+
+enum RunState {
+  RUN_STATE_UNSPECIFIED = 0;
+  RUN_STATE_STOPPED = 1;
+  RUN_STATE_STARTING = 2;
+  RUN_STATE_RUNNING = 3;
+  RUN_STATE_STOPPING = 4;
+  RUN_STATE_ERROR = 5;
+}
+
+message ShowSnapshot {
+  uint64 sequence = 1;
+  uint64 captured_at_unix_ms = 2;
+  RunState run_state = 3;
+  string status_message = 4;
+  bool blackout = 5;
+  AudioAnalysis audio = 6;
+  AudioRuntimeStatus audio_runtime = 7;
+  DmxRuntimeStatus dmx_runtime = 8;
+  RecordingStatus recording = 9;
+  BeatNetStatus beatnet = 10;
+  MediaInfo media = 11;
+  repeated FixtureState fixture_states = 12;
+  bytes dmx_universe = 13;
+  float effects_fps = 14;
+}
+
+message AudioAnalysis {
+  float energy = 1;
+  float rms = 2;
+  float bass = 3;
+  float mid = 4;
+  float high = 5;
+  float tempo = 6;
+  bool beat_detected = 7;
+  bool downbeat_detected = 8;
+  float beat_confidence = 9;
+  float beat_position = 10;
+  float bar_position = 11;
+  uint64 estimated_beat = 12;
+  uint64 estimated_bar = 13;
+  float danceability = 14;
+  float valence = 15;
+  repeated float waveform = 16;
+  repeated float spectrum = 17;
+  repeated SpectrogramFrame spectrogram = 18;
+  repeated float onset_history = 19;
+}
+
+message SpectrogramFrame {
+  repeated float bins = 1;
+}
+
+message RgbColor {
+  uint32 red = 1;
+  uint32 green = 2;
+  uint32 blue = 3;
+}
+
+message MediaInfo {
+  string track_name = 1;
+  string artist_name = 2;
+  bool is_playing = 3;
+  repeated RgbColor album_colors = 4;
+}
+
+message BeatNetStatus {
+  bool available = 1;
+  bool processing = 2;
+  string model_name = 3;
+  string model_path = 4;
+  string status = 5;
+  string last_error = 6;
+  float buffer_duration_seconds = 7;
+}
+
+message RecordingStatus {
+  bool recording = 1;
+  bool has_recording = 2;
+  float duration_seconds = 3;
+  float max_duration_seconds = 4;
+  uint32 sample_rate = 5;
+  uint32 channels = 6;
+  float peak = 7;
+  float rms = 8;
+  uint64 clipped_samples = 9;
+  string source = 10;
+  string error = 11;
+}
+
+message Recording {
+  RecordingStatus status = 1;
+  bytes wav = 2;
+}
+
+message AudioRuntimeStatus {
+  string configured_device_name = 1;
+  AudioInputMode configured_mode = 2;
+  AudioInputMode actual_mode = 3;
+  string device_name = 4;
+  string device_type = 5;
+  string host_api = 6;
+  uint32 channels = 7;
+  uint32 sample_rate = 8;
+  string selection_reason = 9;
+  string missing_device_name = 10;
+  bool running = 11;
+  string last_error = 12;
+  bool simulated = 13;
+}
+
+message DmxRuntimeStatus {
+  string configured_port = 1;
+  string port = 2;
+  string device_info = 3;
+  string interface_type = 4;
+  string break_method = 5;
+  bool running = 6;
+  bool is_open = 7;
+  uint64 send_count = 8;
+  uint64 error_count = 9;
+  uint64 consecutive_errors = 10;
+  string last_error = 11;
+  bool simulated = 12;
+}
+
+message AudioDevice {
+  string id = 1;
+  string name = 2;
+  string source_name = 3;
+  string device_type = 4;
+  uint32 channels = 5;
+  uint32 output_channels = 6;
+  uint32 sample_rate = 7;
+  string host_api = 8;
+  bool is_default = 9;
+  bool is_default_loopback = 10;
+}
+
+enum AudioInputMode {
+  AUDIO_INPUT_MODE_UNSPECIFIED = 0;
+  AUDIO_INPUT_MODE_AUTO = 1;
+  AUDIO_INPUT_MODE_SYSTEM_AUDIO = 2;
+  AUDIO_INPUT_MODE_MANUAL_DEVICE = 3;
+  AUDIO_INPUT_MODE_PIPEWIRE_SINK = 4;
+  AUDIO_INPUT_MODE_MICROPHONE = 5;
+}
+
+message ShowConfig {
+  string name = 1;
+  DmxConfig dmx = 2;
+  AudioConfig audio = 3;
+  EffectsConfig effects = 4;
+  repeated FixtureProfile profiles = 5;
+  repeated FixtureConfig fixtures = 6;
+}
+
+message DmxConfig {
+  string port = 1;
+  uint32 universe_size = 2;
+  uint32 fps = 3;
+  bool simulate = 4;
+}
+
+message AudioConfig {
+  AudioInputMode mode = 1;
+  string device_name = 2;
+  string pipewire_source_name = 3;
+  bool simulate = 4;
+  float gain = 5;
+  string beatnet_model_path = 6;
+}
+
+message EffectsConfig {
+  VisualizationMode mode = 1;
+  float intensity = 2;
+  bool force_max_brightness = 3;
+  float color_speed = 4;
+  float beat_sensitivity = 5;
+  float smooth_factor = 6;
+  bool strobe_on_drop = 7;
+  bool movement_enabled = 8;
+  float movement_speed = 9;
+  MovementMode movement_mode = 10;
+  EffectFixtureMode effect_fixture_mode = 11;
+  RotationMode rotation_mode = 12;
+  bool strobe_effect_enabled = 13;
+  StrobeEffectMode strobe_effect_mode = 14;
+  float strobe_effect_speed = 15;
+}
+
+enum VisualizationMode {
+  VISUALIZATION_MODE_UNSPECIFIED = 0;
+  VISUALIZATION_MODE_ENERGY = 1;
+  VISUALIZATION_MODE_FREQUENCY_SPLIT = 2;
+  VISUALIZATION_MODE_BEAT_PULSE = 3;
+  VISUALIZATION_MODE_COLOR_CYCLE = 4;
+  VISUALIZATION_MODE_RAINBOW_WAVE = 5;
+  VISUALIZATION_MODE_STROBE_BEAT = 6;
+  VISUALIZATION_MODE_RANDOM_FLASH = 7;
+}
+
+enum MovementMode {
+  MOVEMENT_MODE_UNSPECIFIED = 0;
+  MOVEMENT_MODE_SUBTLE = 1;
+  MOVEMENT_MODE_STANDARD = 2;
+  MOVEMENT_MODE_DRAMATIC = 3;
+  MOVEMENT_MODE_WALL_WASH = 4;
+  MOVEMENT_MODE_SWEEP = 5;
+  MOVEMENT_MODE_RANDOM = 6;
+  MOVEMENT_MODE_CIRCLE = 7;
+  MOVEMENT_MODE_FIGURE_8 = 8;
+  MOVEMENT_MODE_BALLYHOO = 9;
+  MOVEMENT_MODE_FAN = 10;
+  MOVEMENT_MODE_CHASE = 11;
+  MOVEMENT_MODE_STROBE_POSITION = 12;
+  MOVEMENT_MODE_CRAZY = 13;
+}
+
+enum EffectFixtureMode {
+  EFFECT_FIXTURE_MODE_UNSPECIFIED = 0;
+  EFFECT_FIXTURE_MODE_BALANCED = 1;
+  EFFECT_FIXTURE_MODE_STROBE_FOCUS = 2;
+  EFFECT_FIXTURE_MODE_MOVEMENT_FOCUS = 3;
+  EFFECT_FIXTURE_MODE_STROBE_ONLY = 4;
+  EFFECT_FIXTURE_MODE_MOVEMENT_ONLY = 5;
+}
+
+enum RotationMode {
+  ROTATION_MODE_UNSPECIFIED = 0;
+  ROTATION_MODE_OFF = 1;
+  ROTATION_MODE_MANUAL_SLOW = 2;
+  ROTATION_MODE_MANUAL_BEAT = 3;
+  ROTATION_MODE_AUTO_SLOW = 4;
+  ROTATION_MODE_AUTO_MEDIUM = 5;
+  ROTATION_MODE_AUTO_FAST = 6;
+  ROTATION_MODE_AUTO_MUSIC = 7;
+}
+
+enum StrobeEffectMode {
+  STROBE_EFFECT_MODE_UNSPECIFIED = 0;
+  STROBE_EFFECT_MODE_OFF = 1;
+  STROBE_EFFECT_MODE_AUTO = 2;
+  STROBE_EFFECT_MODE_EFFECT_1 = 3;
+  STROBE_EFFECT_MODE_EFFECT_2 = 4;
+  STROBE_EFFECT_MODE_EFFECT_3 = 5;
+  STROBE_EFFECT_MODE_EFFECT_4 = 6;
+  STROBE_EFFECT_MODE_EFFECT_5 = 7;
+  STROBE_EFFECT_MODE_EFFECT_6 = 8;
+  STROBE_EFFECT_MODE_EFFECT_7 = 9;
+  STROBE_EFFECT_MODE_EFFECT_8 = 10;
+  STROBE_EFFECT_MODE_EFFECT_9 = 11;
+  STROBE_EFFECT_MODE_EFFECT_10 = 12;
+  STROBE_EFFECT_MODE_EFFECT_11 = 13;
+  STROBE_EFFECT_MODE_EFFECT_12 = 14;
+  STROBE_EFFECT_MODE_EFFECT_13 = 15;
+  STROBE_EFFECT_MODE_EFFECT_14 = 16;
+  STROBE_EFFECT_MODE_EFFECT_15 = 17;
+  STROBE_EFFECT_MODE_EFFECT_16 = 18;
+  STROBE_EFFECT_MODE_EFFECT_17 = 19;
+  STROBE_EFFECT_MODE_EFFECT_18_STROBE = 20;
+}
+
+message ChannelCapability {
+  uint32 min_value = 1;
+  uint32 max_value = 2;
+  string name = 3;
+  string description = 4;
+  bool usable = 5;
+  bool is_off = 6;
+  bool is_manual = 7;
+  bool is_auto = 8;
+}
+
+message ChannelConfig {
+  uint32 offset = 1;
+  string name = 2;
+  string channel_type = 3;
+  uint32 default_value = 4;
+  optional uint32 fixed_value = 5;
+  uint32 min_value = 6;
+  uint32 max_value = 7;
+  repeated ChannelCapability capabilities = 8;
+  bool enabled = 9;
+}
+
+message DualColorMapping {
+  optional float primary_hue = 1;
+  optional float secondary_hue = 2;
+}
+
+message FixtureProfile {
+  string name = 1;
+  string manufacturer = 2;
+  string model = 3;
+  string fixture_type = 4;
+  uint32 channel_count = 5;
+  repeated ChannelConfig channels = 6;
+  string color_mixing = 7;
+  repeated DualColorMapping dual_color_map = 8;
+  uint32 pan_max_degrees = 9;
+  uint32 tilt_max_degrees = 10;
+}
+
+message FixtureConfig {
+  string id = 1;
+  string name = 2;
+  string profile_name = 3;
+  uint32 start_channel = 4;
+  uint32 position = 5;
+  float intensity_scale = 6;
+  uint32 pan_min = 7;
+  uint32 pan_max = 8;
+  uint32 tilt_min = 9;
+  uint32 tilt_max = 10;
+  repeated ChannelConfig channels = 11;
+}
+
+message FixtureState {
+  string fixture_id = 1;
+  string fixture_name = 2;
+  uint32 red = 3;
+  uint32 green = 4;
+  uint32 blue = 5;
+  uint32 white = 6;
+  uint32 amber = 7;
+  uint32 uv = 8;
+  uint32 cyan = 9;
+  uint32 magenta = 10;
+  uint32 yellow = 11;
+  uint32 dimmer = 12;
+  uint32 strobe = 13;
+  uint32 pan = 14;
+  uint32 pan_fine = 15;
+  uint32 tilt = 16;
+  uint32 tilt_fine = 17;
+  uint32 pan_tilt_speed = 18;
+  uint32 color_macro = 19;
+  uint32 effect = 20;
+  uint32 effect_speed = 21;
+  uint32 effect_pattern = 22;
+  uint32 gobo = 23;
+  uint32 prism = 24;
+  uint32 zoom = 25;
+  uint32 focus = 26;
+  uint32 iris = 27;
+}

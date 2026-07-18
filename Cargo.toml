@@ -1,0 +1,52 @@
+[package]
+name = "music-auto-show"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Real-time, audio-reactive DMX lighting controlled through a bundled gRPC-Web SPA"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0"
+async-stream = "0.3"
+axum = "0.8.9"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+clap = { version = "4.5", features = ["derive"] }
+cpal = "0.16"
+futures-core = "0.3"
+hound = "3.5"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+mime_guess = "2.0"
+nowhear = { version = "0.5.1", features = ["tracing"] }
+prost = "0.14.4"
+rand = "0.9"
+realfft = "3.5"
+rust-embed = "8.12.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serialport = "4.8"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-web = "0.14.6"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ureq = "3.3"
+url = "2.5"
+
+[build-dependencies]
+protoc-bin-vendored = "3.2"
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+approx = "0.5"
+tempfile = "3.23"
+
+[profile.release]
+lto = "thin"
+strip = true

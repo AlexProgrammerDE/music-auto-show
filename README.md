@@ -1,291 +1,134 @@
 # Music Auto Show
 
-A cross-platform Python application that automatically visualizes system audio to DMX-controlled lighting fixtures in real-time.
+Music Auto Show turns live system audio into real-time DMX lighting. A Rust service captures and analyzes audio, runs the original visualization and movement algorithms, drives Open DMX hardware, and serves a bundled Vite single-page app. The browser and gRPC-Web API share one port.
 
-## Features
+## What is included
 
-- **Real-Time Audio Analysis**: Captures system audio via WASAPI loopback (Windows) and analyzes it live
-  - BPM/Tempo detection using madmom
-  - Beat tracking and onset detection
-  - Energy/loudness levels
-  - Frequency bands (bass/mid/high)
-- **ENTTEC Open DMX USB Support**: Works with ENTTEC Open DMX USB and compatible FTDI-based DMX interfaces
-- **Multiple Visualization Modes**:
-  - Energy - Intensity based on audio energy
-  - Frequency Split - Bass/mid/high across fixtures
-  - Beat Pulse - Pulse on beat detection
-  - Color Cycle - Tempo-based color cycling
-  - Rainbow Wave - Animated rainbow across fixtures
-  - Strobe Beat - Strobe on beats
-  - Random Flash - Random fixture flashes
-- **Fixture Configuration**:
-  - Define raw DMX channel mappings
-  - Support for RGB, RGBW, dimmer, strobe
-  - Pan/tilt with movement limits
-  - Position/orientation for effects ordering
-- **GUI with Live Visualizer**: See fixture colors and audio analysis in real-time
-- **Headless Mode**: Run from JSON config without GUI
-- **Works with Any Audio Source**: Spotify, YouTube, local files, games - anything playing through your system
+- Native BeatNet+ inference with the official 288-feature network shape and causal beat, downbeat, tempo, phase, and bar tracking
+- System audio, microphone, PipeWire/PulseAudio monitor, and deterministic simulation inputs
+- Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash visualizations
+- All movement modes from the original app, including sweeps, circles, figure eight, ballyhoo, fan, chase, strobe position, and crazy movement
+- Per-fixture channel mapping, fixed values, channel ranges, movement limits, intensity scaling, and built-in profiles
+- Open DMX USB output with auto-discovery, break and mark-after-break timing, live universe inspection, and simulation
+- Live waveform, spectrum, five-second spectrogram, frequency meters, stage beams, fixture output, media metadata, and album palette visualizations
+- Audio input recording with preview and WAV download
+- JSON configuration import, migration, export, and reset through the Rust API
+- A Vite SPA built with TanStack Router, Query, Form, Table v9, Effect, shadcn/ui, Tailwind CSS variables, and Credenza
 
-## Installation
+## Requirements
 
-### System Dependencies
+- Rust 1.88 or newer
+- Bun 1.3.13 or a compatible newer release
+- A BeatNet+ checkpoint if neural beat tracking should be enabled
 
-Before installing with pip, you need Python development headers, a C compiler, and native audio/media libraries. These are required to compile `PyAudio`, `dbus-python`, and `madmom` from source.
-
-**Fedora / RHEL / CentOS:**
-```bash
-sudo dnf install python3-devel portaudio-devel dbus-devel glib2-devel pkgconf-pkg-config gcc
-```
-
-**Debian / Ubuntu:**
-```bash
-sudo apt install python3-dev portaudio19-dev libdbus-1-dev libglib2.0-dev pkg-config gcc
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S python portaudio dbus glib2 pkgconf gcc
-```
-
-**Windows:**
-
-No additional system dependencies required - pre-built wheels are available. Just ensure you have:
-- Python 3.10-3.12 (3.13+ may have compatibility issues)
-- [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (usually already installed)
-
-**macOS:**
-```bash
-brew install portaudio
-```
-
-### Option 1: Conda (Recommended)
-
-Conda is recommended because `madmom` (the beat detection library) and the native audio dependencies can require compiled binaries that aren't available via pip for all Python versions.
-
-**Windows:**
-```bash
-conda env create -f environment.yml
-conda activate music-auto-show
-```
-
-**Linux:**
-```bash
-conda env create -f environment-linux.yml
-conda activate music-auto-show
-```
-
-If you don't have conda, download Miniconda from: https://docs.conda.io/en/latest/miniconda.html
-
-### Option 2: pip only (Python 3.10-3.12)
-
-If you have Python 3.10, 3.11, or 3.12, the required packages may install directly via pip after the system dependencies above are installed:
+Linux builds need ALSA and udev development libraries. PipeWire system-audio capture also uses `pactl` and `parec` at runtime.
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
+# Debian or Ubuntu
+sudo apt install libasound2-dev libudev-dev pkg-config pulseaudio-utils
 
-# Install dependencies
-pip install -r requirements.txt
+# Fedora
+sudo dnf install alsa-lib-devel systemd-devel pkgconf-pkg-config pulseaudio-utils
+
+# Arch Linux
+sudo pacman -S alsa-lib systemd-libs pkgconf libpulse
 ```
 
-> **Note:** pip installs can fail on newer Python versions when native wheels are not available. Use Python 3.10-3.12 or the conda setup above.
-
-### Option 3: Linux with system audio packages
-
-On Debian/Ubuntu, you can install the audio and D-Bus bindings from the package manager, then install the remaining Python dependencies with pip:
+On Linux, add the hardware user to the serial-port group before using Open DMX:
 
 ```bash
-sudo apt install python3-dbus python3-pyaudio
-
-# Then install the rest
-pip install pydantic numpy "madmom @ git+https://github.com/CPJKU/madmom.git" pyftdi pyserial nicegui Pillow
+sudo usermod -a -G dialout "$USER"
 ```
 
-### Dependencies
+Log out and back in after changing group membership.
 
-**Required:**
-- `pydantic` - Configuration validation
-- `numpy` - Numerical operations
-- `PyAudioWPatch` - WASAPI loopback audio capture (Windows)
-- `PyAudio` - Audio capture (Linux/Mac)
-- `madmom` - Real-time beat/tempo detection
-
-**Optional (but recommended):**
-- `nicegui` - GUI interface
-- `pyftdi` - FTDI/ENTTEC Open DMX USB support
-- `pyserial` - Generic serial DMX support
-- `Pillow` - Album art color extraction
-- `winrt-*` (Windows) / `dbus-python` (Linux) - Now playing info
-
-### Windows Audio Setup
-
-The application captures system audio using WASAPI loopback. This works automatically on Windows - no additional configuration needed. The app will capture whatever audio is playing through your default speakers/headphones.
-
-## Quick Start
-
-### GUI Mode
+## Install and run
 
 ```bash
-python main.py
+bun install --frozen-lockfile
+bun install --cwd frontend --frozen-lockfile
+cargo run --release -- --simulate
 ```
 
-### Headless Mode
+Open `http://127.0.0.1:3000`. Simulation exercises audio analysis, the full effects pipeline, live visualizations, and DMX output without hardware.
+
+For real audio and DMX:
 
 ```bash
-# Run with configuration file
-python main.py --headless example_config.json
-
-# Run with simulation (no hardware required)
-python main.py --headless example_config.json --simulate
+cargo run --release -- --config show.json --listen 127.0.0.1:3000
 ```
 
-### Create Example Config
+The configuration file is created with defaults when it does not exist. The Settings page can load an older JSON configuration, migrate it through Rust, save the active file, or export a portable copy.
+
+### BeatNet+ checkpoint
+
+The binary expects the checkpoint at `models/beatnet-plus.pt` by default. You can select another path in Settings. The loader accepts a PyTorch state dictionary matching the [official BeatNet+ architecture](https://github.com/mjhydri/BeatNet-Plus).
+
+Checkpoint files are intentionally not committed or embedded. The upstream repository does not currently provide a license for redistributing its published weights, so obtain the model from the upstream project and review its terms before use. Without a compatible checkpoint, the app keeps running and reports the detector error in the live BeatNet+ panel.
+
+## Frontend development
+
+Run the Rust service and Vite dev server in separate terminals:
 
 ```bash
-python main.py --create-example my_config.json
+cargo run -- --simulate
+bun run frontend:dev
 ```
 
-### Check Dependencies
+Open `http://127.0.0.1:5173`. Vite proxies `/api` to the Rust server on port 3000. Production uses one port because `rust-embed` includes `frontend/dist` in the executable and Axum falls back to the SPA shell for client routes. All gRPC-Web methods live below `/api`; every other path belongs to embedded assets or the SPA.
+
+The protobuf contract lives in `proto/music_auto_show/v1/music_auto_show.proto`. Buf generates the TypeScript client definitions used by Connect gRPC-Web:
 
 ```bash
-python main.py --check-deps
+bun run proto:format
+bun run proto:lint
+bun run proto:generate
 ```
 
-## Configuration
+## Validate and build
 
-Configuration is stored as JSON. Example structure:
+```bash
+# Protobuf, frontend formatting/types/lint/tests, then Rust tests
+bun run check
 
-```json
-{
-  "name": "My Light Show",
-  "dmx": {
-    "port": "",
-    "universe_size": 512,
-    "fps": 40
-  },
-  "effects": {
-    "mode": "rainbow_wave",
-    "intensity": 0.8,
-    "force_max_brightness": false,
-    "color_speed": 1.0,
-    "beat_sensitivity": 0.5,
-    "smooth_factor": 0.3,
-    "strobe_on_drop": false,
-    "movement_enabled": true,
-    "movement_speed": 0.5
-  },
-  "fixtures": [
-    {
-      "name": "Par Light 1",
-      "start_channel": 1,
-      "position": 0,
-      "channels": [
-        {"channel": 1, "channel_type": "red"},
-        {"channel": 2, "channel_type": "green"},
-        {"channel": 3, "channel_type": "blue"},
-        {"channel": 4, "channel_type": "dimmer"}
-      ]
-    }
-  ]
-}
+# Build the SPA and embed it in a release binary
+bun run build
 ```
 
-### Fixture Channel Types
+Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/ui/**` is excluded because those files are owned by the shadcn preset and remain upstream-compatible. ESLint is not part of the project.
 
-| Type | Description |
-|------|-------------|
-| `red` | Red color channel |
-| `green` | Green color channel |
-| `blue` | Blue color channel |
-| `white` | White color channel |
-| `dimmer` | Master dimmer |
-| `pan` | Pan position (0-255) |
-| `pan_fine` | Pan fine control |
-| `tilt` | Tilt position (0-255) |
-| `tilt_fine` | Tilt fine control |
-| `speed` | Movement speed |
-| `strobe` | Strobe control |
-| `color_wheel` | Color wheel position |
-| `gobo` | Gobo selection |
-| `none` | Unused channel |
+## Runtime options
 
-### Visualization Modes
-
-| Mode | Description |
-|------|-------------|
-| `energy` | Audio energy drives overall brightness |
-| `frequency_split` | Split fixtures into bass/mid/high bands |
-| `beat_pulse` | Pulse intensity on beats |
-| `color_cycle` | Cycle through colors based on tempo |
-| `rainbow_wave` | Rainbow effect waves across fixtures |
-| `strobe_beat` | Strobe flash on beats |
-| `random_flash` | Random fixtures flash on beats |
-
-Set `force_max_brightness` to `true` to keep active fixtures at their configured maximum brightness while effects still control color, movement, strobe, and fixture selection.
-
-## Audio Analysis Features
-
-The real-time audio analyzer provides:
-
-| Feature | Description |
-|---------|-------------|
-| **Energy** | Overall loudness/intensity (0-1) |
-| **Bass** | Low frequency energy (20-250 Hz) |
-| **Mid** | Mid frequency energy (250-4000 Hz) |
-| **High** | High frequency energy (4000-20000 Hz) |
-| **Tempo** | Detected BPM (beats per minute) |
-| **Beat** | Beat detection with timing |
-| **Onset** | Note/hit detection |
-
-## Hardware Setup
-
-### ENTTEC Open DMX USB
-
-1. Connect the ENTTEC Open DMX USB to your computer
-2. The port will be auto-detected (or specify manually in config)
-3. On Linux, you may need to add your user to the `dialout` group:
-   ```bash
-   sudo usermod -a -G dialout $USER
-   ```
-
-### Supported DMX Interfaces
-
-- ENTTEC Open DMX USB (FT232R-based)
-- Other FTDI FT232-based USB-DMX interfaces
-- Generic serial DMX interfaces
-
-## Project Structure
-
-```
-music-auto-show/
-├── main.py              # Entry point
-├── config.py            # Configuration models
-├── dmx_controller.py    # DMX interface layer
-├── audio_analyzer.py    # Real-time audio analysis
-├── effects_engine.py    # Visualization engine
-├── gui.py               # Dear PyGui interface
-├── headless.py          # Headless mode runner
-├── requirements.txt     # Dependencies
-├── example_config.json  # Example configuration
-└── README.md            # This file
+```text
+--listen <ADDRESS>  Address for the SPA and gRPC-Web API [default: 127.0.0.1:3000]
+--config <PATH>     JSON configuration to load and save [default: config.json]
+--simulate          Use generated audio and in-memory DMX
 ```
 
-## Troubleshooting
+Set `RUST_LOG` to change logging detail, for example `RUST_LOG=music_auto_show=debug`.
 
-### No audio detected
-- Make sure audio is playing through your default output device
-- Check that PyAudioWPatch is installed: `pip install PyAudioWPatch`
-- Try running with `--simulate-audio` to test without audio capture
+## Architecture
 
-### DMX not working
-- Check the USB connection
-- On Windows, ensure FTDI drivers are installed
-- Try specifying the port manually in the config
-- Use `--simulate-dmx` to test without hardware
+```text
+Audio capture -> Rust analyzer -> BeatNet+ and audio features -> Effects engine -> DMX output
+                                      |
+                                      v
+                              snapshot watch stream
+                                      |
+                                      v
+Vite SPA <- protobuf and gRPC-Web <- tonic-web and Axum <- bundled SPA assets
+```
+
+- `src/audio.rs` captures, resamples, analyzes, and records audio.
+- `src/beatnet.rs` implements BeatNet+ feature extraction, inference, and causal decoding.
+- `src/effects.rs` contains the ported visualization, movement, fixture, and universe algorithms.
+- `src/dmx.rs` owns Open DMX and simulated output.
+- `src/app.rs` coordinates runtime state and publishes snapshots.
+- `src/api.rs` implements the protobuf service.
+- `frontend/src` contains the TanStack and Effect SPA.
+
+See [the migration notes](docs/migration.md) for the parity contract and design decisions.
 
 ## License
 
-MIT License
+The application is MIT licensed. BeatNet+ code and checkpoint terms are governed by their upstream project and are not redistributed here.
