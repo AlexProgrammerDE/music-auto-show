@@ -2083,6 +2083,57 @@ mod tests {
     }
 
     #[test]
+    fn single_mover_chase_does_not_pause_for_static_fixtures() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![
+            test_fixture(
+                "static-before",
+                1,
+                0,
+                vec![test_channel(1, "intensity_red")],
+            ),
+            test_fixture(
+                "only-mover",
+                2,
+                1,
+                vec![
+                    test_channel(1, "position_pan"),
+                    test_channel(2, "position_tilt"),
+                ],
+            ),
+            test_fixture(
+                "static-after",
+                4,
+                2,
+                vec![test_channel(1, "intensity_blue")],
+            ),
+        ];
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.movement_mode = MovementMode::Chase as i32;
+        settings.movement_speed = 1.0;
+        let config = validated(config);
+        let mut engine = EffectsEngine::default();
+
+        for estimated_beat in [1, 2] {
+            engine.process(
+                &config,
+                &AudioAnalysis {
+                    energy: 0.8,
+                    tempo: 120.0,
+                    estimated_beat,
+                    ..Default::default()
+                },
+                &[],
+                false,
+                Duration::from_millis(25),
+            );
+
+            assert_eq!(engine.wall_corner_index["__chase_index__"], 0);
+            approx::assert_abs_diff_eq!(engine.target_pan["only-mover"], 229.5);
+        }
+    }
+
+    #[test]
     fn fan_spreads_only_movement_capable_fixtures() {
         let mut config = default_show_config(true);
         config.fixtures = vec![
