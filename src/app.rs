@@ -1,10 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,6 +10,7 @@ use tokio::{
     sync::{Mutex, RwLock, watch},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{
@@ -65,7 +63,7 @@ pub struct App {
     task: Mutex<Option<JoinHandle<()>>>,
     media_task: Mutex<Option<JoinHandle<()>>>,
     media: RwLock<MediaInfo>,
-    shutdown: AtomicBool,
+    shutdown: CancellationToken,
     cli_simulate: bool,
 }
 
@@ -84,7 +82,7 @@ impl App {
             task: Mutex::new(None),
             media_task: Mutex::new(None),
             media: RwLock::new(MediaInfo::default()),
-            shutdown: AtomicBool::new(false),
+            shutdown: CancellationToken::new(),
             cli_simulate: simulate,
         })
     }
@@ -99,31 +97,31 @@ impl App {
             let mut interval = tokio::time::interval(Duration::from_millis(25));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                interval.tick().await;
-                if app.shutdown.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Err(error) = app.tick().await {
-                    error!(%error, "show frame failed");
-                    app.fail_show(error.to_string()).await;
+                tokio::select! {
+                    biased;
+                    () = app.shutdown.cancelled() => break,
+                    _ = interval.tick() => {
+                        if let Err(error) = app.tick().await {
+                            error!(%error, "show frame failed");
+                            app.fail_show(error.to_string()).await;
+                        }
+                    }
                 }
             }
         }));
+        drop(task);
         let mut media_task = self.media_task.lock().await;
         if media_task.is_none() {
             let media_app = Arc::clone(self);
             *media_task = Some(tokio::spawn(async move {
-                crate::media::monitor(&media_app.media, || {
-                    media_app.shutdown.load(Ordering::Relaxed)
-                })
-                .await;
+                crate::media::monitor(&media_app.media, media_app.shutdown.clone()).await;
             }));
         }
         Ok(())
     }
 
     pub async fn stop_runtime(&self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        self.shutdown.cancel();
         self.stop_show().await;
         let mut runtime = self.runtime.lock().await;
         runtime.capture = None;
@@ -131,11 +129,15 @@ impl App {
         runtime.analyzer = None;
         runtime.recording_monitor = false;
         drop(runtime);
-        if let Some(task) = self.task.lock().await.take() {
-            let _ = task.await;
+        if let Some(task) = self.task.lock().await.take()
+            && let Err(error) = task.await
+        {
+            error!(%error, "show runtime task did not stop cleanly");
         }
-        if let Some(task) = self.media_task.lock().await.take() {
-            let _ = task.await;
+        if let Some(task) = self.media_task.lock().await.take()
+            && let Err(error) = task.await
+        {
+            error!(%error, "media monitor task did not stop cleanly");
         }
     }
 

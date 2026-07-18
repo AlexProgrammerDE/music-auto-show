@@ -100,12 +100,22 @@ Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/u
 ## Runtime options
 
 ```text
---listen <ADDRESS>  Address for the SPA and gRPC-Web API [default: 127.0.0.1:3000]
---config <PATH>     JSON configuration to load and save [default: config.json]
---simulate          Use generated audio and in-memory DMX
+--listen <ADDRESS>            Address for the SPA and gRPC-Web API [default: 127.0.0.1:3000]
+--config <PATH>               JSON configuration to load and save [default: config.json]
+--simulate                    Use generated audio and in-memory DMX
+--shutdown-timeout <SECONDS>  Maximum time to wait for a graceful shutdown [default: 10]
 ```
 
-Set `RUST_LOG` to change logging detail, for example `RUST_LOG=music_auto_show=debug`.
+The same runtime settings can be supplied through `MUSIC_AUTO_SHOW_LISTEN`,
+`MUSIC_AUTO_SHOW_CONFIG`, `MUSIC_AUTO_SHOW_SIMULATE`, and
+`MUSIC_AUTO_SHOW_SHUTDOWN_TIMEOUT`. Command-line values take precedence. Set
+`RUST_LOG` to change logging detail, for example
+`RUST_LOG=music_auto_show=debug`.
+
+Ctrl+C shuts the service down gracefully. On Unix, `SIGTERM`, `SIGQUIT`, and
+`SIGHUP` do the same. Windows console close, logoff, shutdown, and Ctrl+Break
+events are also handled. A second shutdown event or the configured timeout
+forces the process to finish.
 
 ## Architecture
 

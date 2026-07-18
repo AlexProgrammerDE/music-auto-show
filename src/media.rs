@@ -5,13 +5,18 @@ use std::{collections::HashMap, fs, time::Duration};
 use image::imageops::FilterType;
 use nowhear::{Artwork, MediaSource, MediaSourceBuilder, PlaybackState, PlayerInfo};
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use url::Url;
 
 use crate::proto::v1::{MediaInfo, RgbColor};
 
-pub async fn monitor(target: &RwLock<MediaInfo>, shutdown: impl Fn() -> bool) {
-    let source = match MediaSourceBuilder::new().build().await {
+pub async fn monitor(target: &RwLock<MediaInfo>, shutdown: CancellationToken) {
+    let source = match tokio::select! {
+        biased;
+        () = shutdown.cancelled() => return,
+        result = MediaSourceBuilder::new().build() => result,
+    } {
         Ok(source) => source,
         Err(error) => {
             warn!(%error, "system media integration is unavailable");
@@ -24,11 +29,17 @@ pub async fn monitor(target: &RwLock<MediaInfo>, shutdown: impl Fn() -> bool) {
     let mut cached_colors = Vec::new();
 
     loop {
-        interval.tick().await;
-        if shutdown() {
-            return;
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            _ = interval.tick() => {}
         }
-        match current_player(&source).await {
+        let player = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            result = current_player(&source) => result,
+        };
+        match player {
             Ok(Some(player)) => {
                 let track_key = player
                     .current_track
@@ -47,14 +58,16 @@ pub async fn monitor(target: &RwLock<MediaInfo>, shutdown: impl Fn() -> bool) {
                         .current_track
                         .as_ref()
                         .and_then(|track| track.artwork.clone());
-                    cached_colors = tokio::task::spawn_blocking(move || {
-                        artwork
-                            .as_ref()
-                            .and_then(read_artwork)
-                            .map_or_else(Vec::new, |bytes| extract_colors(&bytes, 5))
-                    })
-                    .await
-                    .unwrap_or_default();
+                    cached_colors = tokio::select! {
+                        biased;
+                        () = shutdown.cancelled() => return,
+                        result = tokio::task::spawn_blocking(move || {
+                            artwork
+                                .as_ref()
+                                .and_then(read_artwork)
+                                .map_or_else(Vec::new, |bytes| extract_colors(&bytes, 5))
+                        }) => result.unwrap_or_default(),
+                    };
                 }
                 *target.write().await = player_to_proto(player, cached_colors.clone());
             }

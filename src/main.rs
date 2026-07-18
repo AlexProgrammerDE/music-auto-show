@@ -1,40 +1,39 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+mod cli;
+mod shutdown;
+
+use std::{future::IntoFuture, sync::Arc};
 
 use anyhow::Context;
 use axum::Router;
 use clap::Parser;
+use cli::Cli;
 use music_auto_show::{
     api::GrpcApi, app::App, assets,
     proto::v1::music_auto_show_service_server::MusicAutoShowServiceServer,
 };
+use shutdown::ShutdownSignals;
+use tokio_util::sync::CancellationToken;
 use tonic::service::Routes;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
-
-#[derive(Debug, Parser)]
-#[command(version, about)]
-struct Cli {
-    /// Address used by both the bundled SPA and gRPC-Web API.
-    #[arg(long, default_value = "127.0.0.1:3000")]
-    listen: SocketAddr,
-
-    /// Load and save the show configuration at this path.
-    #[arg(long, default_value = "config.json")]
-    config: PathBuf,
-
-    /// Use generated audio and an in-memory DMX interface.
-    #[arg(long)]
-    simulate: bool,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let cli = Cli::parse();
+    run(cli).await
+}
+
+async fn run(cli: Cli) -> anyhow::Result<()> {
+    let shutdown_timeout = cli.shutdown_timeout();
+    let mut signals = ShutdownSignals::new().context("failed to register shutdown signals")?;
+    let listener = tokio::net::TcpListener::bind(cli.listen)
+        .await
+        .with_context(|| format!("failed to bind {}", cli.listen))?;
     let app_state = Arc::new(App::load(cli.config, cli.simulate).await?);
     app_state.start_runtime().await?;
 
@@ -47,38 +46,64 @@ async fn main() -> anyhow::Result<()> {
         .fallback(assets::serve)
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind(cli.listen)
-        .await
-        .with_context(|| format!("failed to bind {}", cli.listen))?;
     info!(address = %cli.listen, "Music Auto Show is ready");
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    app_state.stop_runtime().await;
-    Ok(())
-}
+    let server_shutdown = CancellationToken::new();
+    let shutdown_requested = server_shutdown.clone();
+    let server = axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_requested.cancelled_owned())
+        .into_future();
+    tokio::pin!(server);
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
+    let shutdown_event = tokio::select! {
+        result = &mut server => {
+            app_state.stop_runtime().await;
+            result.context("HTTP server stopped unexpectedly")?;
+            info!("Music Auto Show stopped");
+            return Ok(());
+        }
+        event = signals.recv() => event,
+    };
+    let shutdown_event = match shutdown_event {
+        Ok(event) => event,
+        Err(error) => {
+            server_shutdown.cancel();
+            app_state.stop_runtime().await;
+            return Err(error).context("failed while listening for a shutdown event");
+        }
+    };
+
+    info!(event = %shutdown_event, "graceful shutdown requested");
+    server_shutdown.cancel();
+
+    let graceful_shutdown = async {
+        app_state.stop_runtime().await;
+        server
             .await
-            .expect("Ctrl-C handler installs");
+            .context("HTTP server failed during graceful shutdown")
     };
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("SIGTERM handler installs")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    tokio::pin!(graceful_shutdown);
 
     tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+        result = &mut graceful_shutdown => result?,
+        event = signals.recv() => {
+            match event {
+                Ok(event) => {
+                    warn!(event = %event, "forcing shutdown after a second shutdown event");
+                }
+                Err(error) => {
+                    warn!(%error, "forcing shutdown because the shutdown listener stopped");
+                }
+            }
+        }
+        () = tokio::time::sleep(shutdown_timeout) => {
+            warn!(
+                timeout_seconds = shutdown_timeout.as_secs(),
+                "forcing shutdown after the graceful shutdown timeout"
+            );
+        }
     }
+
+    info!("Music Auto Show stopped");
+    Ok(())
 }
