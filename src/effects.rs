@@ -1664,7 +1664,14 @@ fn channel_value(state: &FixtureState, channel: &ChannelConfig) -> u32 {
         "beam_zoom_small_big" | "beam_zoom_big_small" => state.zoom,
         "beam_focus_near_far" | "beam_focus_far_near" => state.focus,
         "shutter_iris_min_to_max" | "shutter_iris_max_to_min" => state.iris,
-        _ => channel.default_value,
+        "nothing" | "fixed" | "maintenance" => channel.default_value,
+        unsupported => {
+            debug_assert!(
+                false,
+                "unsupported channel type reached effects: {unsupported}"
+            );
+            channel.default_value
+        }
     }
 }
 

@@ -2,6 +2,8 @@ use std::{
     array,
     collections::VecDeque,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+    time::SystemTime,
 };
 
 use candle_core::{DType, Device, Shape};
@@ -280,6 +282,12 @@ fn logarithmic_filterbank() -> Vec<Filter> {
 }
 
 struct BeatNetNetwork {
+    weights: Arc<BeatNetWeights>,
+    hidden: [Vec<f32>; LSTM_LAYERS],
+    cell: [Vec<f32>; LSTM_LAYERS],
+}
+
+struct BeatNetWeights {
     conv_weight: Vec<f32>,
     conv_bias: Vec<f32>,
     input_weight: Vec<f32>,
@@ -287,9 +295,21 @@ struct BeatNetNetwork {
     lstm: [LstmWeights; LSTM_LAYERS],
     output_weight: Vec<f32>,
     output_bias: Vec<f32>,
-    hidden: [Vec<f32>; LSTM_LAYERS],
-    cell: [Vec<f32>; LSTM_LAYERS],
 }
+
+struct CachedBeatNetWeights {
+    key: BeatNetCacheKey,
+    weights: Arc<BeatNetWeights>,
+}
+
+#[derive(Eq, PartialEq)]
+struct BeatNetCacheKey {
+    path: PathBuf,
+    length: u64,
+    modified: Option<SystemTime>,
+}
+
+static BEATNET_WEIGHTS_CACHE: OnceLock<Mutex<Option<CachedBeatNetWeights>>> = OnceLock::new();
 
 struct LstmWeights {
     input: Vec<f32>,
@@ -300,55 +320,16 @@ struct LstmWeights {
 
 impl BeatNetNetwork {
     fn load(path: &Path) -> Result<Self, BeatNetError> {
-        let checkpoint_size = path
-            .metadata()
-            .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?
-            .len();
-        if checkpoint_size > MAX_CHECKPOINT_BYTES {
-            return Err(BeatNetError::InvalidCheckpoint(format!(
-                "checkpoint is {checkpoint_size} bytes; maximum supported size is {MAX_CHECKPOINT_BYTES} bytes"
-            )));
-        }
-        let builder = VarBuilder::from_pth(path, DType::F32, &Device::Cpu)
-            .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
-        let mut lstm = Vec::with_capacity(LSTM_LAYERS);
-        for layer in 0..LSTM_LAYERS {
-            lstm.push(LstmWeights {
-                input: load_tensor(
-                    &builder,
-                    (LSTM_GATES, HIDDEN_SIZE),
-                    &format!("lstm.weight_ih_l{layer}"),
-                )?,
-                recurrent: load_tensor(
-                    &builder,
-                    (LSTM_GATES, HIDDEN_SIZE),
-                    &format!("lstm.weight_hh_l{layer}"),
-                )?,
-                input_bias: load_tensor(&builder, LSTM_GATES, &format!("lstm.bias_ih_l{layer}"))?,
-                recurrent_bias: load_tensor(
-                    &builder,
-                    LSTM_GATES,
-                    &format!("lstm.bias_hh_l{layer}"),
-                )?,
-            });
-        }
-        let lstm: [LstmWeights; LSTM_LAYERS] = lstm
-            .try_into()
-            .map_err(|_| BeatNetError::InvalidCheckpoint("wrong LSTM layer count".into()))?;
+        let weights = load_cached_weights(path)?;
         Ok(Self {
-            conv_weight: load_tensor(&builder, (2, 1, 10), "conv1.weight")?,
-            conv_bias: load_tensor(&builder, 2, "conv1.bias")?,
-            input_weight: load_tensor(&builder, (HIDDEN_SIZE, 278), "linear0.weight")?,
-            input_bias: load_tensor(&builder, HIDDEN_SIZE, "linear0.bias")?,
-            lstm,
-            output_weight: load_tensor(&builder, (3, HIDDEN_SIZE), "output_linear.weight")?,
-            output_bias: load_tensor(&builder, 3, "output_linear.bias")?,
+            weights,
             hidden: array::from_fn(|_| vec![0.0; HIDDEN_SIZE]),
             cell: array::from_fn(|_| vec![0.0; HIDDEN_SIZE]),
         })
     }
 
     fn infer(&mut self, features: &[f32; FEATURE_SIZE]) -> [f32; 3] {
+        let weights = Arc::clone(&self.weights);
         let conv_length = FEATURE_SIZE - 10 + 1;
         let pooled_length = conv_length / 2;
         let mut pooled = [0.0_f32; 278];
@@ -357,10 +338,10 @@ impl BeatNetNetwork {
                 let conv = |position: usize| {
                     let value = (0..10)
                         .map(|kernel| {
-                            features[position + kernel] * self.conv_weight[channel * 10 + kernel]
+                            features[position + kernel] * weights.conv_weight[channel * 10 + kernel]
                         })
                         .sum::<f32>()
-                        + self.conv_bias[channel];
+                        + weights.conv_bias[channel];
                     value.max(0.0)
                 };
                 pooled[channel * pooled_length + output] =
@@ -369,18 +350,27 @@ impl BeatNetNetwork {
         }
 
         let mut current = [0.0_f32; HIDDEN_SIZE];
-        dense_into(&pooled, &self.input_weight, &self.input_bias, &mut current);
+        dense_into(
+            &pooled,
+            &weights.input_weight,
+            &weights.input_bias,
+            &mut current,
+        );
         for layer in 0..LSTM_LAYERS {
-            let weights = &self.lstm[layer];
+            let layer_weights = &weights.lstm[layer];
             let mut gates = [0.0_f32; LSTM_GATES];
             for (gate, value) in gates.iter_mut().enumerate() {
-                let input_sum = dot_row(&weights.input, gate, HIDDEN_SIZE, &current);
-                let hidden_sum =
-                    dot_row(&weights.recurrent, gate, HIDDEN_SIZE, &self.hidden[layer]);
+                let input_sum = dot_row(&layer_weights.input, gate, HIDDEN_SIZE, &current);
+                let hidden_sum = dot_row(
+                    &layer_weights.recurrent,
+                    gate,
+                    HIDDEN_SIZE,
+                    &self.hidden[layer],
+                );
                 *value = input_sum
                     + hidden_sum
-                    + weights.input_bias[gate]
-                    + weights.recurrent_bias[gate];
+                    + layer_weights.input_bias[gate]
+                    + layer_weights.recurrent_bias[gate];
             }
             let mut next_hidden = [0.0; HIDDEN_SIZE];
             let mut next_cell = [0.0; HIDDEN_SIZE];
@@ -399,8 +389,8 @@ impl BeatNetNetwork {
         let mut logits = [0.0; 3];
         dense_into(
             &current,
-            &self.output_weight,
-            &self.output_bias,
+            &weights.output_weight,
+            &weights.output_bias,
             &mut logits,
         );
         softmax3([logits[0], logits[1], logits[2]])
@@ -412,6 +402,77 @@ impl BeatNetNetwork {
             self.cell[layer].fill(0.0);
         }
     }
+}
+
+fn load_cached_weights(path: &Path) -> Result<Arc<BeatNetWeights>, BeatNetError> {
+    let metadata = path
+        .metadata()
+        .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
+    let key = BeatNetCacheKey {
+        path: path.canonicalize().unwrap_or_else(|_| path.to_owned()),
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+    };
+    let cache = BEATNET_WEIGHTS_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = match cache.lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(cached) = cache.as_ref()
+        && key.modified.is_some()
+        && cached.key == key
+    {
+        return Ok(Arc::clone(&cached.weights));
+    }
+    let weights = Arc::new(load_weights(path)?);
+    *cache = Some(CachedBeatNetWeights {
+        key,
+        weights: Arc::clone(&weights),
+    });
+    Ok(weights)
+}
+
+fn load_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
+    let checkpoint_size = path
+        .metadata()
+        .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?
+        .len();
+    if checkpoint_size > MAX_CHECKPOINT_BYTES {
+        return Err(BeatNetError::InvalidCheckpoint(format!(
+            "checkpoint is {checkpoint_size} bytes; maximum supported size is {MAX_CHECKPOINT_BYTES} bytes"
+        )));
+    }
+    let builder = VarBuilder::from_pth(path, DType::F32, &Device::Cpu)
+        .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
+    let mut lstm = Vec::with_capacity(LSTM_LAYERS);
+    for layer in 0..LSTM_LAYERS {
+        lstm.push(LstmWeights {
+            input: load_tensor(
+                &builder,
+                (LSTM_GATES, HIDDEN_SIZE),
+                &format!("lstm.weight_ih_l{layer}"),
+            )?,
+            recurrent: load_tensor(
+                &builder,
+                (LSTM_GATES, HIDDEN_SIZE),
+                &format!("lstm.weight_hh_l{layer}"),
+            )?,
+            input_bias: load_tensor(&builder, LSTM_GATES, &format!("lstm.bias_ih_l{layer}"))?,
+            recurrent_bias: load_tensor(&builder, LSTM_GATES, &format!("lstm.bias_hh_l{layer}"))?,
+        });
+    }
+    let lstm: [LstmWeights; LSTM_LAYERS] = lstm
+        .try_into()
+        .map_err(|_| BeatNetError::InvalidCheckpoint("wrong LSTM layer count".into()))?;
+    Ok(BeatNetWeights {
+        conv_weight: load_tensor(&builder, (2, 1, 10), "conv1.weight")?,
+        conv_bias: load_tensor(&builder, 2, "conv1.bias")?,
+        input_weight: load_tensor(&builder, (HIDDEN_SIZE, 278), "linear0.weight")?,
+        input_bias: load_tensor(&builder, HIDDEN_SIZE, "linear0.bias")?,
+        lstm,
+        output_weight: load_tensor(&builder, (3, HIDDEN_SIZE), "output_linear.weight")?,
+        output_bias: load_tensor(&builder, 3, "output_linear.bias")?,
+    })
 }
 
 fn load_tensor<S: Into<Shape>>(

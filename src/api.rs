@@ -1,6 +1,7 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use futures_core::Stream;
+use tokio::time::MissedTickBehavior;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -51,23 +52,28 @@ impl MusicAutoShowService for GrpcApi {
             Duration::from_millis(request.into_inner().interval_ms.clamp(25, 5_000) as u64);
         let mut receiver = self.app.subscribe();
         let app = Arc::clone(&self.app);
-        let stream = async_stream::try_stream! {
-            let initial = receiver.borrow().as_ref().clone();
-            yield WatchSnapshotsResponse { snapshot: Some(initial) };
+        let stream = async_stream::stream! {
+            let initial = receiver.borrow_and_update().snapshot.as_ref().clone();
+            yield Ok(WatchSnapshotsResponse { snapshot: Some(initial) });
+            let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut pending = None;
             loop {
-                let changed = tokio::select! {
-                    biased;
-                    () = app.wait_for_shutdown() => break,
-                    changed = receiver.changed() => changed,
-                };
-                changed.map_err(|_| Status::unavailable("show state stream closed"))?;
                 tokio::select! {
-                    biased;
                     () = app.wait_for_shutdown() => break,
-                    () = tokio::time::sleep(interval) => {}
+                    changed = receiver.changed() => {
+                        if changed.is_err() {
+                            yield Err(Status::unavailable("show state stream closed"));
+                            break;
+                        }
+                        pending = Some(receiver.borrow_and_update().snapshot.as_ref().clone());
+                    }
+                    _ = ticker.tick(), if pending.is_some() => {
+                        if let Some(snapshot) = pending.take() {
+                            yield Ok(WatchSnapshotsResponse { snapshot: Some(snapshot) });
+                        }
+                    }
                 }
-                let snapshot = receiver.borrow_and_update().as_ref().clone();
-                yield WatchSnapshotsResponse { snapshot: Some(snapshot) };
             }
         };
         Ok(Response::new(Box::pin(stream)))

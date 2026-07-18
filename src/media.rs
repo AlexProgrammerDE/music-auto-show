@@ -1,6 +1,13 @@
 //! Cross-platform now-playing metadata and album-art color extraction.
 
-use std::{collections::HashMap, fmt::Write, fs, io::Cursor, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::Write,
+    fs::File,
+    io::{Cursor, Read},
+    sync::Arc,
+    time::Duration,
+};
 
 use image::{
     DynamicImage, ExtendedColorType, ImageReader, Limits, codecs::jpeg::JpegEncoder,
@@ -19,6 +26,7 @@ const ARTWORK_MAX_EDGE: u32 = 256;
 const ARTWORK_JPEG_QUALITY: u8 = 85;
 const ARTWORK_MAX_SOURCE_EDGE: u32 = 8_192;
 const ARTWORK_MAX_DECODE_BYTES: u64 = 64 * 1024 * 1024;
+const ARTWORK_MAX_SOURCE_BYTES: usize = 10_000_000;
 
 #[derive(Clone)]
 struct ArtworkImage {
@@ -85,7 +93,11 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
                 let artwork = player
                     .current_track
                     .as_ref()
-                    .and_then(|track| track.artwork.clone());
+                    .and_then(|track| track.artwork.as_ref())
+                    .filter(|artwork| {
+                        !matches!(artwork, Artwork::Bytes { data, .. } if data.len() > ARTWORK_MAX_SOURCE_BYTES)
+                    })
+                    .cloned();
                 let track_key = player
                     .current_track
                     .as_ref()
@@ -179,30 +191,45 @@ fn player_to_proto(
 fn artwork_source_key(artwork: &Artwork) -> String {
     match artwork {
         Artwork::Url { url } => url.clone(),
-        Artwork::Bytes { data, .. } => artwork_revision(data),
+        Artwork::Bytes { data, .. } if data.len() <= ARTWORK_MAX_SOURCE_BYTES => {
+            artwork_revision(data)
+        }
+        Artwork::Bytes { data, .. } => format!("oversized:{}", data.len()),
     }
 }
 
 fn read_artwork(artwork: &Artwork) -> Option<Vec<u8>> {
     match artwork {
-        Artwork::Bytes { data, .. } => Some(data.to_vec()),
+        Artwork::Bytes { data, .. } => {
+            (data.len() <= ARTWORK_MAX_SOURCE_BYTES).then(|| data.to_vec())
+        }
         Artwork::Url { url } => {
             let parsed = Url::parse(url).ok()?;
             match parsed.scheme() {
-                "file" => fs::read(parsed.to_file_path().ok()?).ok(),
+                "file" => read_limited(File::open(parsed.to_file_path().ok()?).ok()?),
                 "http" | "https" => {
                     let mut response = ureq::get(url).call().ok()?;
-                    response
+                    let bytes = response
                         .body_mut()
                         .with_config()
-                        .limit(10_000_000)
+                        .limit(ARTWORK_MAX_SOURCE_BYTES as u64 + 1)
                         .read_to_vec()
-                        .ok()
+                        .ok()?;
+                    (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
                 }
                 _ => None,
             }
         }
     }
+}
+
+fn read_limited(reader: impl Read) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(ARTWORK_MAX_SOURCE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
 }
 
 fn process_artwork(image_bytes: &[u8], color_count: usize) -> ProcessedArtwork {

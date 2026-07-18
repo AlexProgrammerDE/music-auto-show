@@ -2,6 +2,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex as StdMutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread,
@@ -25,7 +26,8 @@ use crate::{
     media::MediaState,
     proto::v1::{
         AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxConfig, DmxRuntimeStatus, MediaInfo,
-        Recording, RecordingStatus, RunState, ShowCommand, ShowConfig, ShowSnapshot,
+        Recording, RecordingStatus, RunState, RuntimeTimingStatus, ShowCommand, ShowConfig,
+        ShowSnapshot,
     },
     timing::PeriodicSchedule,
 };
@@ -67,6 +69,11 @@ struct Runtime {
     last_effect_tick: Instant,
     frame_count: u64,
     fps_started: Instant,
+    effects_deadlines_skipped: u64,
+    audio_deadlines_skipped: u64,
+    recoverable_audio_events: u64,
+    last_effect_tick_ms: f32,
+    max_effect_tick_ms: f32,
 }
 
 impl Runtime {
@@ -79,6 +86,11 @@ impl Runtime {
             last_effect_tick: Instant::now(),
             frame_count: 0,
             fps_started: Instant::now(),
+            effects_deadlines_skipped: 0,
+            audio_deadlines_skipped: 0,
+            recoverable_audio_events: 0,
+            last_effect_tick_ms: 0.0,
+            max_effect_tick_ms: 0.0,
         }
     }
 }
@@ -129,10 +141,14 @@ enum RuntimeCommand {
     Shutdown,
 }
 
+pub(crate) struct PublishedState {
+    pub(crate) config: Arc<ValidatedShowConfig>,
+    pub(crate) snapshot: Arc<ShowSnapshot>,
+}
+
 pub struct App {
     config_path: PathBuf,
-    config_tx: watch::Sender<Arc<ValidatedShowConfig>>,
-    snapshot_tx: watch::Sender<Arc<ShowSnapshot>>,
+    state_tx: watch::Sender<Arc<PublishedState>>,
     media_tx: watch::Sender<Arc<MediaState>>,
     command_tx: SyncSender<RuntimeCommand>,
     command_rx: StdMutex<Option<Receiver<RuntimeCommand>>>,
@@ -140,20 +156,22 @@ pub struct App {
     media_task: Mutex<Option<JoinHandle<()>>>,
     shutdown: CancellationToken,
     cli_simulate: bool,
+    command_queue_rejections: AtomicU64,
 }
 
 impl App {
     pub async fn load(config_path: PathBuf, simulate: bool) -> Result<Self, AppError> {
         let show_config = Arc::new(config::load(&config_path, simulate)?);
         let snapshot = Arc::new(stopped_snapshot(&show_config, simulate));
-        let (config_tx, _) = watch::channel(show_config);
-        let (snapshot_tx, _) = watch::channel(snapshot);
+        let (state_tx, _) = watch::channel(Arc::new(PublishedState {
+            config: show_config,
+            snapshot,
+        }));
         let (media_tx, _) = watch::channel(Arc::new(MediaState::default()));
         let (command_tx, command_rx) = mpsc::sync_channel(RUNTIME_COMMAND_DEPTH);
         Ok(Self {
             config_path,
-            config_tx,
-            snapshot_tx,
+            state_tx,
             media_tx,
             command_tx,
             command_rx: StdMutex::new(Some(command_rx)),
@@ -161,6 +179,7 @@ impl App {
             media_task: Mutex::new(None),
             shutdown: CancellationToken::new(),
             cli_simulate: simulate,
+            command_queue_rejections: AtomicU64::new(0),
         })
     }
 
@@ -173,7 +192,7 @@ impl App {
             let receiver = lock_unpoisoned(&self.command_rx)
                 .take()
                 .ok_or(AppError::Unavailable)?;
-            let config = self.config_tx.borrow().clone();
+            let config = Arc::clone(&self.state_tx.borrow().config);
             let dmx = DmxWorker::start(effective_dmx_config(&config, self.cli_simulate))?;
             let app = Arc::clone(self);
             let runtime_thread = thread::Builder::new()
@@ -218,11 +237,11 @@ impl App {
     }
 
     pub async fn snapshot(&self) -> ShowSnapshot {
-        self.snapshot_tx.borrow().as_ref().clone()
+        self.state_tx.borrow().snapshot.as_ref().clone()
     }
 
-    pub fn subscribe(&self) -> watch::Receiver<Arc<ShowSnapshot>> {
-        self.snapshot_tx.subscribe()
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Arc<PublishedState>> {
+        self.state_tx.subscribe()
     }
 
     pub(crate) async fn wait_for_shutdown(&self) {
@@ -230,11 +249,11 @@ impl App {
     }
 
     pub async fn config(&self) -> ShowConfig {
-        self.config_tx.borrow().as_proto().clone()
+        self.state_tx.borrow().config.as_proto().clone()
     }
 
     pub async fn export_config(&self) -> Result<(String, String), AppError> {
-        let config = self.config_tx.borrow().clone();
+        let config = Arc::clone(&self.state_tx.borrow().config);
         let json = config::to_json(&config)?;
         Ok((json, config_filename(&config.name)))
     }
@@ -303,7 +322,11 @@ impl App {
     fn send_command(&self, command: RuntimeCommand) -> Result<(), AppError> {
         match self.command_tx.try_send(command) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => Err(AppError::ResourceExhausted),
+            Err(TrySendError::Full(_)) => {
+                self.command_queue_rejections
+                    .fetch_add(1, Ordering::Relaxed);
+                Err(AppError::ResourceExhausted)
+            }
             Err(TrySendError::Disconnected(_)) => Err(AppError::Unavailable),
         }
     }
@@ -314,18 +337,40 @@ struct RuntimeLoop {
     config: Arc<ValidatedShowConfig>,
     snapshot: ShowSnapshot,
     runtime: Runtime,
+    publication_suspended: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ConfigChanges {
+    audio: bool,
+    dmx: bool,
+    effects: bool,
+}
+
+impl ConfigChanges {
+    fn between(previous: &ValidatedShowConfig, updated: &ValidatedShowConfig) -> Self {
+        Self {
+            audio: previous.audio() != updated.audio(),
+            dmx: previous.dmx() != updated.dmx(),
+            effects: previous.effects() != updated.effects()
+                || previous.profiles != updated.profiles
+                || previous.fixtures != updated.fixtures,
+        }
+    }
 }
 
 impl RuntimeLoop {
     fn new(app: Arc<App>, dmx: DmxWorker) -> Self {
-        let config = app.config_tx.borrow().clone();
-        let mut snapshot = app.snapshot_tx.borrow().as_ref().clone();
+        let state = app.state_tx.borrow().clone();
+        let config = Arc::clone(&state.config);
+        let mut snapshot = state.snapshot.as_ref().clone();
         snapshot.dmx_runtime = Some(dmx.status());
         Self {
             app,
             config,
             snapshot,
             runtime: Runtime::new(dmx),
+            publication_suspended: false,
         }
     }
 
@@ -362,7 +407,10 @@ impl RuntimeLoop {
                     error!(%error, "show frame failed");
                     self.fail_show(error.to_string());
                 }
-                schedule.advance(Instant::now());
+                self.runtime.effects_deadlines_skipped = self
+                    .runtime
+                    .effects_deadlines_skipped
+                    .saturating_add(schedule.advance(Instant::now()));
             }
         }
     }
@@ -412,40 +460,46 @@ impl RuntimeLoop {
         }
         let updated = Arc::new(ValidatedShowConfig::new(updated, self.app.cli_simulate)?);
         let previous = Arc::clone(&self.config);
+        let changes = ConfigChanges::between(&previous, &updated);
         let was_running = matches!(&self.runtime.mode, RuntimeMode::Running(_));
-        let dmx_changed = self.config.dmx() != updated.dmx();
-        if was_running {
-            self.stop_show();
-        }
-        if dmx_changed {
-            // Reconfiguration is acknowledged only after the old port has sent
-            // its blackout sequence and the worker has adopted the new config.
-            if let Err(error) = self.runtime.dmx.reconfigure(
-                effective_dmx_config(&updated, self.app.cli_simulate),
-                SHUTDOWN_BLACKOUT_FRAMES,
-            ) {
-                if was_running {
-                    let _ = self.start_show();
-                }
-                return Err(error.into());
-            }
-        }
+        self.publication_suspended = true;
         self.config = Arc::clone(&updated);
-        if was_running && let Err(error) = self.start_show() {
-            return Err(self.rollback_config(previous, was_running, dmx_changed, error));
+
+        let apply = (|| -> Result<(), AppError> {
+            if changes.dmx {
+                // Reconfiguration is acknowledged only after the old port has
+                // sent its blackout sequence and adopted the new config.
+                self.runtime.dmx.reconfigure(
+                    effective_dmx_config(&updated, self.app.cli_simulate),
+                    SHUTDOWN_BLACKOUT_FRAMES,
+                )?;
+            }
+            if was_running && changes.audio {
+                self.replace_running_audio()?;
+            }
+            if changes.audio || changes.effects {
+                self.runtime.effects = EffectsEngine::default();
+            }
+            config::save(&self.app.config_path, &updated)?;
+            if was_running {
+                self.tick()?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = apply {
+            return Err(self.rollback_config(previous, was_running, changes, error));
         }
-        if let Err(error) = config::save(&self.app.config_path, &updated) {
-            return Err(self.rollback_config(previous, was_running, dmx_changed, error.into()));
-        }
-        self.app.config_tx.send_replace(updated);
+
+        self.snapshot.config_generation = self.snapshot.config_generation.saturating_add(1);
         if !was_running {
             reset_inactive_runtime_snapshot(
                 &mut self.snapshot,
                 &self.config,
                 self.app.cli_simulate,
             );
-            self.publish();
         }
+        self.publication_suspended = false;
+        self.publish();
         Ok(self.config.as_proto().clone())
     }
 
@@ -453,40 +507,75 @@ impl RuntimeLoop {
         &mut self,
         previous: Arc<ValidatedShowConfig>,
         was_running: bool,
-        dmx_changed: bool,
+        changes: ConfigChanges,
         original: AppError,
     ) -> AppError {
-        if !matches!(&self.runtime.mode, RuntimeMode::Stopped) {
-            self.stop_show();
-        }
+        self.config = Arc::clone(&previous);
         let rollback = (|| -> Result<(), AppError> {
-            if dmx_changed {
+            if changes.dmx {
                 self.runtime.dmx.reconfigure(
                     effective_dmx_config(&previous, self.app.cli_simulate),
                     SHUTDOWN_BLACKOUT_FRAMES,
                 )?;
             }
-            self.config = Arc::clone(&previous);
-            if was_running {
-                self.start_show()?;
-            } else {
-                reset_inactive_runtime_snapshot(
-                    &mut self.snapshot,
-                    &self.config,
-                    self.app.cli_simulate,
-                );
-                self.publish();
+            if was_running && changes.audio {
+                self.replace_running_audio()?;
             }
-            config::save(&self.app.config_path, &previous)?;
+            if changes.audio || changes.effects {
+                self.runtime.effects = EffectsEngine::default();
+            }
             Ok(())
         })();
+        if let Err(error) = config::save(&self.app.config_path, &previous) {
+            warn!(%error, "could not restore the previous persisted configuration");
+        }
+        self.publication_suspended = false;
 
         match rollback {
-            Ok(()) => original,
-            Err(rollback) => AppError::Runtime(anyhow!(
-                "configuration update failed: {original}; rollback also failed: {rollback}"
-            )),
+            Ok(()) => {
+                if was_running {
+                    self.snapshot.run_state = RunState::Running as i32;
+                    self.snapshot.status_message = if self.snapshot.blackout {
+                        "Blackout active".into()
+                    } else {
+                        "Show running".into()
+                    };
+                } else {
+                    reset_inactive_runtime_snapshot(
+                        &mut self.snapshot,
+                        &self.config,
+                        self.app.cli_simulate,
+                    );
+                }
+                self.publish();
+                original
+            }
+            Err(rollback) => {
+                self.fail_show(format!(
+                    "configuration update failed: {original}; rollback also failed: {rollback}"
+                ));
+                AppError::Runtime(anyhow!(
+                    "configuration update failed: {original}; rollback also failed: {rollback}"
+                ))
+            }
         }
+    }
+
+    fn replace_running_audio(&mut self) -> Result<(), AppError> {
+        let previous = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Starting);
+        drop(previous);
+        let audio = AudioWorker::start(
+            self.config.audio(),
+            self.config.audio_mode(),
+            self.app.cli_simulate,
+        )
+        .map_err(AppError::from)?;
+        self.runtime.mode = RuntimeMode::Running(audio);
+        self.runtime.frame_count = 0;
+        self.runtime.fps_started = Instant::now();
+        let now = Instant::now();
+        self.runtime.last_effect_tick = now.checked_sub(self.frame_interval()).unwrap_or(now);
+        Ok(())
     }
 
     fn control(&mut self, command: ShowCommand) -> Result<CommandResult, AppError> {
@@ -669,6 +758,22 @@ impl RuntimeLoop {
     }
 
     fn tick(&mut self) -> Result<(), AppError> {
+        let started = Instant::now();
+        let publish_after_tick = matches!(
+            &self.runtime.mode,
+            RuntimeMode::Running(_) | RuntimeMode::Monitoring(_)
+        );
+        let result = self.tick_frame();
+        let elapsed_ms = started.elapsed().as_secs_f32() * 1_000.0;
+        self.runtime.last_effect_tick_ms = elapsed_ms;
+        self.runtime.max_effect_tick_ms = self.runtime.max_effect_tick_ms.max(elapsed_ms);
+        if result.is_ok() && publish_after_tick {
+            self.publish();
+        }
+        result
+    }
+
+    fn tick_frame(&mut self) -> Result<(), AppError> {
         let running_audio = match &self.runtime.mode {
             RuntimeMode::Running(audio) => Some(audio.snapshot()),
             _ => None,
@@ -750,7 +855,8 @@ impl RuntimeLoop {
         self.snapshot.fixture_states = output.fixture_states;
         self.snapshot.dmx_universe = output.universe;
         self.snapshot.effects_fps = effects_fps;
-        self.publish();
+        self.runtime.audio_deadlines_skipped = audio_frame.analysis_deadlines_skipped;
+        self.runtime.recoverable_audio_events = audio_frame.recoverable_stream_events;
         Ok(())
     }
 
@@ -763,7 +869,8 @@ impl RuntimeLoop {
         self.snapshot.media = Some(self.app.media_tx.borrow().info().clone());
         self.snapshot.dmx_runtime = Some(self.runtime.dmx.status());
         self.snapshot.dmx_universe = self.zero_universe();
-        self.publish();
+        self.runtime.audio_deadlines_skipped = audio.analysis_deadlines_skipped;
+        self.runtime.recoverable_audio_events = audio.recoverable_stream_events;
         Ok(())
     }
 
@@ -805,11 +912,24 @@ impl RuntimeLoop {
     }
 
     fn publish(&mut self) {
+        if self.publication_suspended {
+            return;
+        }
         self.snapshot.sequence += 1;
         self.snapshot.captured_at_unix_ms = unix_millis();
-        self.app
-            .snapshot_tx
-            .send_replace(Arc::new(self.snapshot.clone()));
+        self.snapshot.timing = Some(RuntimeTimingStatus {
+            effects_deadlines_skipped: self.runtime.effects_deadlines_skipped,
+            audio_deadlines_skipped: self.runtime.audio_deadlines_skipped,
+            dmx_deadlines_skipped: self.runtime.dmx.deadlines_skipped(),
+            command_queue_rejections: self.app.command_queue_rejections.load(Ordering::Relaxed),
+            recoverable_audio_events: self.runtime.recoverable_audio_events,
+            last_effect_tick_ms: self.runtime.last_effect_tick_ms,
+            max_effect_tick_ms: self.runtime.max_effect_tick_ms,
+        });
+        self.app.state_tx.send_replace(Arc::new(PublishedState {
+            config: Arc::clone(&self.config),
+            snapshot: Arc::new(self.snapshot.clone()),
+        }));
     }
 }
 
@@ -845,6 +965,7 @@ fn stopped_snapshot(config: &ValidatedShowConfig, simulate: bool) -> ShowSnapsho
         status_message: "Stopped".into(),
         recording: Some(stopped_recording_status()),
         dmx_runtime: Some(stopped_dmx_status(config, simulate)),
+        config_generation: 1,
         ..Default::default()
     };
     reset_inactive_runtime_snapshot(&mut snapshot, config, simulate);
@@ -929,7 +1050,7 @@ mod tests {
         let mut snapshots = app.subscribe();
         tokio::time::timeout(Duration::from_secs(3), async move {
             loop {
-                let snapshot = snapshots.borrow().as_ref().clone();
+                let snapshot = snapshots.borrow().snapshot.as_ref().clone();
                 if condition(&snapshot) {
                     return snapshot;
                 }
@@ -953,6 +1074,21 @@ mod tests {
     fn dmx_frame_interval_uses_the_configured_rate() {
         assert_eq!(dmx_frame_interval(20), Duration::from_millis(50));
         assert_eq!(dmx_frame_interval(40), Duration::from_millis(25));
+    }
+
+    #[test]
+    fn config_changes_restart_only_the_affected_subsystems() {
+        let previous = ValidatedShowConfig::new(config::default_show_config(true), true)
+            .expect("default configuration should validate");
+        let mut updated = previous.as_proto().clone();
+        updated.effects.as_mut().expect("effects config").intensity = 0.8;
+        let updated =
+            ValidatedShowConfig::new(updated, true).expect("updated configuration should validate");
+
+        let changes = ConfigChanges::between(&previous, &updated);
+        assert!(!changes.audio);
+        assert!(!changes.dmx);
+        assert!(changes.effects);
     }
 
     #[test]
@@ -1022,6 +1158,7 @@ mod tests {
             .expect_err("queue should reject overload");
 
         assert!(matches!(error, AppError::ResourceExhausted));
+        assert_eq!(app.command_queue_rejections.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

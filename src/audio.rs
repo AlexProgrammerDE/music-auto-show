@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     str::FromStr,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use arc_swap::ArcSwap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
@@ -31,6 +32,7 @@ const CAPTURE_QUEUE_DEPTH: usize = 32;
 const CAPTURE_BUFFER_CAPACITY: usize = 8_192;
 const AUDIO_WORKER_COMMAND_DEPTH: usize = 8;
 const AUDIO_ANALYSIS_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_SIMULATION_CATCHUP: Duration = Duration::from_millis(200);
 
 pub struct AudioCapture {
     receiver: Receiver<Vec<f32>>,
@@ -38,6 +40,7 @@ pub struct AudioCapture {
     status: AudioRuntimeStatus,
     stream_error: Arc<Mutex<String>>,
     dropped_sample_blocks: Arc<AtomicU64>,
+    recoverable_stream_events: Arc<AtomicU64>,
     _guard: CaptureGuard,
 }
 
@@ -65,6 +68,10 @@ impl AudioCapture {
         status.dropped_sample_blocks = self.dropped_sample_blocks.load(Ordering::Relaxed);
         status
     }
+
+    fn recoverable_stream_events(&self) -> u64 {
+        self.recoverable_stream_events.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Clone)]
@@ -73,6 +80,8 @@ pub struct AudioWorkerSnapshot {
     pub runtime: AudioRuntimeStatus,
     pub beatnet: BeatNetStatus,
     pub recording: RecordingStatus,
+    pub analysis_deadlines_skipped: u64,
+    pub recoverable_stream_events: u64,
 }
 
 /// Owns the stateful analyzer and recording lifecycle on a dedicated thread.
@@ -82,14 +91,17 @@ pub struct AudioWorkerSnapshot {
 /// the independently configurable DMX cadence.
 pub struct AudioWorker {
     commands: SyncSender<AudioWorkerCommand>,
-    latest: Arc<Mutex<AudioWorkerSnapshot>>,
+    latest: Arc<ArcSwap<AudioWorkerSnapshot>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl AudioWorker {
     pub fn start(config: &AudioConfig, mode: AudioInputMode, cli_simulate: bool) -> Result<Self> {
         let config = config.clone();
-        let latest = Arc::new(Mutex::new(stopped_worker_snapshot(&config, cli_simulate)));
+        let latest = Arc::new(ArcSwap::from_pointee(stopped_worker_snapshot(
+            &config,
+            cli_simulate,
+        )));
         let worker_latest = Arc::clone(&latest);
         let (commands, receiver) = mpsc::sync_channel(AUDIO_WORKER_COMMAND_DEPTH);
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
@@ -127,7 +139,7 @@ impl AudioWorker {
     }
 
     pub fn snapshot(&self) -> AudioWorkerSnapshot {
-        lock_unpoisoned(&self.latest).clone()
+        self.latest.load_full().as_ref().clone()
     }
 
     pub fn start_recording(&self) -> Result<RecordingStatus> {
@@ -205,8 +217,10 @@ struct AudioWorkerState {
     pending: Vec<f32>,
     analysis: AudioAnalysis,
     simulation_sample: u64,
+    simulation_started: Instant,
     simulation_beat: u64,
     simulation_was_beat: bool,
+    analysis_deadlines_skipped: u64,
 }
 
 impl AudioWorkerState {
@@ -228,12 +242,18 @@ impl AudioWorkerState {
             pending: Vec::with_capacity(CAPTURE_BUFFER_CAPACITY),
             analysis: AudioAnalysis::default(),
             simulation_sample: 0,
+            simulation_started: Instant::now(),
             simulation_beat: 0,
             simulation_was_beat: false,
+            analysis_deadlines_skipped: 0,
         })
     }
 
-    fn run(&mut self, receiver: Receiver<AudioWorkerCommand>, latest: &Mutex<AudioWorkerSnapshot>) {
+    fn run(
+        &mut self,
+        receiver: Receiver<AudioWorkerCommand>,
+        latest: &ArcSwap<AudioWorkerSnapshot>,
+    ) {
         let mut schedule = PeriodicSchedule::immediate(AUDIO_ANALYSIS_INTERVAL, Instant::now());
         loop {
             match receiver.recv_timeout(schedule.remaining(Instant::now())) {
@@ -267,29 +287,17 @@ impl AudioWorkerState {
 
             if schedule.is_due(Instant::now()) {
                 self.tick();
+                self.analysis_deadlines_skipped = self
+                    .analysis_deadlines_skipped
+                    .saturating_add(schedule.advance(Instant::now()));
                 self.publish(latest);
-                schedule.advance(Instant::now());
             }
         }
     }
 
     fn tick(&mut self) {
         if self.simulate {
-            let sample_count = samples_for_duration(ANALYSIS_RATE, AUDIO_ANALYSIS_INTERVAL);
-            let (samples, mut beat) = simulated_audio(
-                self.simulation_sample as f64 / f64::from(ANALYSIS_RATE),
-                sample_count,
-                self.simulation_beat,
-            );
-            if beat.beat && !self.simulation_was_beat {
-                self.simulation_beat += 1;
-                beat.estimated_beat = self.simulation_beat;
-                beat.estimated_bar = self.simulation_beat / 4;
-                beat.downbeat = self.simulation_beat.is_multiple_of(4);
-            }
-            self.simulation_was_beat = beat.beat;
-            self.simulation_sample = self.simulation_sample.saturating_add(sample_count as u64);
-            self.analysis = self.analyzer.process_simulated(&samples, beat);
+            self.tick_simulated(self.simulation_started.elapsed());
             return;
         }
 
@@ -301,17 +309,53 @@ impl AudioWorkerState {
         }
     }
 
-    fn publish(&self, latest: &Mutex<AudioWorkerSnapshot>) {
+    fn tick_simulated(&mut self, elapsed: Duration) {
+        let target_sample =
+            u64::try_from(samples_for_duration(ANALYSIS_RATE, elapsed)).unwrap_or(u64::MAX);
+        let maximum_batch =
+            u64::try_from(samples_for_duration(ANALYSIS_RATE, MAX_SIMULATION_CATCHUP))
+                .unwrap_or(u64::MAX);
+        if target_sample.saturating_sub(self.simulation_sample) > maximum_batch {
+            self.simulation_sample = target_sample.saturating_sub(maximum_batch);
+        }
+        let sample_count = usize::try_from(target_sample.saturating_sub(self.simulation_sample))
+            .unwrap_or(usize::MAX);
+        if sample_count == 0 {
+            return;
+        }
+        let (samples, mut beat) = simulated_audio(
+            self.simulation_sample as f64 / f64::from(ANALYSIS_RATE),
+            sample_count,
+            self.simulation_beat,
+        );
+        if beat.beat && !self.simulation_was_beat {
+            self.simulation_beat += 1;
+            beat.estimated_beat = self.simulation_beat;
+            beat.estimated_bar = self.simulation_beat / 4;
+            beat.downbeat = self.simulation_beat.is_multiple_of(4);
+        }
+        self.simulation_was_beat = beat.beat;
+        self.simulation_sample = self.simulation_sample.saturating_add(sample_count as u64);
+        self.analysis = self.analyzer.process_simulated(&samples, beat);
+    }
+
+    fn publish(&self, latest: &ArcSwap<AudioWorkerSnapshot>) {
         let runtime = self.capture.as_ref().map_or_else(
             || simulated_worker_status(&self.config),
             AudioCapture::status,
         );
-        *lock_unpoisoned(latest) = AudioWorkerSnapshot {
+        let recoverable_stream_events = self
+            .capture
+            .as_ref()
+            .map_or(0, AudioCapture::recoverable_stream_events);
+        latest.store(Arc::new(AudioWorkerSnapshot {
             analysis: self.analysis.clone(),
             runtime,
             beatnet: self.analyzer.beatnet_status(),
             recording: self.analyzer.recording_status(),
-        };
+            analysis_deadlines_skipped: self.analysis_deadlines_skipped,
+            recoverable_stream_events,
+        }));
     }
 }
 
@@ -335,6 +379,8 @@ fn stopped_worker_snapshot(config: &AudioConfig, simulate: bool) -> AudioWorkerS
             max_duration_seconds: MAX_RECORDING_SECONDS,
             ..Default::default()
         },
+        analysis_deadlines_skipped: 0,
+        recoverable_stream_events: 0,
     }
 }
 
@@ -460,6 +506,8 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     }
     let dropped_sample_blocks = Arc::new(AtomicU64::new(0));
     let dropped_sample_blocks_thread = Arc::clone(&dropped_sample_blocks);
+    let recoverable_stream_events = Arc::new(AtomicU64::new(0));
+    let recoverable_stream_events_thread = Arc::clone(&recoverable_stream_events);
     let buffer_recycler = available_buffers.clone();
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::sync_channel(0);
@@ -469,11 +517,14 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
             match build_cpal_stream(
                 &config,
                 mode,
-                sender,
-                reusable_buffers,
-                buffer_recycler,
-                stream_error_thread,
-                dropped_sample_blocks_thread,
+                CapturePipeline {
+                    sender,
+                    reusable_buffers,
+                    buffer_recycler,
+                    stream_error: stream_error_thread,
+                    dropped_sample_blocks: dropped_sample_blocks_thread,
+                    recoverable_stream_events: recoverable_stream_events_thread,
+                },
             ) {
                 Ok((stream, status)) => {
                     if ready_sender.send(Ok(status)).is_err() {
@@ -504,6 +555,7 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
         status,
         stream_error,
         dropped_sample_blocks,
+        recoverable_stream_events,
         _guard: CaptureGuard {
             stop: Some(stop_sender),
             thread: Some(thread),
@@ -511,15 +563,28 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     })
 }
 
-fn build_cpal_stream(
-    config: &AudioConfig,
-    mode: AudioInputMode,
+struct CapturePipeline {
     sender: mpsc::SyncSender<Vec<f32>>,
     reusable_buffers: Receiver<Vec<f32>>,
     buffer_recycler: SyncSender<Vec<f32>>,
     stream_error: Arc<Mutex<String>>,
     dropped_sample_blocks: Arc<AtomicU64>,
+    recoverable_stream_events: Arc<AtomicU64>,
+}
+
+fn build_cpal_stream(
+    config: &AudioConfig,
+    mode: AudioInputMode,
+    pipeline: CapturePipeline,
 ) -> Result<(cpal::Stream, AudioRuntimeStatus)> {
+    let CapturePipeline {
+        sender,
+        reusable_buffers,
+        buffer_recycler,
+        stream_error,
+        dropped_sample_blocks,
+        recoverable_stream_events,
+    } = pipeline;
     let selection = select_capture_device(config, mode)?;
     let selected = selection.device;
     let id = selected.id()?.to_string();
@@ -544,7 +609,10 @@ fn build_cpal_stream(
                     |sample| sample,
                 )
             },
-            capture_error_callback(Arc::clone(&stream_error)),
+            capture_error_callback(
+                Arc::clone(&stream_error),
+                Arc::clone(&recoverable_stream_events),
+            ),
             None,
         )?,
         cpal::SampleFormat::I16 => selected.build_input_stream(
@@ -560,7 +628,10 @@ fn build_cpal_stream(
                     |sample| sample as f32 / 32_768.0,
                 )
             },
-            capture_error_callback(Arc::clone(&stream_error)),
+            capture_error_callback(
+                Arc::clone(&stream_error),
+                Arc::clone(&recoverable_stream_events),
+            ),
             None,
         )?,
         cpal::SampleFormat::U16 => selected.build_input_stream(
@@ -576,7 +647,10 @@ fn build_cpal_stream(
                     |sample| sample as f32 / 32_768.0 - 1.0,
                 )
             },
-            capture_error_callback(Arc::clone(&stream_error)),
+            capture_error_callback(
+                Arc::clone(&stream_error),
+                Arc::clone(&recoverable_stream_events),
+            ),
             None,
         )?,
         format => bail!("unsupported input sample format {format:?}"),
@@ -764,6 +838,7 @@ fn display_device_name(id: &str, name: &str) -> String {
 
 fn capture_error_callback(
     stream_error: Arc<Mutex<String>>,
+    recoverable_stream_events: Arc<AtomicU64>,
 ) -> impl FnMut(cpal::Error) + Send + 'static {
     move |error| {
         if matches!(
@@ -772,6 +847,7 @@ fn capture_error_callback(
                 | cpal::ErrorKind::Xrun
                 | cpal::ErrorKind::RealtimeDenied
         ) {
+            recoverable_stream_events.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(%error, "audio input stream reported a recoverable event");
             return;
         }
@@ -1250,7 +1326,7 @@ impl LinearResampler {
 }
 
 struct Recorder {
-    recording: bool,
+    phase: RecordingPhase,
     sample_rate: u32,
     samples: Vec<f32>,
     sum_squares: f64,
@@ -1258,10 +1334,17 @@ struct Recorder {
     clipped: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordingPhase {
+    Idle,
+    Capturing,
+    LimitReached,
+}
+
 impl Recorder {
     fn new(sample_rate: u32) -> Self {
         Self {
-            recording: false,
+            phase: RecordingPhase::Idle,
             sample_rate,
             samples: Vec::new(),
             sum_squares: 0.0,
@@ -1270,19 +1353,25 @@ impl Recorder {
         }
     }
     fn start(&mut self) -> bool {
-        self.clear();
-        self.recording = true;
+        if self.phase != RecordingPhase::Idle {
+            return false;
+        }
+        self.clear_samples();
+        self.phase = RecordingPhase::Capturing;
         true
     }
     fn clear(&mut self) {
-        self.recording = false;
+        self.phase = RecordingPhase::Idle;
+        self.clear_samples();
+    }
+    fn clear_samples(&mut self) {
         self.samples.clear();
         self.sum_squares = 0.0;
         self.peak = 0.0;
         self.clipped = 0;
     }
     fn capture(&mut self, samples: &[f32]) {
-        if !self.recording {
+        if self.phase != RecordingPhase::Capturing {
             return;
         }
         let maximum = (self.sample_rate as f32 * MAX_RECORDING_SECONDS) as usize;
@@ -1294,12 +1383,12 @@ impl Recorder {
             self.clipped += u64::from(sample.abs() >= 0.99);
         }
         if self.samples.len() >= maximum {
-            self.recording = false;
+            self.phase = RecordingPhase::LimitReached;
         }
     }
     fn status(&self) -> RecordingStatus {
         RecordingStatus {
-            recording: self.recording,
+            recording: self.phase != RecordingPhase::Idle,
             has_recording: !self.samples.is_empty(),
             duration_seconds: self.samples.len() as f32 / self.sample_rate as f32,
             max_duration_seconds: MAX_RECORDING_SECONDS,
@@ -1314,10 +1403,14 @@ impl Recorder {
             clipped_samples: self.clipped,
             source: "Analysis mono stream".into(),
             error: String::new(),
+            limit_reached: self.phase == RecordingPhase::LimitReached,
         }
     }
     fn stop(&mut self) -> Result<Recording> {
-        self.recording = false;
+        if self.phase == RecordingPhase::Idle {
+            bail!("audio recording is not active");
+        }
+        self.phase = RecordingPhase::Idle;
         let mut wav = Vec::new();
         {
             let cursor = std::io::Cursor::new(&mut wav);
@@ -1388,13 +1481,6 @@ fn simulated_audio(
             },
         },
     )
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
 }
 
 #[cfg(test)]
@@ -1516,6 +1602,26 @@ mod tests {
     }
 
     #[test]
+    fn recording_at_the_duration_limit_remains_stoppable() {
+        let mut recorder = Recorder::new(10);
+        assert!(recorder.start());
+
+        recorder.capture(&[0.25; 400]);
+
+        let status = recorder.status();
+        assert!(status.recording);
+        assert!(status.limit_reached);
+        assert_eq!(status.duration_seconds, MAX_RECORDING_SECONDS);
+        assert!(
+            !recorder.start(),
+            "a full recording must not be overwritten"
+        );
+        let recording = recorder.stop().expect("full recording should encode");
+        assert!(!recording.wav.is_empty());
+        assert!(!recording.status.expect("recording status").recording);
+    }
+
+    #[test]
     fn simulated_recording_uses_the_audio_clock() {
         let config = AudioConfig {
             mode: AudioInputMode::Auto as i32,
@@ -1528,8 +1634,8 @@ mod tests {
             .expect("simulated audio worker should start");
         assert!(worker.analyzer.start_recording());
 
-        for _ in 0..50 {
-            worker.tick();
+        for tick in 1..=50 {
+            worker.tick_simulated(Duration::from_millis(tick * 20));
         }
 
         let recording = worker

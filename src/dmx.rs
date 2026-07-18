@@ -2,6 +2,7 @@ use std::{
     io::Write,
     sync::{
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
@@ -85,6 +86,7 @@ const _: () = {
 pub struct DmxWorker {
     universe: Arc<Mutex<UniverseBuffer>>,
     status: Arc<Mutex<DmxRuntimeStatus>>,
+    deadlines_skipped: Arc<AtomicU64>,
     commands: Sender<WorkerCommand>,
     thread: Option<JoinHandle<()>>,
 }
@@ -97,18 +99,27 @@ impl DmxWorker {
             config.universe_size as usize,
         )));
         let status = Arc::new(Mutex::new(active_status(&config)));
+        let deadlines_skipped = Arc::new(AtomicU64::new(0));
         let (commands, receiver) = mpsc::channel();
         let worker_universe = Arc::clone(&universe);
         let worker_status = Arc::clone(&status);
+        let worker_deadlines_skipped = Arc::clone(&deadlines_skipped);
         let thread = thread::Builder::new()
             .name("music-auto-show-dmx".into())
             .spawn(move || {
-                WorkerState::new(config, worker_universe, worker_status).run(receiver);
+                WorkerState::new(
+                    config,
+                    worker_universe,
+                    worker_status,
+                    worker_deadlines_skipped,
+                )
+                .run(receiver);
             })
             .context("failed to start DMX output worker")?;
         Ok(Self {
             universe,
             status,
+            deadlines_skipped,
             commands,
             thread: Some(thread),
         })
@@ -146,6 +157,10 @@ impl DmxWorker {
     /// Returns a consistent copy of the worker's connection and send counters.
     pub fn status(&self) -> DmxRuntimeStatus {
         lock_unpoisoned(&self.status).clone()
+    }
+
+    pub fn deadlines_skipped(&self) -> u64 {
+        self.deadlines_skipped.load(Ordering::Relaxed)
     }
 
     /// Sends the requested blackout frames, releases the port, and joins the worker.
@@ -193,6 +208,7 @@ struct WorkerState {
     config: DmxConfig,
     universe: Arc<Mutex<UniverseBuffer>>,
     status: Arc<Mutex<DmxRuntimeStatus>>,
+    deadlines_skipped: Arc<AtomicU64>,
     output: Option<DmxOutput>,
     retry_at: Instant,
     retry_delay: Duration,
@@ -203,11 +219,13 @@ impl WorkerState {
         config: DmxConfig,
         universe: Arc<Mutex<UniverseBuffer>>,
         status: Arc<Mutex<DmxRuntimeStatus>>,
+        deadlines_skipped: Arc<AtomicU64>,
     ) -> Self {
         Self {
             config,
             universe,
             status,
+            deadlines_skipped,
             output: None,
             retry_at: Instant::now(),
             retry_delay: DMX_RECONNECT_INITIAL,
@@ -248,7 +266,8 @@ impl WorkerState {
 
             if schedule.is_due(Instant::now()) {
                 self.send_latest();
-                schedule.advance(Instant::now());
+                let skipped = schedule.advance(Instant::now());
+                self.deadlines_skipped.fetch_add(skipped, Ordering::Relaxed);
             }
         }
     }

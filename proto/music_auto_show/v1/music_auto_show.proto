@@ -151,6 +151,18 @@ message ShowSnapshot {
   repeated FixtureState fixture_states = 12;
   bytes dmx_universe = 13;
   float effects_fps = 14;
+  RuntimeTimingStatus timing = 15;
+  uint64 config_generation = 16;
+}
+
+message RuntimeTimingStatus {
+  uint64 effects_deadlines_skipped = 1;
+  uint64 audio_deadlines_skipped = 2;
+  uint64 dmx_deadlines_skipped = 3;
+  uint64 command_queue_rejections = 4;
+  uint64 recoverable_audio_events = 5;
+  float last_effect_tick_ms = 6;
+  float max_effect_tick_ms = 7;
 }
 
 message AudioAnalysis {
@@ -215,6 +227,7 @@ message RecordingStatus {
   uint64 clipped_samples = 9;
   string source = 10;
   string error = 11;
+  bool limit_reached = 12;
 }
 
 message Recording {
@@ -289,6 +302,7 @@ message ShowConfig {
   EffectsConfig effects = 4;
   repeated FixtureProfile profiles = 5;
   repeated FixtureConfig fixtures = 6;
+  bool allow_dmx_overlaps = 7;
 }
 
 message DmxConfig {

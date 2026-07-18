@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    io::Write,
+    fs::{self, File},
+    io::{Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
 };
@@ -16,6 +16,50 @@ use crate::proto::v1::{
     EffectFixtureMode, EffectsConfig, FixtureConfig, FixtureProfile, MovementMode, RotationMode,
     ShowConfig, StrobeEffectMode, VisualizationMode,
 };
+
+const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+const SUPPORTED_CHANNEL_TYPES: &[&str] = &[
+    "nothing",
+    "fixed",
+    "maintenance",
+    "intensity",
+    "intensity_dimmer",
+    "intensity_master_dimmer",
+    "intensity_red",
+    "intensity_green",
+    "intensity_blue",
+    "intensity_white",
+    "intensity_amber",
+    "intensity_uv",
+    "intensity_cyan",
+    "intensity_magenta",
+    "intensity_yellow",
+    "position_pan",
+    "position_pan_fine",
+    "position_tilt",
+    "position_tilt_fine",
+    "speed_pan_tilt_fast_slow",
+    "speed_pan_tilt_slow_fast",
+    "shutter_strobe",
+    "shutter_strobe_slow_fast",
+    "shutter_strobe_fast_slow",
+    "color_macro",
+    "color_wheel",
+    "effect",
+    "effect_speed",
+    "effect_pattern",
+    "effect_pattern_speed",
+    "gobo_wheel",
+    "gobo_index",
+    "prism",
+    "prism_rotation",
+    "beam_zoom_small_big",
+    "beam_zoom_big_small",
+    "beam_focus_near_far",
+    "beam_focus_far_near",
+    "shutter_iris_min_to_max",
+    "shutter_iris_max_to_min",
+];
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -158,11 +202,27 @@ pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigEr
         return ValidatedShowConfig::new(default_show_config(simulate), simulate);
     }
 
-    let contents = fs::read_to_string(path).map_err(|source| ConfigError::Io {
-        operation: "read configuration from",
+    let mut file = File::open(path).map_err(|source| ConfigError::Io {
+        operation: "open configuration at",
         path: path.to_owned(),
         source,
     })?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take((MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|source| ConfigError::Io {
+            operation: "read configuration from",
+            path: path.to_owned(),
+            source,
+        })?;
+    if bytes.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::Invalid(format!(
+            "show configuration exceeds the {MAX_CONFIG_BYTES}-byte limit"
+        )));
+    }
+    let contents = String::from_utf8(bytes)
+        .map_err(|_| ConfigError::Invalid("show configuration is not valid UTF-8".into()))?;
     parse_json(&contents, simulate).map_err(|error| match error {
         ConfigError::Invalid(message) => ConfigError::Invalid(format!(
             "invalid show configuration in {}: {message}",
@@ -173,6 +233,11 @@ pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigEr
 }
 
 pub fn parse_json(contents: &str, simulate: bool) -> Result<ValidatedShowConfig, ConfigError> {
+    if contents.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::Invalid(format!(
+            "show configuration exceeds the {MAX_CONFIG_BYTES}-byte limit"
+        )));
+    }
     let value: Value = serde_json::from_str(contents).map_err(ConfigError::InvalidJson)?;
     let migrated = migrate_legacy_config(value, simulate);
     reject_unknown_config_fields(&migrated)?;
@@ -195,6 +260,11 @@ pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError
         source,
     })?;
     let json = to_json(config)?;
+    if json.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::Invalid(format!(
+            "show configuration exceeds the {MAX_CONFIG_BYTES}-byte limit"
+        )));
+    }
     let mut temporary = NamedTempFile::new_in(parent).map_err(|source| ConfigError::Io {
         operation: "create temporary configuration in",
         path: parent.to_owned(),
@@ -239,7 +309,15 @@ fn reject_unknown_config_fields(value: &Value) -> Result<(), ConfigError> {
     let root = object_at(value, "configuration")?;
     reject_unknown_keys(
         root,
-        &["name", "dmx", "audio", "effects", "profiles", "fixtures"],
+        &[
+            "name",
+            "dmx",
+            "audio",
+            "effects",
+            "profiles",
+            "fixtures",
+            "allow_dmx_overlaps",
+        ],
         "configuration",
     )?;
     validate_optional_object(root, "dmx", &["port", "universe_size", "fps", "simulate"])?;
@@ -539,6 +617,7 @@ fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<()
     let universe_size = config.dmx.as_ref().map_or(512, |dmx| dmx.universe_size);
     let mut fixture_ids = HashSet::new();
     let mut fixture_names = HashSet::new();
+    let mut occupied_channels = vec![None::<String>; universe_size as usize + 1];
     for (index, fixture) in config.fixtures.iter_mut().enumerate() {
         if fixture.id.is_empty() {
             fixture.id = stable_fixture_id(&fixture.name, fixture.start_channel, index);
@@ -596,6 +675,24 @@ fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<()
                 universe_size
             );
         }
+        for channel in channels.iter().filter(|channel| channel.enabled) {
+            let absolute = fixture
+                .start_channel
+                .saturating_add(channel.offset)
+                .saturating_sub(1);
+            let occupied = &mut occupied_channels[absolute as usize];
+            if let Some(previous) = occupied
+                && !config.allow_dmx_overlaps
+            {
+                bail!(
+                    "fixture '{}' overlaps fixture '{}' on DMX channel {}; set allow_dmx_overlaps to true only when shared addressing is intentional",
+                    fixture.name,
+                    previous,
+                    absolute
+                );
+            }
+            occupied.get_or_insert_with(|| fixture.name.clone());
+        }
     }
     Ok(())
 }
@@ -632,19 +729,32 @@ fn validate_channels(owner: &str, channels: &[ChannelConfig]) -> AnyResult<()> {
                 channel.offset
             );
         }
+        if !SUPPORTED_CHANNEL_TYPES.contains(&channel.channel_type.as_str()) {
+            bail!(
+                "fixture or profile '{}' channel '{}' has unsupported channel type '{}'",
+                owner,
+                channel.name,
+                channel.channel_type
+            );
+        }
         if channel.min_value > channel.max_value
             || channel.max_value > 255
             || channel.default_value > 255
             || channel.fixed_value.is_some_and(|value| value > 255)
         {
             bail!(
-                "fixture or profile '{}' channel '{}' has values outside 0..=255",
+                "fixture or profile '{}' channel '{}' has invalid DMX values",
                 owner,
                 channel.name
             );
         }
         for capability in &channel.capabilities {
-            if capability.min_value > capability.max_value || capability.max_value > 255 {
+            if capability.min_value > capability.max_value
+                || capability.max_value > 255
+                || (capability.usable
+                    && (capability.min_value < channel.min_value
+                        || capability.max_value > channel.max_value))
+            {
                 bail!(
                     "fixture or profile '{}' channel '{}' has an invalid capability range",
                     owner,
@@ -744,6 +854,7 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
         }),
         profiles,
         fixtures,
+        allow_dmx_overlaps: false,
     }
 }
 
@@ -1484,6 +1595,39 @@ mod tests {
         .expect_err("unknown field should be rejected");
 
         assert!(error.to_string().contains("unknown field 'intenisty'"));
+    }
+
+    #[test]
+    fn rejects_oversized_configuration_input() {
+        let input = " ".repeat(MAX_CONFIG_BYTES + 1);
+        let error = parse_json(&input, true).expect_err("oversized input should be rejected");
+
+        assert!(error.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn rejects_unsupported_fixture_channel_types() {
+        let mut config = default_show_config(true);
+        config.profiles[0].channels[0].channel_type = "typo_dimmer".into();
+
+        let error = ValidatedShowConfig::new(config, true)
+            .expect_err("unknown channel behavior should be rejected");
+
+        assert!(error.to_string().contains("unsupported channel type"));
+    }
+
+    #[test]
+    fn rejects_fixture_channel_overlap_without_explicit_opt_in() {
+        let mut config = default_show_config(true);
+        config.fixtures[1].start_channel = 5;
+
+        let error = ValidatedShowConfig::new(config.clone(), true)
+            .expect_err("overlapping fixtures should be rejected");
+        assert!(error.to_string().contains("overlaps"));
+
+        config.allow_dmx_overlaps = true;
+        ValidatedShowConfig::new(config, true)
+            .expect("explicit shared addressing should remain available");
     }
 
     #[test]
