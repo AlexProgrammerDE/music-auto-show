@@ -1,26 +1,61 @@
 import { clone, create } from "@bufbuild/protobuf"
-import { PlusIcon, TrashIcon } from "@phosphor-icons/react"
+import { PlusIcon, SlidersHorizontalIcon, TrashIcon } from "@phosphor-icons/react"
 import { useForm } from "@tanstack/react-form"
 import { useState } from "react"
 
 import {
   Credenza,
+  CredenzaBody,
+  CredenzaClose,
   CredenzaContent,
   CredenzaDescription,
   CredenzaFooter,
   CredenzaHeader,
   CredenzaTitle,
 } from "@/components/credenza"
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import {
   ChannelConfigSchema,
@@ -117,6 +152,21 @@ export function FixtureEditor({
     )
   }
 
+  const addChannel = () => {
+    const offset = Math.max(0, ...channels.map((channel) => channel.offset)) + 1
+    setChannels((current) => [
+      ...current,
+      create(ChannelConfigSchema, {
+        offset,
+        name: `Channel ${offset}`,
+        channelType: "nothing",
+        minValue: 0,
+        maxValue: 255,
+        enabled: true,
+      }),
+    ])
+  }
+
   const form = useForm({
     defaultValues: {
       name: fixture.name,
@@ -147,7 +197,7 @@ export function FixtureEditor({
 
   return (
     <Credenza open={open} onOpenChange={onOpenChange}>
-      <CredenzaContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+      <CredenzaContent className="max-h-[90vh] sm:max-w-5xl">
         <CredenzaHeader>
           <CredenzaTitle>Edit {fixture.name}</CredenzaTitle>
           <CredenzaDescription>
@@ -155,333 +205,397 @@ export function FixtureEditor({
           </CredenzaDescription>
         </CredenzaHeader>
         <form
-          className="grid gap-5"
+          className="flex min-h-0 flex-1 flex-col"
           onSubmit={(event) => {
             event.preventDefault()
             event.stopPropagation()
             void form.handleSubmit()
           }}
         >
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <form.Field
-              name="name"
-              validators={{
-                onChange: ({ value }) => {
-                  if (!value.trim()) return "Name is required"
-                  if (
-                    existingNames.some(
-                      (name) => name.toLocaleLowerCase() === value.trim().toLocaleLowerCase(),
-                    )
-                  ) {
-                    return "Name must be unique"
-                  }
-                  return undefined
-                },
-              }}
-            >
-              {(field) => (
-                <Field className="md:col-span-2">
-                  <FieldLabel htmlFor={field.name}>Name</FieldLabel>
-                  <Input
-                    id={field.name}
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(event) => field.handleChange(event.target.value)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="startChannel">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Start channel</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={1}
-                    max={512}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="position">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Show position</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={0}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="profileName">
-              {(field) => (
-                <Field className="md:col-span-2">
-                  <FieldLabel>Profile</FieldLabel>
-                  <Select
-                    value={field.state.value || "__custom"}
-                    onValueChange={(value) => {
-                      const profileName = value === "__custom" ? "" : (value ?? "")
-                      field.handleChange(profileName)
-                      const profile = profiles.find((candidate) => candidate.name === profileName)
-                      setChannels(
-                        profile
-                          ? profile.channels.map((channel) => clone(ChannelConfigSchema, channel))
-                          : [],
+          <CredenzaBody className="grid gap-5 overflow-y-auto">
+            <FieldGroup className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <form.Field
+                name="name"
+                validators={{
+                  onChange: ({ value }) => {
+                    if (!value.trim()) return "Name is required"
+                    if (
+                      existingNames.some(
+                        (name) => name.toLocaleLowerCase() === value.trim().toLocaleLowerCase(),
                       )
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{field.state.value || "Custom"}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__custom">Custom</SelectItem>
-                      {profiles.map((profile) => (
-                        <SelectItem key={profile.name} value={profile.name}>
-                          {profile.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    Selecting a profile replaces the channel overrides below.
-                  </FieldDescription>
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="intensityScale">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Intensity scale</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-          </div>
-
-          <fieldset className="grid gap-4 border p-4">
-            <legend className="px-2 font-heading text-sm font-semibold">Movement limits</legend>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {(["panMin", "panMax", "tiltMin", "tiltMax"] as const).map((name) => (
-                <form.Field key={name} name={name}>
-                  {(field) => (
-                    <Field>
-                      <FieldLabel htmlFor={field.name}>
-                        {name.replace(/([A-Z])/g, " $1")}
-                      </FieldLabel>
-                      <Input
-                        id={field.name}
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={field.state.value}
-                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                      />
-                    </Field>
-                  )}
-                </form.Field>
-              ))}
-            </div>
-          </fieldset>
-
-          <section className="grid gap-3">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h3 className="font-heading text-sm font-semibold">Channel overrides</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Disabled channels are left at zero. Fixed channels ignore live effects.
-                </p>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const offset = Math.max(0, ...channels.map((channel) => channel.offset)) + 1
-                  setChannels((current) => [
-                    ...current,
-                    create(ChannelConfigSchema, {
-                      offset,
-                      name: `Channel ${offset}`,
-                      channelType: "nothing",
-                      minValue: 0,
-                      maxValue: 255,
-                      enabled: true,
-                    }),
-                  ])
+                    ) {
+                      return "Name must be unique"
+                    }
+                    return undefined
+                  },
                 }}
               >
-                <PlusIcon /> Add channel
-              </Button>
-            </div>
-
-            {channels.length === 0 ? (
-              <div className="border border-dashed p-6 text-center text-sm text-muted-foreground">
-                No channels are configured. Add a channel for a custom fixture.
-              </div>
-            ) : (
-              <div className="grid gap-2">
-                {channels.map((channel) => (
-                  <div
-                    key={`channel-${channel.offset}`}
-                    className="grid gap-3 border p-3 lg:grid-cols-[3rem_minmax(8rem,1fr)_minmax(12rem,1.25fr)_5rem_5rem_6rem_auto_auto] lg:items-end"
-                  >
-                    <form.Subscribe selector={(state) => state.values.startChannel}>
-                      {(startChannel) => (
-                        <Field>
-                          <FieldLabel>DMX</FieldLabel>
-                          <Input value={startChannel + channel.offset - 1} disabled />
-                        </Field>
-                      )}
-                    </form.Subscribe>
-                    <Field>
-                      <FieldLabel htmlFor={`channel-name-${channel.offset}`}>Name</FieldLabel>
+                {(field) => {
+                  const invalid = field.state.meta.isTouched && !field.state.meta.isValid
+                  return (
+                    <Field className="md:col-span-2" data-invalid={invalid}>
+                      <FieldLabel htmlFor={field.name}>Name</FieldLabel>
                       <Input
-                        id={`channel-name-${channel.offset}`}
-                        value={channel.name}
-                        onChange={(event) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.name = event.target.value
-                          })
-                        }
+                        id={field.name}
+                        name={field.name}
+                        autoComplete="off"
+                        aria-invalid={invalid}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.value)}
                       />
+                      {invalid ? (
+                        <FieldError>{field.state.meta.errors.map(String).join(", ")}</FieldError>
+                      ) : null}
                     </Field>
-                    <Field>
-                      <FieldLabel>Type</FieldLabel>
-                      <Select
-                        value={channel.channelType}
-                        onValueChange={(value) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.channelType = value ?? "nothing"
-                          })
-                        }
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue>{formatEnumLabel(channel.channelType)}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {channelTypes.map((channelType) => (
-                            <SelectItem key={channelType} value={channelType}>
-                              {formatEnumLabel(channelType)}
+                  )
+                }}
+              </form.Field>
+              <form.Field name="startChannel">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Start channel</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      type="number"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      min={1}
+                      max={512}
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="position">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Show position</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      type="number"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      min={0}
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="profileName">
+                {(field) => (
+                  <Field className="md:col-span-2">
+                    <FieldLabel htmlFor={`${field.name}-trigger`}>Profile</FieldLabel>
+                    <Select
+                      name={field.name}
+                      items={[
+                        { label: "Custom", value: "__custom" },
+                        ...profiles.map((profile) => ({
+                          label: profile.name,
+                          value: profile.name,
+                        })),
+                      ]}
+                      value={field.state.value || "__custom"}
+                      onValueChange={(value) => {
+                        const profileName = value === "__custom" ? "" : (value ?? "")
+                        field.handleChange(profileName)
+                        const profile = profiles.find((candidate) => candidate.name === profileName)
+                        setChannels(
+                          profile
+                            ? profile.channels.map((channel) => clone(ChannelConfigSchema, channel))
+                            : [],
+                        )
+                      }}
+                    >
+                      <SelectTrigger id={`${field.name}-trigger`} className="w-full">
+                        <SelectValue>{field.state.value || "Custom"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="__custom">Custom</SelectItem>
+                          {profiles.map((profile) => (
+                            <SelectItem key={profile.name} value={profile.name}>
+                              {profile.name}
                             </SelectItem>
                           ))}
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor={`channel-min-${channel.offset}`}>Min</FieldLabel>
-                      <Input
-                        id={`channel-min-${channel.offset}`}
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={channel.minValue}
-                        onChange={(event) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.minValue = clampDmx(event.target.valueAsNumber)
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor={`channel-max-${channel.offset}`}>Max</FieldLabel>
-                      <Input
-                        id={`channel-max-${channel.offset}`}
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={channel.maxValue}
-                        onChange={(event) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.maxValue = clampDmx(event.target.valueAsNumber)
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor={`channel-fixed-value-${channel.offset}`}>
-                        Fixed value
-                      </FieldLabel>
-                      <Input
-                        id={`channel-fixed-value-${channel.offset}`}
-                        type="number"
-                        min={0}
-                        max={255}
-                        disabled={channel.fixedValue === undefined}
-                        value={channel.fixedValue ?? channel.defaultValue}
-                        onChange={(event) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.fixedValue = clampDmx(event.target.valueAsNumber)
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field orientation="horizontal" className="pb-2">
-                      <FieldLabel htmlFor={`channel-fixed-${channel.offset}`}>Fixed</FieldLabel>
-                      <Switch
-                        id={`channel-fixed-${channel.offset}`}
-                        checked={channel.fixedValue !== undefined}
-                        onCheckedChange={(checked) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.fixedValue = checked ? next.defaultValue : undefined
-                          })
-                        }
-                      />
-                    </Field>
-                    <div className="flex items-center justify-end gap-1 pb-1">
-                      <Switch
-                        aria-label={`Enable ${channel.name}`}
-                        checked={channel.enabled}
-                        onCheckedChange={(checked) =>
-                          updateChannel(channel.offset, (next) => {
-                            next.enabled = checked
-                          })
-                        }
-                      />
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Remove ${channel.name}`}
-                        onClick={() =>
-                          setChannels((current) =>
-                            current.filter((candidate) => candidate.offset !== channel.offset),
-                          )
-                        }
-                      >
-                        <TrashIcon />
-                      </Button>
-                    </div>
-                  </div>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      Selecting a profile replaces the channel overrides below.
+                    </FieldDescription>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="intensityScale">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Intensity scale</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      type="number"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+            </FieldGroup>
+
+            <FieldSet className="border p-4">
+              <FieldLegend>Movement limits</FieldLegend>
+              <FieldGroup className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {(["panMin", "panMax", "tiltMin", "tiltMax"] as const).map((name) => (
+                  <form.Field key={name} name={name}>
+                    {(field) => (
+                      <Field>
+                        <FieldLabel htmlFor={field.name} className="capitalize">
+                          {name.replace(/([A-Z])/g, " $1")}
+                        </FieldLabel>
+                        <Input
+                          id={field.name}
+                          name={field.name}
+                          type="number"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          min={0}
+                          max={255}
+                          value={field.state.value}
+                          onBlur={field.handleBlur}
+                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                        />
+                      </Field>
+                    )}
+                  </form.Field>
                 ))}
+              </FieldGroup>
+            </FieldSet>
+
+            <section className="grid gap-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h3 className="font-heading text-sm font-semibold">Channel overrides</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Disabled channels stay at zero. Fixed channels ignore live effects.
+                  </p>
+                </div>
+                <Button type="button" size="sm" variant="outline" onClick={addChannel}>
+                  <PlusIcon data-icon="inline-start" aria-hidden="true" /> Add Channel
+                </Button>
               </div>
-            )}
-          </section>
+
+              {channels.length === 0 ? (
+                <Empty className="border">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <SlidersHorizontalIcon aria-hidden="true" />
+                    </EmptyMedia>
+                    <EmptyTitle>No channel overrides</EmptyTitle>
+                    <EmptyDescription>
+                      Add a channel to configure a custom fixture profile.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button type="button" size="sm" variant="outline" onClick={addChannel}>
+                      <PlusIcon data-icon="inline-start" aria-hidden="true" /> Add Channel
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              ) : (
+                <form.Subscribe selector={(state) => state.values.startChannel}>
+                  {(startChannel) => (
+                    <Accordion
+                      key={channels.map((channel) => channel.offset).join("-")}
+                      defaultValue={channels.map((channel) => String(channel.offset))}
+                      className="border px-3"
+                    >
+                      {channels.map((channel) => (
+                        <AccordionItem key={channel.offset} value={String(channel.offset)}>
+                          <AccordionTrigger className="gap-3 hover:no-underline">
+                            <span className="flex min-w-0 flex-1 items-center gap-3">
+                              <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">
+                                DMX {startChannel + channel.offset - 1}
+                              </span>
+                              <span className="truncate">{channel.name}</span>
+                              <span className="hidden truncate text-xs font-normal text-muted-foreground sm:inline">
+                                {formatEnumLabel(channel.channelType)}
+                              </span>
+                            </span>
+                          </AccordionTrigger>
+                          <AccordionContent className="grid gap-3 lg:grid-cols-[minmax(8rem,1fr)_minmax(13rem,1.4fr)_5rem_5rem_6rem_auto_auto] lg:items-end">
+                            <Field>
+                              <FieldLabel htmlFor={`channel-name-${channel.offset}`}>
+                                Name
+                              </FieldLabel>
+                              <Input
+                                id={`channel-name-${channel.offset}`}
+                                name={`channel-name-${channel.offset}`}
+                                autoComplete="off"
+                                value={channel.name}
+                                onChange={(event) =>
+                                  updateChannel(channel.offset, (next) => {
+                                    next.name = event.target.value
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field>
+                              <FieldLabel htmlFor={`channel-type-${channel.offset}`}>
+                                Type
+                              </FieldLabel>
+                              <Combobox
+                                items={[...channelTypes]}
+                                value={channel.channelType}
+                                itemToStringLabel={formatEnumLabel}
+                                onValueChange={(value) =>
+                                  updateChannel(channel.offset, (next) => {
+                                    next.channelType = value ?? "nothing"
+                                  })
+                                }
+                              >
+                                <ComboboxInput
+                                  id={`channel-type-${channel.offset}`}
+                                  name={`channel-type-${channel.offset}`}
+                                  autoComplete="off"
+                                  placeholder="Search channel types…"
+                                />
+                                <ComboboxContent>
+                                  <ComboboxEmpty>No channel type found.</ComboboxEmpty>
+                                  <ComboboxList>
+                                    {channelTypes.map((channelType) => (
+                                      <ComboboxItem key={channelType} value={channelType}>
+                                        {formatEnumLabel(channelType)}
+                                      </ComboboxItem>
+                                    ))}
+                                  </ComboboxList>
+                                </ComboboxContent>
+                              </Combobox>
+                            </Field>
+                            {(["minValue", "maxValue"] as const).map((property) => (
+                              <Field key={property}>
+                                <FieldLabel htmlFor={`channel-${property}-${channel.offset}`}>
+                                  {property === "minValue" ? "Min" : "Max"}
+                                </FieldLabel>
+                                <Input
+                                  id={`channel-${property}-${channel.offset}`}
+                                  name={`channel-${property}-${channel.offset}`}
+                                  type="number"
+                                  inputMode="numeric"
+                                  autoComplete="off"
+                                  min={0}
+                                  max={255}
+                                  value={channel[property]}
+                                  onChange={(event) =>
+                                    updateChannel(channel.offset, (next) => {
+                                      next[property] = clampDmx(event.target.valueAsNumber)
+                                    })
+                                  }
+                                />
+                              </Field>
+                            ))}
+                            <Field>
+                              <FieldLabel htmlFor={`channel-fixed-value-${channel.offset}`}>
+                                Fixed value
+                              </FieldLabel>
+                              <Input
+                                id={`channel-fixed-value-${channel.offset}`}
+                                name={`channel-fixed-value-${channel.offset}`}
+                                type="number"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                min={0}
+                                max={255}
+                                disabled={channel.fixedValue === undefined}
+                                value={channel.fixedValue ?? channel.defaultValue}
+                                onChange={(event) =>
+                                  updateChannel(channel.offset, (next) => {
+                                    next.fixedValue = clampDmx(event.target.valueAsNumber)
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field orientation="horizontal" className="lg:pb-2">
+                              <FieldContent>
+                                <FieldLabel htmlFor={`channel-fixed-${channel.offset}`}>
+                                  Fixed
+                                </FieldLabel>
+                              </FieldContent>
+                              <Switch
+                                id={`channel-fixed-${channel.offset}`}
+                                checked={channel.fixedValue !== undefined}
+                                onCheckedChange={(checked) =>
+                                  updateChannel(channel.offset, (next) => {
+                                    next.fixedValue = checked ? next.defaultValue : undefined
+                                  })
+                                }
+                              />
+                            </Field>
+                            <div className="flex items-center justify-end gap-2 lg:pb-1">
+                              <Field orientation="horizontal" className="w-auto">
+                                <FieldLabel htmlFor={`channel-enabled-${channel.offset}`}>
+                                  Enabled
+                                </FieldLabel>
+                                <Switch
+                                  id={`channel-enabled-${channel.offset}`}
+                                  checked={channel.enabled}
+                                  onCheckedChange={(checked) =>
+                                    updateChannel(channel.offset, (next) => {
+                                      next.enabled = checked
+                                    })
+                                  }
+                                />
+                              </Field>
+                              <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                aria-label={`Remove ${channel.name}`}
+                                onClick={() =>
+                                  setChannels((current) =>
+                                    current.filter(
+                                      (candidate) => candidate.offset !== channel.offset,
+                                    ),
+                                  )
+                                }
+                              >
+                                <TrashIcon aria-hidden="true" />
+                              </Button>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
+                  )}
+                </form.Subscribe>
+              )}
+            </section>
+          </CredenzaBody>
 
           <CredenzaFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
+            <CredenzaClose type="button">Cancel</CredenzaClose>
             <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button type="submit" disabled={!canSubmit || isSubmitting || pending}>
-                  Save fixture
-                </Button>
-              )}
+              {([canSubmit, isSubmitting]) => {
+                const saving = isSubmitting || pending
+                return (
+                  <Button type="submit" disabled={!canSubmit || saving}>
+                    {saving ? <Spinner data-icon="inline-start" /> : null}
+                    {saving ? "Saving…" : "Save Fixture"}
+                  </Button>
+                )
+              }}
             </form.Subscribe>
           </CredenzaFooter>
         </form>

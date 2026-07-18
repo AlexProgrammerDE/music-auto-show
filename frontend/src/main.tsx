@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client"
 import "./index.css"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner.tsx"
+import { TooltipProvider } from "@/components/ui/tooltip.tsx"
 
 import { routeTree } from "./routeTree.gen"
 
@@ -35,8 +36,10 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider defaultTheme="dark" storageKey="music-auto-show-theme">
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-        <Toaster richColors position="bottom-right" />
+        <TooltipProvider>
+          <RouterProvider router={router} />
+          <Toaster richColors position="bottom-right" />
+        </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
   </StrictMode>,

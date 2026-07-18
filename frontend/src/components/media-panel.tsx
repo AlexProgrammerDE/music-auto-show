@@ -48,7 +48,7 @@ export function MediaPanel({
   return (
     <section className="flex flex-col gap-4 border bg-card p-4 sm:flex-row sm:items-center">
       <span className="flex size-10 shrink-0 items-center justify-center border bg-muted">
-        <MusicNotesIcon className="size-5" />
+        <MusicNotesIcon className="size-5" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-[10px] tracking-[0.14em] text-muted-foreground uppercase">Now playing</p>
@@ -62,7 +62,12 @@ export function MediaPanel({
       <div className="flex items-center gap-3">
         <Palette media={media} />
         <Badge variant="outline">
-          {media?.isPlaying ? <PlayIcon weight="fill" /> : <PauseIcon weight="fill" />}
+          {media?.isPlaying ? (
+            <PlayIcon weight="fill" aria-hidden="true" />
+          ) : (
+            <PauseIcon weight="fill" aria-hidden="true" />
+          )}
+          <span className="sr-only">{media?.isPlaying ? "Playing" : "Paused"}</span>
           {Math.round(tempo)} BPM
         </Badge>
       </div>

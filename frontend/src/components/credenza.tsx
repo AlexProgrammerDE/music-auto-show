@@ -1,14 +1,24 @@
-import { Drawer as DrawerPrimitive } from "@base-ui/react/drawer"
 import { createContext, useContext, type ComponentProps, type ReactNode } from "react"
 
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { useMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 
@@ -35,9 +45,9 @@ export function Credenza({ children, open, onOpenChange }: CredenzaProps) {
   const content = <CredenzaContext.Provider value={{ mobile }}>{children}</CredenzaContext.Provider>
 
   return mobile ? (
-    <DrawerPrimitive.Root open={open} onOpenChange={onOpenChange} swipeDirection="down" modal>
+    <Drawer open={open} onOpenChange={onOpenChange} showSwipeHandle>
       {content}
-    </DrawerPrimitive.Root>
+    </Drawer>
   ) : (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {content}
@@ -53,75 +63,78 @@ export function CredenzaContent({
   readonly children: ReactNode
 }) {
   const { mobile } = useCredenza()
-  if (!mobile) return <DialogContent className={className}>{children}</DialogContent>
-
-  return (
-    <DrawerPrimitive.Portal>
-      <DrawerPrimitive.Backdrop className="fixed inset-0 z-50 bg-foreground/10 backdrop-blur-xs transition-opacity data-ending-style:opacity-0 data-starting-style:opacity-0" />
-      <DrawerPrimitive.Viewport className="pointer-events-none fixed inset-0 z-50 select-none">
-        <DrawerPrimitive.Popup
-          className={cn(
-            "pointer-events-auto fixed inset-x-0 bottom-0 flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col rounded-t-xl border-t bg-popover text-popover-foreground shadow-lg transition-transform duration-300 outline-none data-ending-style:translate-y-full data-starting-style:translate-y-full",
-            className,
-          )}
-        >
-          <div className="flex h-5 shrink-0 items-center justify-center" aria-hidden="true">
-            <span className="h-1 w-10 rounded-full bg-muted-foreground/30" />
-          </div>
-          <DrawerPrimitive.Content className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pt-1">
-            {children}
-          </DrawerPrimitive.Content>
-        </DrawerPrimitive.Popup>
-      </DrawerPrimitive.Viewport>
-    </DrawerPrimitive.Portal>
+  return mobile ? (
+    <DrawerContent className={cn("max-h-[calc(100dvh-2rem)]", className)}>{children}</DrawerContent>
+  ) : (
+    <DialogContent className={className}>{children}</DialogContent>
   )
 }
 
 export function CredenzaHeader({ className, ...props }: ComponentProps<"div">) {
   const { mobile } = useCredenza()
   return mobile ? (
-    <div className={cn("flex flex-col gap-2 text-center", className)} {...props} />
+    <DrawerHeader className={className} {...props} />
   ) : (
     <DialogHeader className={className} {...props} />
   )
 }
 
-export function CredenzaTitle({ className, ...props }: DrawerPrimitive.Title.Props) {
+export function CredenzaTitle({ className, ...props }: ComponentProps<typeof DialogTitle>) {
   const { mobile } = useCredenza()
   return mobile ? (
-    <DrawerPrimitive.Title
-      className={cn("font-heading text-base leading-none font-medium", className)}
-      {...props}
-    />
+    <DrawerTitle className={className} {...props} />
   ) : (
     <DialogTitle className={className} {...props} />
   )
 }
 
-export function CredenzaDescription({ className, ...props }: DrawerPrimitive.Description.Props) {
+export function CredenzaDescription({
+  className,
+  ...props
+}: ComponentProps<typeof DialogDescription>) {
   const { mobile } = useCredenza()
   return mobile ? (
-    <DrawerPrimitive.Description
-      className={cn("text-sm text-muted-foreground", className)}
-      {...props}
-    />
+    <DrawerDescription className={className} {...props} />
   ) : (
     <DialogDescription className={className} {...props} />
   )
 }
 
 export function CredenzaBody({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("min-h-0", className)} {...props} />
+  const { mobile } = useCredenza()
+  return (
+    <div
+      className={cn(
+        "min-h-0",
+        mobile && "flex-1 overflow-y-auto overscroll-contain px-4 py-1",
+        className,
+      )}
+      {...props}
+    />
+  )
 }
 
 export function CredenzaFooter({ className, ...props }: ComponentProps<"div">) {
   const { mobile } = useCredenza()
   return mobile ? (
-    <div
-      className={cn("mt-4 flex shrink-0 flex-col-reverse gap-2 border-t pt-4", className)}
-      {...props}
-    />
+    <DrawerFooter className={cn("mt-4 border-t pt-4", className)} {...props} />
   ) : (
     <DialogFooter className={className} {...props} />
+  )
+}
+
+export function CredenzaClose({
+  className,
+  variant = "outline",
+  size = "default",
+  ...props
+}: ComponentProps<typeof Button>) {
+  const { mobile } = useCredenza()
+  const button = <Button className={className} variant={variant} size={size} />
+
+  return mobile ? (
+    <DrawerClose render={button} {...props} />
+  ) : (
+    <DialogClose render={button} {...props} />
   )
 }

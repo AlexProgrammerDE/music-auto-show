@@ -13,26 +13,42 @@ import { Effect } from "effect"
 import { useState } from "react"
 import { toast } from "sonner"
 
-import {
-  Credenza,
-  CredenzaContent,
-  CredenzaDescription,
-  CredenzaFooter,
-  CredenzaHeader,
-  CredenzaTitle,
-} from "@/components/credenza"
+import { ConfirmCredenza } from "@/components/confirm-credenza"
+import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
+import { SliderNumberField } from "@/components/slider-number-field"
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   AudioConfigSchema,
   AudioInputMode,
@@ -56,6 +72,20 @@ const movementModes = enumEntries(MovementMode)
 const effectFixtureModes = enumEntries(EffectFixtureMode)
 const rotationModes = enumEntries(RotationMode)
 const strobeModes = enumEntries(StrobeEffectMode)
+
+type EnumOption = readonly [string, number]
+type SettingsSection = "show" | "audio" | "dmx" | "lighting"
+
+function parseSettingsSection(value: unknown): SettingsSection {
+  switch (value) {
+    case "audio":
+    case "dmx":
+    case "lighting":
+      return value
+    default:
+      return "show"
+  }
+}
 
 function cleanFloat(value: number) {
   return Math.round(value * 1000) / 1000
@@ -93,20 +123,22 @@ function configFormValues(config: ShowConfig) {
 }
 
 function chooseConfigFile() {
-  return new Promise<string>((resolve, reject) => {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "application/json,.json"
-    input.addEventListener("change", () => {
-      const file = input.files?.[0]
-      if (!file) {
-        resolve("")
-        return
-      }
-      file.text().then(resolve, reject)
-    })
-    input.click()
-  })
+  return new Promise<{ readonly json: string; readonly name: string } | undefined>(
+    (resolve, reject) => {
+      const input = document.createElement("input")
+      input.type = "file"
+      input.accept = "application/json,.json"
+      input.addEventListener("change", () => {
+        const file = input.files?.[0]
+        if (!file) {
+          resolve(undefined)
+          return
+        }
+        file.text().then((json) => resolve({ json, name: file.name }), reject)
+      })
+      input.click()
+    },
+  )
 }
 
 function downloadConfig(json: string, filename: string) {
@@ -118,13 +150,63 @@ function downloadConfig(json: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+function EnumSelectField({
+  id,
+  name,
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  readonly id: string
+  readonly name: string
+  readonly label: string
+  readonly value: number
+  readonly options: readonly EnumOption[]
+  readonly onChange: (value: number) => void
+}) {
+  const items = options.map(([optionLabel, optionValue]) => ({
+    label: formatEnumLabel(optionLabel),
+    value: String(optionValue),
+  }))
+
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Select
+        name={name}
+        items={items}
+        value={String(value)}
+        onValueChange={(next) => onChange(Number(next))}
+      >
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue>{formatEnumValue(options, value)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {options.map(([optionLabel, optionValue]) => (
+              <SelectItem key={optionLabel} value={String(optionValue)}>
+                {formatEnumLabel(optionLabel)}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </Field>
+  )
+}
+
 export const Route = createFileRoute("/settings")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    section: parseSettingsSection(search.section),
+  }),
   loader: async ({ context }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(configQueryOptions),
       context.queryClient.ensureQueryData(audioDevicesQueryOptions),
     ])
   },
+  pendingComponent: PageSkeleton,
   component: SettingsPage,
 })
 
@@ -132,7 +214,15 @@ function SettingsPage() {
   const { data: config } = useSuspenseQuery(configQueryOptions)
   const { data: audioDevices } = useSuspenseQuery(audioDevicesQueryOptions)
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
+  const { section } = Route.useSearch()
+  const navigate = Route.useNavigate()
   const [resetOpen, setResetOpen] = useState(false)
+  const [pendingImport, setPendingImport] = useState<{
+    readonly json: string
+    readonly name: string
+  }>()
+  const audioDeviceNames = Array.from(new Set(audioDevices.map((device) => device.name)))
+  const audioDeviceOptions = ["Automatic", ...audioDeviceNames]
 
   const saveMutation = useMutation({
     mutationFn: (nextConfig: typeof config) =>
@@ -190,6 +280,7 @@ function SettingsPage() {
     form.reset(configFormValues(saved))
     void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
     setResetOpen(false)
+    setPendingImport(undefined)
     toast.success(message)
   }
 
@@ -226,7 +317,9 @@ function SettingsPage() {
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Show settings</h1>
+          <h1 className="font-heading text-xl font-semibold tracking-tight text-balance">
+            Show Settings
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Audio capture, BeatNet+, lighting behavior, and hardware output.
           </p>
@@ -237,12 +330,19 @@ function SettingsPage() {
             variant="outline"
             disabled={importMutation.isPending}
             onClick={() => {
-              void chooseConfigFile().then((json) => {
-                if (json) importMutation.mutate(json)
-              })
+              void chooseConfigFile()
+                .then((selected) => {
+                  if (selected) setPendingImport(selected)
+                })
+                .catch((error: Error) => toast.error(error.message))
             }}
           >
-            <UploadSimpleIcon /> Load
+            {importMutation.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <UploadSimpleIcon data-icon="inline-start" aria-hidden="true" />
+            )}
+            {importMutation.isPending ? "Loading…" : "Load"}
           </Button>
           <Button
             type="button"
@@ -250,522 +350,560 @@ function SettingsPage() {
             disabled={exportMutation.isPending}
             onClick={() => exportMutation.mutate()}
           >
-            <DownloadSimpleIcon /> Export
+            {exportMutation.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" />
+            )}
+            {exportMutation.isPending ? "Exporting…" : "Export"}
           </Button>
           <Button type="button" variant="outline" onClick={() => setResetOpen(true)}>
-            <FilePlusIcon /> New
+            <FilePlusIcon data-icon="inline-start" aria-hidden="true" /> New
           </Button>
           <form.Subscribe
             selector={(state) => [state.canSubmit, state.isSubmitting, state.isDirty] as const}
           >
-            {([canSubmit, isSubmitting, isDirty]) => (
-              <Button type="submit" disabled={!canSubmit || isSubmitting || saveMutation.isPending}>
-                <FloppyDiskIcon /> {isDirty ? "Save changes" : "Save settings"}
-              </Button>
-            )}
+            {([canSubmit, isSubmitting, isDirty]) => {
+              const saving = isSubmitting || saveMutation.isPending
+              return (
+                <Button type="submit" disabled={!canSubmit || saving}>
+                  {saving ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <FloppyDiskIcon data-icon="inline-start" aria-hidden="true" />
+                  )}
+                  {saving ? "Saving…" : isDirty ? "Save Changes" : "Save Settings"}
+                </Button>
+              )
+            }}
           </form.Subscribe>
         </div>
-        <Credenza open={resetOpen} onOpenChange={setResetOpen}>
-          <CredenzaContent>
-            <CredenzaHeader>
-              <CredenzaTitle>Create a new show?</CredenzaTitle>
-              <CredenzaDescription>
-                This replaces the active configuration on disk with the Rust defaults.
-              </CredenzaDescription>
-            </CredenzaHeader>
-            <CredenzaFooter>
-              <Button type="button" variant="outline" onClick={() => setResetOpen(false)}>
-                Cancel
-              </Button>
+      </div>
+
+      <Tabs
+        value={section}
+        onValueChange={(value) => {
+          void navigate({ search: { section: parseSettingsSection(value) }, replace: true })
+        }}
+      >
+        <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
+          <TabsTrigger type="button" value="show">
+            Show
+          </TabsTrigger>
+          <TabsTrigger type="button" value="audio">
+            Audio
+          </TabsTrigger>
+          <TabsTrigger type="button" value="dmx">
+            DMX
+          </TabsTrigger>
+          <TabsTrigger type="button" value="lighting">
+            Lighting
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="show">
+          <SectionPanel title="Show" description="The configuration file identity">
+            <FieldGroup className="max-w-xl p-4">
+              <form.Field
+                name="name"
+                validators={{
+                  onChange: ({ value }) => (value.trim() ? undefined : "Name is required"),
+                }}
+              >
+                {(field) => {
+                  const invalid = field.state.meta.isTouched && !field.state.meta.isValid
+                  return (
+                    <Field data-invalid={invalid}>
+                      <FieldLabel htmlFor={field.name}>Show name</FieldLabel>
+                      <Input
+                        id={field.name}
+                        name={field.name}
+                        autoComplete="off"
+                        aria-invalid={invalid}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.value)}
+                      />
+                      {invalid ? (
+                        <FieldError>{field.state.meta.errors.map(String).join(", ")}</FieldError>
+                      ) : null}
+                    </Field>
+                  )
+                }}
+              </form.Field>
+            </FieldGroup>
+          </SectionPanel>
+        </TabsContent>
+
+        <TabsContent value="audio">
+          <SectionPanel
+            title="Audio Input"
+            description="System audio, microphone, or simulation"
+            action={
               <Button
                 type="button"
-                disabled={resetMutation.isPending}
-                onClick={() => resetMutation.mutate()}
+                size="sm"
+                variant="ghost"
+                onClick={() =>
+                  void queryClient.invalidateQueries({ queryKey: showQueryKeys.audioDevices })
+                }
               >
-                Create new show
+                <ArrowClockwiseIcon data-icon="inline-start" aria-hidden="true" /> Refresh Devices
               </Button>
-            </CredenzaFooter>
-          </CredenzaContent>
-        </Credenza>
-      </div>
-
-      <SectionPanel title="Show" description="The configuration file identity">
-        <div className="max-w-xl p-4">
-          <form.Field
-            name="name"
-            validators={{
-              onChange: ({ value }) => (value.trim() ? undefined : "Name is required"),
-            }}
+            }
           >
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Show name</FieldLabel>
-                <Input
-                  id={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                />
-              </Field>
-            )}
-          </form.Field>
-        </div>
-      </SectionPanel>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionPanel
-          title="Audio input"
-          description="System audio, microphone, or simulation"
-          action={
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                void queryClient.invalidateQueries({ queryKey: showQueryKeys.audioDevices })
-              }
-            >
-              <ArrowClockwiseIcon /> Refresh devices
-            </Button>
-          }
-        >
-          <div className="grid gap-5 p-4 sm:grid-cols-2">
-            <form.Field name="audioMode">
-              {(field) => (
-                <Field>
-                  <FieldLabel>Input mode</FieldLabel>
-                  <Select
-                    value={String(field.state.value)}
-                    onValueChange={(value) => field.handleChange(Number(value))}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{formatEnumValue(audioModes, field.state.value)}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {audioModes.map(([label, value]) => (
-                        <SelectItem key={label} value={String(value)}>
-                          {formatEnumLabel(label)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="audioDeviceName">
-              {(field) => (
-                <Field>
-                  <FieldLabel>Capture device</FieldLabel>
-                  <Select
-                    value={field.state.value || "__auto"}
-                    onValueChange={(value) =>
-                      field.handleChange(value === "__auto" ? "" : (value ?? ""))
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{field.state.value || "Automatic"}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__auto">Automatic</SelectItem>
-                      {audioDevices.map((device) => (
-                        <SelectItem key={device.id} value={device.name}>
-                          {device.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="pipewireSourceName">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>PipeWire source</FieldLabel>
-                  <Input
-                    id={field.name}
+            <FieldGroup className="grid gap-5 p-4 sm:grid-cols-2">
+              <form.Field name="audioMode">
+                {(field) => (
+                  <EnumSelectField
+                    id={`${field.name}-trigger`}
+                    name={field.name}
+                    label="Input mode"
                     value={field.state.value}
-                    placeholder="Default sink monitor"
-                    onChange={(event) => field.handleChange(event.target.value)}
+                    options={audioModes}
+                    onChange={field.handleChange}
                   />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="audioGain">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Input gain</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={0.1}
-                    max={8}
-                    step={0.05}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="beatnetModelPath">
-              {(field) => (
-                <Field className="sm:col-span-2">
-                  <FieldLabel htmlFor={field.name}>BeatNet+ checkpoint</FieldLabel>
-                  <Input
-                    id={field.name}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.value)}
-                  />
-                  <FieldDescription>
-                    The checkpoint stays outside the binary and is loaded by the native Rust
-                    inference path.
-                  </FieldDescription>
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="audioSimulate">
-              {(field) => (
-                <Field orientation="horizontal" className="sm:col-span-2">
-                  <div className="flex-1">
-                    <FieldLabel htmlFor={field.name}>Simulate audio</FieldLabel>
+                )}
+              </form.Field>
+              <form.Field name="audioDeviceName">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Capture device</FieldLabel>
+                    <Combobox
+                      items={audioDeviceOptions}
+                      value={field.state.value || "Automatic"}
+                      onValueChange={(value) =>
+                        field.handleChange(value === "Automatic" ? "" : (value ?? ""))
+                      }
+                    >
+                      <ComboboxInput
+                        id={field.name}
+                        name={field.name}
+                        autoComplete="off"
+                        placeholder="Search capture devices…"
+                      />
+                      <ComboboxContent>
+                        <ComboboxEmpty>No capture device found.</ComboboxEmpty>
+                        <ComboboxList>
+                          {audioDeviceOptions.map((deviceName) => (
+                            <ComboboxItem key={deviceName} value={deviceName}>
+                              {deviceName}
+                            </ComboboxItem>
+                          ))}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="pipewireSourceName">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>PipeWire source</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      autoComplete="off"
+                      value={field.state.value}
+                      placeholder="Default sink monitor…"
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.value)}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="audioGain">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Input gain</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id={field.name}
+                        name={field.name}
+                        type="number"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        min={0.1}
+                        max={8}
+                        step={0.05}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      />
+                      <InputGroupAddon align="inline-end">×</InputGroupAddon>
+                    </InputGroup>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="beatnetModelPath">
+                {(field) => (
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor={field.name}>BeatNet+ checkpoint</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      autoComplete="off"
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.value)}
+                    />
                     <FieldDescription>
-                      Generate deterministic audio features without capture hardware.
+                      The checkpoint stays outside the binary and loads through native Rust
+                      inference.
                     </FieldDescription>
-                  </div>
-                  <Switch
-                    id={field.name}
-                    checked={field.state.value}
-                    onCheckedChange={field.handleChange}
-                  />
-                </Field>
-              )}
-            </form.Field>
-          </div>
-        </SectionPanel>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="audioSimulate">
+                {(field) => (
+                  <Field orientation="horizontal" className="sm:col-span-2">
+                    <FieldContent>
+                      <FieldLabel htmlFor={field.name}>Simulate audio</FieldLabel>
+                      <FieldDescription>
+                        Generate deterministic audio features without capture hardware.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id={field.name}
+                      checked={field.state.value}
+                      onCheckedChange={field.handleChange}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+            </FieldGroup>
+          </SectionPanel>
+        </TabsContent>
 
-        <SectionPanel title="DMX output" description="Open DMX USB or simulation mode">
-          <div className="grid gap-5 p-4 sm:grid-cols-2">
-            <form.Field name="dmxPort">
-              {(field) => (
-                <Field className="sm:col-span-2">
-                  <FieldLabel htmlFor={field.name}>Serial port</FieldLabel>
-                  <Input
-                    id={field.name}
-                    value={field.state.value}
-                    placeholder="auto"
-                    onChange={(event) => field.handleChange(event.target.value)}
-                  />
-                  <FieldDescription>
-                    Use auto to discover a compatible USB serial interface.
-                  </FieldDescription>
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="dmxUniverseSize">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Universe size</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={1}
-                    max={512}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="dmxFps">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Refresh rate</FieldLabel>
-                  <Input
-                    id={field.name}
-                    type="number"
-                    min={1}
-                    max={44}
-                    value={field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                  />
-                </Field>
-              )}
-            </form.Field>
-            <form.Field name="dmxSimulate">
-              {(field) => (
-                <Field orientation="horizontal" className="sm:col-span-2">
-                  <div className="flex-1">
-                    <FieldLabel htmlFor={field.name}>Simulate DMX</FieldLabel>
+        <TabsContent value="dmx">
+          <SectionPanel title="DMX Output" description="Open DMX USB or simulation mode">
+            <FieldGroup className="grid gap-5 p-4 sm:grid-cols-2">
+              <form.Field name="dmxPort">
+                {(field) => (
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor={field.name}>Serial port</FieldLabel>
+                    <Input
+                      id={field.name}
+                      name={field.name}
+                      autoComplete="off"
+                      value={field.state.value}
+                      placeholder="auto…"
+                      onBlur={field.handleBlur}
+                      onChange={(event) => field.handleChange(event.target.value)}
+                    />
                     <FieldDescription>
-                      Run the complete effects pipeline without opening a serial port.
+                      Use auto to discover a compatible USB serial interface.
                     </FieldDescription>
-                  </div>
-                  <Switch
-                    id={field.name}
-                    checked={field.state.value}
-                    onCheckedChange={field.handleChange}
-                  />
-                </Field>
-              )}
-            </form.Field>
-          </div>
-        </SectionPanel>
-      </div>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="dmxUniverseSize">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Universe size</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id={field.name}
+                        name={field.name}
+                        type="number"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        min={1}
+                        max={512}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      />
+                      <InputGroupAddon align="inline-end">channels</InputGroupAddon>
+                    </InputGroup>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="dmxFps">
+                {(field) => (
+                  <Field>
+                    <FieldLabel htmlFor={field.name}>Refresh rate</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id={field.name}
+                        name={field.name}
+                        type="number"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        min={1}
+                        max={44}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      />
+                      <InputGroupAddon align="inline-end">FPS</InputGroupAddon>
+                    </InputGroup>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="dmxSimulate">
+                {(field) => (
+                  <Field orientation="horizontal" className="sm:col-span-2">
+                    <FieldContent>
+                      <FieldLabel htmlFor={field.name}>Simulate DMX</FieldLabel>
+                      <FieldDescription>
+                        Run the effects pipeline without opening a serial port.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id={field.name}
+                      checked={field.state.value}
+                      onCheckedChange={field.handleChange}
+                    />
+                  </Field>
+                )}
+              </form.Field>
+            </FieldGroup>
+          </SectionPanel>
+        </TabsContent>
 
-      <SectionPanel
-        title="Lighting effects"
-        description="Faithful controls for every visualization and movement algorithm"
-      >
-        <div className="grid gap-5 p-4 md:grid-cols-2 xl:grid-cols-4">
-          <form.Field name="visualizationMode">
-            {(field) => (
-              <Field>
-                <FieldLabel>Visualization</FieldLabel>
-                <Select
-                  value={String(field.state.value)}
-                  onValueChange={(value) => field.handleChange(Number(value))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>
-                      {formatEnumValue(visualizationModes, field.state.value)}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {visualizationModes.map(([label, value]) => (
-                      <SelectItem key={label} value={String(value)}>
-                        {formatEnumLabel(label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="movementMode">
-            {(field) => (
-              <Field>
-                <FieldLabel>Movement</FieldLabel>
-                <Select
-                  value={String(field.state.value)}
-                  onValueChange={(value) => field.handleChange(Number(value))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{formatEnumValue(movementModes, field.state.value)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {movementModes.map(([label, value]) => (
-                      <SelectItem key={label} value={String(value)}>
-                        {formatEnumLabel(label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="effectFixtureMode">
-            {(field) => (
-              <Field>
-                <FieldLabel>Fixture balance</FieldLabel>
-                <Select
-                  value={String(field.state.value)}
-                  onValueChange={(value) => field.handleChange(Number(value))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>
-                      {formatEnumValue(effectFixtureModes, field.state.value)}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {effectFixtureModes.map(([label, value]) => (
-                      <SelectItem key={label} value={String(value)}>
-                        {formatEnumLabel(label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="rotationMode">
-            {(field) => (
-              <Field>
-                <FieldLabel>Rotation</FieldLabel>
-                <Select
-                  value={String(field.state.value)}
-                  onValueChange={(value) => field.handleChange(Number(value))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{formatEnumValue(rotationModes, field.state.value)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {rotationModes.map(([label, value]) => (
-                      <SelectItem key={label} value={String(value)}>
-                        {formatEnumLabel(label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="intensity">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Intensity</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="colorSpeed">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Color speed</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0.05}
-                  max={8}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="beatSensitivity">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Beat sensitivity</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="smoothFactor">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Smoothing</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="movementSpeed">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Movement speed</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0.05}
-                  max={8}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="strobeEffectMode">
-            {(field) => (
-              <Field>
-                <FieldLabel>Strobe program</FieldLabel>
-                <Select
-                  value={String(field.state.value)}
-                  onValueChange={(value) => field.handleChange(Number(value))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{formatEnumValue(strobeModes, field.state.value)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {strobeModes.map(([label, value]) => (
-                      <SelectItem key={label} value={String(value)}>
-                        {formatEnumLabel(label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="strobeEffectSpeed">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={field.name}>Strobe speed</FieldLabel>
-                <Input
-                  id={field.name}
-                  type="number"
-                  min={0.05}
-                  max={8}
-                  step={0.05}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                />
-              </Field>
-            )}
-          </form.Field>
-        </div>
-        <div className="grid border-t md:grid-cols-2 xl:grid-cols-5">
-          {(
-            [
-              [
-                "forceMaxBrightness",
-                "Maximum brightness",
-                "Force the master intensity channel to full.",
-              ],
-              ["strobeOnDrop", "Strobe on drop", "Trigger strobe accents on musical drops."],
-              [
-                "movementEnabled",
-                "Movement enabled",
-                "Drive pan and tilt from the movement algorithm.",
-              ],
-              [
-                "strobeEffectEnabled",
-                "Effect program",
-                "Enable the fixture-specific strobe effect channel.",
-              ],
-            ] as const
-          ).map(([name, label, description]) => (
-            <form.Field key={name} name={name}>
-              {(field) => (
-                <Field orientation="horizontal" className="border-r p-4">
-                  <div className="flex-1">
-                    <FieldLabel htmlFor={field.name}>{label}</FieldLabel>
-                    <FieldDescription>{description}</FieldDescription>
-                  </div>
-                  <Switch
-                    id={field.name}
-                    checked={field.state.value}
-                    onCheckedChange={field.handleChange}
-                  />
-                </Field>
-              )}
-            </form.Field>
-          ))}
-        </div>
-      </SectionPanel>
+        <TabsContent value="lighting">
+          <SectionPanel
+            title="Lighting Effects"
+            description="Faithful controls for visualization and movement algorithms"
+          >
+            <FieldSet className="p-4">
+              <FieldLegend variant="label">Programs</FieldLegend>
+              <FieldGroup className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+                <form.Field name="visualizationMode">
+                  {(field) => (
+                    <EnumSelectField
+                      id={`${field.name}-trigger`}
+                      name={field.name}
+                      label="Visualization"
+                      value={field.state.value}
+                      options={visualizationModes}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="movementMode">
+                  {(field) => (
+                    <EnumSelectField
+                      id={`${field.name}-trigger`}
+                      name={field.name}
+                      label="Movement"
+                      value={field.state.value}
+                      options={movementModes}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="effectFixtureMode">
+                  {(field) => (
+                    <EnumSelectField
+                      id={`${field.name}-trigger`}
+                      name={field.name}
+                      label="Fixture balance"
+                      value={field.state.value}
+                      options={effectFixtureModes}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="rotationMode">
+                  {(field) => (
+                    <EnumSelectField
+                      id={`${field.name}-trigger`}
+                      name={field.name}
+                      label="Rotation"
+                      value={field.state.value}
+                      options={rotationModes}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="strobeEffectMode">
+                  {(field) => (
+                    <EnumSelectField
+                      id={`${field.name}-trigger`}
+                      name={field.name}
+                      label="Strobe program"
+                      value={field.state.value}
+                      options={strobeModes}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+              </FieldGroup>
+            </FieldSet>
+
+            <FieldSet className="border-t p-4">
+              <FieldLegend variant="label">Response</FieldLegend>
+              <FieldGroup className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                <form.Field name="intensity">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Intensity"
+                      value={field.state.value}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      displayScale={100}
+                      unit="%"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="colorSpeed">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Color speed"
+                      value={field.state.value}
+                      min={0.05}
+                      max={8}
+                      step={0.05}
+                      unit="×"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="beatSensitivity">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Beat sensitivity"
+                      value={field.state.value}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      displayScale={100}
+                      unit="%"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="smoothFactor">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Smoothing"
+                      value={field.state.value}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      displayScale={100}
+                      unit="%"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="movementSpeed">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Movement speed"
+                      value={field.state.value}
+                      min={0.05}
+                      max={8}
+                      step={0.05}
+                      unit="×"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+                <form.Field name="strobeEffectSpeed">
+                  {(field) => (
+                    <SliderNumberField
+                      id={field.name}
+                      name={field.name}
+                      label="Strobe speed"
+                      value={field.state.value}
+                      min={0.05}
+                      max={8}
+                      step={0.05}
+                      unit="×"
+                      onBlur={field.handleBlur}
+                      onChange={field.handleChange}
+                    />
+                  )}
+                </form.Field>
+              </FieldGroup>
+            </FieldSet>
+
+            <FieldGroup className="grid border-t md:grid-cols-2 xl:grid-cols-4">
+              {(
+                [
+                  [
+                    "forceMaxBrightness",
+                    "Maximum brightness",
+                    "Force the master intensity channel to full.",
+                  ],
+                  ["strobeOnDrop", "Strobe on drop", "Trigger strobe accents on musical drops."],
+                  [
+                    "movementEnabled",
+                    "Movement enabled",
+                    "Drive pan and tilt from the movement algorithm.",
+                  ],
+                  [
+                    "strobeEffectEnabled",
+                    "Effect program",
+                    "Enable the fixture-specific strobe effect channel.",
+                  ],
+                ] as const
+              ).map(([name, label, description]) => (
+                <form.Field key={name} name={name}>
+                  {(field) => (
+                    <Field orientation="horizontal" className="border-r p-4">
+                      <FieldContent>
+                        <FieldLabel htmlFor={field.name}>{label}</FieldLabel>
+                        <FieldDescription>{description}</FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id={field.name}
+                        checked={field.state.value}
+                        onCheckedChange={field.handleChange}
+                      />
+                    </Field>
+                  )}
+                </form.Field>
+              ))}
+            </FieldGroup>
+          </SectionPanel>
+        </TabsContent>
+      </Tabs>
+
+      <ConfirmCredenza
+        open={pendingImport !== undefined}
+        title={`Load ${pendingImport?.name ?? "configuration"}?`}
+        description="This replaces the active show configuration and discards unsaved form changes."
+        confirmLabel="Load Configuration"
+        icon={<UploadSimpleIcon aria-hidden="true" />}
+        pending={importMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) setPendingImport(undefined)
+        }}
+        onConfirm={() => {
+          if (pendingImport) importMutation.mutate(pendingImport.json)
+        }}
+      />
+      <ConfirmCredenza
+        open={resetOpen}
+        title="Create a new show?"
+        description="This replaces the active configuration on disk with the Rust defaults."
+        confirmLabel="Create New Show"
+        icon={<FilePlusIcon aria-hidden="true" />}
+        pending={resetMutation.isPending}
+        onOpenChange={setResetOpen}
+        onConfirm={() => resetMutation.mutate()}
+      />
     </form>
   )
 }

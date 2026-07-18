@@ -1,5 +1,13 @@
 import type { ReactNode } from "react"
 
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 
 export function SectionPanel({
@@ -16,17 +24,19 @@ export function SectionPanel({
   readonly className?: string
 }) {
   return (
-    <section className={cn("border bg-card", className)}>
-      <header className="flex min-h-12 items-center justify-between gap-3 border-b px-4 py-2.5">
-        <div className="min-w-0">
-          <h2 className="font-heading text-sm font-semibold tracking-tight">{title}</h2>
+    <section>
+      <Card size="sm" className={cn("gap-0 rounded-none py-0", className)}>
+        <CardHeader className="min-h-12 gap-0 border-b py-2.5">
+          <CardTitle>
+            <h2 className="text-sm font-semibold tracking-tight text-balance">{title}</h2>
+          </CardTitle>
           {description ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{description}</p>
+            <CardDescription className="truncate text-xs">{description}</CardDescription>
           ) : null}
-        </div>
-        {action}
-      </header>
-      {children}
+          {action ? <CardAction>{action}</CardAction> : null}
+        </CardHeader>
+        <CardContent className="p-0">{children}</CardContent>
+      </Card>
     </section>
   )
 }

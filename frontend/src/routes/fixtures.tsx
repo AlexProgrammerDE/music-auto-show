@@ -1,5 +1,5 @@
 import { clone, create } from "@bufbuild/protobuf"
-import { PencilSimpleIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react"
+import { LightbulbFilamentIcon, PencilSimpleIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react"
 import { useForm } from "@tanstack/react-form"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
@@ -8,8 +8,11 @@ import { Effect } from "effect"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { ConfirmCredenza } from "@/components/confirm-credenza"
 import {
   Credenza,
+  CredenzaBody,
+  CredenzaClose,
   CredenzaContent,
   CredenzaDescription,
   CredenzaFooter,
@@ -17,27 +20,40 @@ import {
   CredenzaTitle,
 } from "@/components/credenza"
 import { FixtureEditor } from "@/components/fixture-editor"
+import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   ChannelConfigSchema,
   FixtureConfigSchema,
@@ -101,25 +117,39 @@ const columns = columnHelper.columns([
   }),
   columnHelper.display({
     id: "actions",
-    header: "",
+    header: () => <span className="sr-only">Actions</span>,
     cell: (context) => (
       <div className="flex justify-end gap-1">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Edit ${context.row.original.name}`}
-          onClick={context.row.original.edit}
-        >
-          <PencilSimpleIcon />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Remove ${context.row.original.name}`}
-          onClick={context.row.original.remove}
-        >
-          <TrashIcon />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Edit ${context.row.original.name}`}
+                onClick={context.row.original.edit}
+              />
+            }
+          >
+            <PencilSimpleIcon aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>Edit Fixture</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Remove ${context.row.original.name}`}
+                onClick={context.row.original.remove}
+              />
+            }
+          >
+            <TrashIcon aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>Remove Fixture</TooltipContent>
+        </Tooltip>
       </div>
     ),
   }),
@@ -133,6 +163,7 @@ export const Route = createFileRoute("/fixtures")({
       context.queryClient.ensureQueryData(fixtureProfilesQueryOptions),
     ])
   },
+  pendingComponent: PageSkeleton,
   component: FixturesPage,
 })
 
@@ -143,6 +174,7 @@ function FixturesPage() {
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingFixtureId, setEditingFixtureId] = useState<string>()
+  const [removingFixtureId, setRemovingFixtureId] = useState<string>()
 
   const updateMutation = useMutation({
     mutationFn: (nextConfig: typeof config) =>
@@ -151,6 +183,7 @@ function FixturesPage() {
       queryClient.setQueryData(showQueryKeys.config, saved)
       void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
       setDialogOpen(false)
+      setRemovingFixtureId(undefined)
       toast.success("Fixture configuration saved")
     },
     onError: (error) => toast.error(error.message),
@@ -166,15 +199,13 @@ function FixturesPage() {
       intensity: fixture.intensityScale,
       state: states.get(fixture.id),
       edit: () => setEditingFixtureId(fixture.id),
-      remove: () => {
-        const next = clone(ShowConfigSchema, config)
-        next.fixtures = next.fixtures.filter((candidate) => candidate.id !== fixture.id)
-        updateMutation.mutate(next)
-      },
+      remove: () => setRemovingFixtureId(fixture.id),
     }))
-  }, [config, snapshot.fixtureStates, updateMutation])
+  }, [config.fixtures, snapshot.fixtureStates])
 
   const table = useTable({ features, columns, data: rows })
+  const removingFixture = config.fixtures.find((fixture) => fixture.id === removingFixtureId)
+  const editingFixture = config.fixtures.find((fixture) => fixture.id === editingFixtureId)
 
   const nextStartChannel = Math.min(
     512,
@@ -235,163 +266,217 @@ function FixturesPage() {
     <div className="grid gap-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Fixtures</h1>
+          <h1 className="font-heading text-xl font-semibold tracking-tight text-balance">
+            Fixtures
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Patch lights to DMX addresses and inspect their live output.
           </p>
         </div>
-        <>
-          <Button onClick={() => setDialogOpen(true)}>
-            <PlusIcon /> Add fixture
-          </Button>
-          <Credenza open={dialogOpen} onOpenChange={setDialogOpen}>
-            <CredenzaContent>
-              <CredenzaHeader>
-                <CredenzaTitle>Add fixture</CredenzaTitle>
-                <CredenzaDescription>
-                  Choose a fixture profile and its first channel in the universe.
-                </CredenzaDescription>
-              </CredenzaHeader>
-              <form
-                className="grid gap-4"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  void form.handleSubmit()
-                }}
-              >
-                <form.Field
-                  name="name"
-                  validators={{
-                    onChange: ({ value }) => (value.trim() ? undefined : "Name is required"),
-                  }}
-                >
-                  {(field) => (
-                    <Field>
-                      <FieldLabel htmlFor={field.name}>Name</FieldLabel>
-                      <Input
-                        id={field.name}
-                        value={field.state.value}
-                        onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.value)}
-                      />
-                    </Field>
-                  )}
-                </form.Field>
-                <form.Field name="profileName">
-                  {(field) => (
-                    <Field>
-                      <FieldLabel>Profile</FieldLabel>
-                      <Select
-                        value={field.state.value || "__custom"}
-                        onValueChange={(value) =>
-                          field.handleChange(value === "__custom" ? "" : (value ?? ""))
+        <Button onClick={() => setDialogOpen(true)}>
+          <PlusIcon data-icon="inline-start" aria-hidden="true" /> Add Fixture
+        </Button>
+        <Credenza open={dialogOpen} onOpenChange={setDialogOpen}>
+          <CredenzaContent>
+            <CredenzaHeader>
+              <CredenzaTitle>Add Fixture</CredenzaTitle>
+              <CredenzaDescription>
+                Choose a fixture profile and its first channel in the universe.
+              </CredenzaDescription>
+            </CredenzaHeader>
+            <form
+              className="flex min-h-0 flex-1 flex-col"
+              onSubmit={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                void form.handleSubmit()
+              }}
+            >
+              <CredenzaBody>
+                <FieldGroup>
+                  <form.Field
+                    name="name"
+                    validators={{
+                      onChange: ({ value }) => {
+                        if (!value.trim()) return "Name is required"
+                        if (
+                          config.fixtures.some(
+                            (fixture) =>
+                              fixture.name.toLocaleLowerCase() === value.trim().toLocaleLowerCase(),
+                          )
+                        ) {
+                          return "Name must be unique"
                         }
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue>{field.state.value || "Custom"}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__custom">Custom</SelectItem>
-                          {profiles.map((profile) => (
-                            <SelectItem key={profile.name} value={profile.name}>
-                              {profile.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  )}
-                </form.Field>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <form.Field name="startChannel">
-                    {(field) => (
-                      <Field>
-                        <FieldLabel htmlFor={field.name}>Start channel</FieldLabel>
-                        <Input
-                          id={field.name}
-                          type="number"
-                          min={1}
-                          max={512}
-                          value={field.state.value}
-                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                        />
-                      </Field>
-                    )}
-                  </form.Field>
-                  <form.Field name="position">
-                    {(field) => (
-                      <Field>
-                        <FieldLabel htmlFor={field.name}>Position</FieldLabel>
-                        <Input
-                          id={field.name}
-                          type="number"
-                          min={0}
-                          value={field.state.value}
-                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                        />
-                      </Field>
-                    )}
-                  </form.Field>
-                  <form.Field name="intensityScale">
-                    {(field) => (
-                      <Field>
-                        <FieldLabel htmlFor={field.name}>Intensity scale</FieldLabel>
-                        <Input
-                          id={field.name}
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          value={field.state.value}
-                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                        />
-                      </Field>
-                    )}
-                  </form.Field>
-                </div>
-                <fieldset className="grid grid-cols-2 gap-3 border p-3 sm:grid-cols-4">
-                  <legend className="px-2 text-xs font-medium text-muted-foreground">
-                    Movement limits
-                  </legend>
-                  {(["panMin", "panMax", "tiltMin", "tiltMax"] as const).map((name) => (
-                    <form.Field key={name} name={name}>
-                      {(field) => (
-                        <Field>
-                          <FieldLabel htmlFor={`add-${field.name}`}>
-                            {name.replace(/([A-Z])/g, " $1")}
-                          </FieldLabel>
+                        return undefined
+                      },
+                    }}
+                  >
+                    {(field) => {
+                      const invalid = field.state.meta.isTouched && !field.state.meta.isValid
+                      return (
+                        <Field data-invalid={invalid}>
+                          <FieldLabel htmlFor={`add-${field.name}`}>Name</FieldLabel>
                           <Input
                             id={`add-${field.name}`}
-                            type="number"
-                            min={0}
-                            max={255}
+                            name={field.name}
+                            autoComplete="off"
+                            aria-invalid={invalid}
                             value={field.state.value}
+                            onBlur={field.handleBlur}
+                            onChange={(event) => field.handleChange(event.target.value)}
+                          />
+                          {invalid ? (
+                            <FieldError>
+                              {field.state.meta.errors.map(String).join(", ")}
+                            </FieldError>
+                          ) : null}
+                        </Field>
+                      )
+                    }}
+                  </form.Field>
+                  <form.Field name="profileName">
+                    {(field) => (
+                      <Field>
+                        <FieldLabel htmlFor={`add-${field.name}-trigger`}>Profile</FieldLabel>
+                        <Select
+                          name={field.name}
+                          items={[
+                            { label: "Custom", value: "__custom" },
+                            ...profiles.map((profile) => ({
+                              label: profile.name,
+                              value: profile.name,
+                            })),
+                          ]}
+                          value={field.state.value || "__custom"}
+                          onValueChange={(value) =>
+                            field.handleChange(value === "__custom" ? "" : (value ?? ""))
+                          }
+                        >
+                          <SelectTrigger id={`add-${field.name}-trigger`} className="w-full">
+                            <SelectValue>{field.state.value || "Custom"}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value="__custom">Custom</SelectItem>
+                              {profiles.map((profile) => (
+                                <SelectItem key={profile.name} value={profile.name}>
+                                  {profile.name}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    )}
+                  </form.Field>
+                  <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    <form.Field name="startChannel">
+                      {(field) => (
+                        <Field>
+                          <FieldLabel htmlFor={`add-${field.name}`}>Start channel</FieldLabel>
+                          <Input
+                            id={`add-${field.name}`}
+                            name={field.name}
+                            type="number"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            min={1}
+                            max={512}
+                            value={field.state.value}
+                            onBlur={field.handleBlur}
                             onChange={(event) => field.handleChange(event.target.valueAsNumber)}
                           />
                         </Field>
                       )}
                     </form.Field>
-                  ))}
-                </fieldset>
-                <CredenzaFooter>
-                  <form.Subscribe
-                    selector={(state) => [state.canSubmit, state.isSubmitting] as const}
-                  >
-                    {([canSubmit, isSubmitting]) => (
-                      <Button
-                        type="submit"
-                        disabled={!canSubmit || isSubmitting || updateMutation.isPending}
-                      >
-                        Add fixture
+                    <form.Field name="position">
+                      {(field) => (
+                        <Field>
+                          <FieldLabel htmlFor={`add-${field.name}`}>Position</FieldLabel>
+                          <Input
+                            id={`add-${field.name}`}
+                            name={field.name}
+                            type="number"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            min={0}
+                            value={field.state.value}
+                            onBlur={field.handleBlur}
+                            onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                          />
+                        </Field>
+                      )}
+                    </form.Field>
+                    <form.Field name="intensityScale">
+                      {(field) => (
+                        <Field>
+                          <FieldLabel htmlFor={`add-${field.name}`}>Intensity scale</FieldLabel>
+                          <Input
+                            id={`add-${field.name}`}
+                            name={field.name}
+                            type="number"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={field.state.value}
+                            onBlur={field.handleBlur}
+                            onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                          />
+                        </Field>
+                      )}
+                    </form.Field>
+                  </FieldGroup>
+                  <FieldSet className="border p-3">
+                    <FieldLegend variant="label">Movement limits</FieldLegend>
+                    <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {(["panMin", "panMax", "tiltMin", "tiltMax"] as const).map((name) => (
+                        <form.Field key={name} name={name}>
+                          {(field) => (
+                            <Field>
+                              <FieldLabel htmlFor={`add-${field.name}`} className="capitalize">
+                                {name.replace(/([A-Z])/g, " $1")}
+                              </FieldLabel>
+                              <Input
+                                id={`add-${field.name}`}
+                                name={field.name}
+                                type="number"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                min={0}
+                                max={255}
+                                value={field.state.value}
+                                onBlur={field.handleBlur}
+                                onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                              />
+                            </Field>
+                          )}
+                        </form.Field>
+                      ))}
+                    </FieldGroup>
+                  </FieldSet>
+                </FieldGroup>
+              </CredenzaBody>
+              <CredenzaFooter>
+                <CredenzaClose type="button">Cancel</CredenzaClose>
+                <form.Subscribe
+                  selector={(state) => [state.canSubmit, state.isSubmitting] as const}
+                >
+                  {([canSubmit, isSubmitting]) => {
+                    const adding = isSubmitting || updateMutation.isPending
+                    return (
+                      <Button type="submit" disabled={!canSubmit || adding}>
+                        {adding ? <Spinner data-icon="inline-start" /> : null}
+                        {adding ? "Adding…" : "Add Fixture"}
                       </Button>
-                    )}
-                  </form.Subscribe>
-                </CredenzaFooter>
-              </form>
-            </CredenzaContent>
-          </Credenza>
-        </>
+                    )
+                  }}
+                </form.Subscribe>
+              </CredenzaFooter>
+            </form>
+          </CredenzaContent>
+        </Credenza>
       </div>
 
       <section className="grid border bg-card sm:grid-cols-3">
@@ -417,52 +502,79 @@ function FixturesPage() {
         title="Fixture patch"
         description="Configured output order and current intensity"
       >
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((group) => (
-                <TableRow key={group.id}>
-                  {group.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder ? null : <table.FlexRender header={header} />}
-                    </TableHead>
+        <Table>
+          <TableCaption className="sr-only">
+            Fixture addresses, intensity scales, live output, and actions.
+          </TableCaption>
+          <TableHeader>
+            {table.getHeaderGroups().map((group) => (
+              <TableRow key={group.id}>
+                {group.headers.map((header) => (
+                  <TableHead key={header.id}>
+                    {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                  </TableHead>
+                ))}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {table.getRowModel().rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={columns.length} className="p-0">
+                  <Empty className="min-h-40 rounded-none">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <LightbulbFilamentIcon aria-hidden="true" />
+                      </EmptyMedia>
+                      <EmptyTitle>No fixtures configured</EmptyTitle>
+                      <EmptyDescription>
+                        Add a fixture to begin patching the DMX universe.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </TableCell>
+              </TableRow>
+            ) : (
+              table.getRowModel().rows.map((row) => (
+                <TableRow key={row.original.id}>
+                  {row.getAllCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      <table.FlexRender cell={cell} />
+                    </TableCell>
                   ))}
                 </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={columns.length}
-                    className="h-28 text-center text-muted-foreground"
-                  >
-                    No fixtures configured. Add one to begin patching the universe.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.original.id}>
-                    {row.getAllCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        <table.FlexRender cell={cell} />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </SectionPanel>
 
-      {editingFixtureId ? (
+      <ConfirmCredenza
+        open={removingFixture !== undefined}
+        title={`Remove ${removingFixture?.name ?? "fixture"}?`}
+        description="This removes the fixture and its channel overrides from the active show configuration."
+        confirmLabel="Remove Fixture"
+        icon={<TrashIcon aria-hidden="true" />}
+        destructive
+        pending={updateMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) setRemovingFixtureId(undefined)
+        }}
+        onConfirm={() => {
+          if (!removingFixture) return
+          const next = clone(ShowConfigSchema, config)
+          next.fixtures = next.fixtures.filter((candidate) => candidate.id !== removingFixture.id)
+          updateMutation.mutate(next)
+        }}
+      />
+
+      {editingFixture ? (
         <FixtureEditor
-          key={editingFixtureId}
-          fixture={config.fixtures.find((fixture) => fixture.id === editingFixtureId)!}
+          key={editingFixture.id}
+          fixture={editingFixture}
           profiles={profiles}
           existingNames={config.fixtures
-            .filter((fixture) => fixture.id !== editingFixtureId)
+            .filter((fixture) => fixture.id !== editingFixture.id)
             .map((fixture) => fixture.name)}
           open
           pending={updateMutation.isPending}

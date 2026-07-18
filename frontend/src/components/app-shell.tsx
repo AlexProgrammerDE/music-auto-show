@@ -30,11 +30,17 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background">
+      <a
+        href="#main-content"
+        className="fixed top-2 left-2 z-50 -translate-y-16 bg-background px-3 py-2 text-sm font-medium ring-1 ring-ring transition-transform focus-visible:translate-y-0"
+      >
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-4 px-4 lg:px-6">
           <Link to="/" className="flex shrink-0 items-center gap-2.5">
             <span className="flex size-8 items-center justify-center border bg-foreground text-background">
-              <FadersHorizontalIcon className="size-4" weight="bold" />
+              <FadersHorizontalIcon className="size-4" weight="bold" aria-hidden="true" />
             </span>
             <span className="hidden leading-none sm:block">
               <span className="block font-heading text-sm font-semibold tracking-tight">
@@ -53,17 +59,28 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
               const Icon = item.icon
               const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to)
               return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className={cn(
-                    "flex h-8 items-center gap-2 border border-transparent px-2.5 font-heading text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-                    active && "border-border bg-muted text-foreground",
-                  )}
-                >
-                  <Icon className="size-4" weight={active ? "fill" : "regular"} />
-                  <span className="hidden sm:inline">{item.label}</span>
-                </Link>
+                <Tooltip key={item.to}>
+                  <TooltipTrigger
+                    render={
+                      <Link
+                        to={item.to}
+                        aria-label={item.label}
+                        className={cn(
+                          "flex h-8 items-center gap-2 border border-transparent px-2.5 font-heading text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+                          active && "border-border bg-muted text-foreground",
+                        )}
+                      />
+                    }
+                  >
+                    <Icon
+                      className="size-4"
+                      weight={active ? "fill" : "regular"}
+                      aria-hidden="true"
+                    />
+                    <span className="hidden sm:inline">{item.label}</span>
+                  </TooltipTrigger>
+                  <TooltipContent className="sm:hidden">{item.label}</TooltipContent>
+                </Tooltip>
               )
             })}
           </nav>
@@ -79,7 +96,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
                 />
               }
             >
-              {dark ? <SunIcon /> : <MoonIcon />}
+              {dark ? <SunIcon aria-hidden="true" /> : <MoonIcon aria-hidden="true" />}
             </TooltipTrigger>
             <TooltipContent>
               Toggle theme <kbd>D</kbd>
@@ -88,7 +105,9 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1600px] px-4 py-5 lg:px-6 lg:py-7">{children}</main>
+      <main id="main-content" className="mx-auto w-full max-w-[1600px] px-4 py-5 lg:px-6 lg:py-7">
+        {children}
+      </main>
     </div>
   )
 }

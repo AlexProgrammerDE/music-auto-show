@@ -1,25 +1,37 @@
 import {
-  CircleNotchIcon,
   DownloadSimpleIcon,
   PauseIcon,
   PlayIcon,
   RecordIcon,
   StopIcon,
+  TrashIcon,
   WarningOctagonIcon,
 } from "@phosphor-icons/react"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { Effect } from "effect"
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { AudioScope } from "@/components/audio-scope"
+import { ConfirmCredenza } from "@/components/confirm-credenza"
 import { MediaPanel } from "@/components/media-panel"
+import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
 import { StageView } from "@/components/stage-view"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Progress } from "@/components/ui/progress"
+import { Spinner } from "@/components/ui/spinner"
 import { RunState, ShowCommand } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { formatDuration, formatPercent } from "@/lib/format"
 import {
@@ -39,6 +51,7 @@ export const Route = createFileRoute("/")({
       context.queryClient.ensureQueryData(fixtureProfilesQueryOptions),
     ])
   },
+  pendingComponent: PageSkeleton,
   component: LiveDashboard,
 })
 
@@ -75,6 +88,7 @@ function LiveDashboard() {
   const audio = snapshot.audio
   const recording = snapshot.recording
   const [recordingUrl, setRecordingUrl] = useState<string>()
+  const [clearRecordingOpen, setClearRecordingOpen] = useState(false)
 
   useEffect(
     () => () => {
@@ -131,6 +145,7 @@ function LiveDashboard() {
           return undefined
         })
       }
+      setClearRecordingOpen(false)
       toast.success(action === "stop" ? "Recording saved" : `Recording ${action}ed`)
       void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
     },
@@ -170,21 +185,39 @@ function LiveDashboard() {
             disabled={blackoutMutation.isPending}
             onClick={() => blackoutMutation.mutate(!snapshot.blackout)}
           >
-            <WarningOctagonIcon weight={snapshot.blackout ? "fill" : "regular"} />
-            {snapshot.blackout ? "Release blackout" : "Blackout"}
+            {blackoutMutation.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <WarningOctagonIcon
+                data-icon="inline-start"
+                weight={snapshot.blackout ? "fill" : "regular"}
+                aria-hidden="true"
+              />
+            )}
+            {blackoutMutation.isPending
+              ? "Updating…"
+              : snapshot.blackout
+                ? "Release Blackout"
+                : "Blackout"}
           </Button>
           <Button
             disabled={transitioning || commandMutation.isPending}
             onClick={() => commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)}
           >
             {commandMutation.isPending || transitioning ? (
-              <CircleNotchIcon className="animate-spin" />
+              <Spinner data-icon="inline-start" />
             ) : running ? (
-              <PauseIcon weight="fill" />
+              <PauseIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
             ) : (
-              <PlayIcon weight="fill" />
+              <PlayIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
             )}
-            {running ? "Stop show" : "Start show"}
+            {commandMutation.isPending || transitioning
+              ? running
+                ? "Stopping…"
+                : "Starting…"
+              : running
+                ? "Stop Show"
+                : "Start Show"}
           </Button>
         </div>
       </section>
@@ -283,6 +316,16 @@ function LiveDashboard() {
               </Badge>
             }
           >
+            {!snapshot.beatnet?.available ? (
+              <Alert variant="destructive" className="m-4 mb-0">
+                <WarningOctagonIcon aria-hidden="true" />
+                <AlertTitle>BeatNet+ is unavailable</AlertTitle>
+                <AlertDescription>
+                  {snapshot.beatnet?.status ||
+                    "Add a valid checkpoint in Audio settings. The show continues with fallback analysis."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
               <dt className="text-muted-foreground">Model buffer</dt>
               <dd className="text-right tabular-nums">
@@ -323,19 +366,30 @@ function LiveDashboard() {
                   disabled={recordingMutation.isPending}
                   onClick={() => recordingMutation.mutate(recording?.recording ? "stop" : "start")}
                 >
-                  {recording?.recording ? <StopIcon weight="fill" /> : <RecordIcon weight="fill" />}
-                  {recording?.recording ? "Stop and save" : "Record"}
+                  {recordingMutation.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : recording?.recording ? (
+                    <StopIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+                  ) : (
+                    <RecordIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+                  )}
+                  {recordingMutation.isPending
+                    ? "Working…"
+                    : recording?.recording
+                      ? "Stop & Save"
+                      : "Record"}
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
                   disabled={!recording?.hasRecording || recordingMutation.isPending}
-                  onClick={() => recordingMutation.mutate("clear")}
+                  onClick={() => setClearRecordingOpen(true)}
                 >
-                  <DownloadSimpleIcon /> Clear
+                  <TrashIcon data-icon="inline-start" aria-hidden="true" /> Clear
                 </Button>
                 {recordingUrl ? (
                   <Button
+                    nativeButton={false}
                     variant="ghost"
                     size="sm"
                     render={
@@ -346,7 +400,7 @@ function LiveDashboard() {
                       />
                     }
                   >
-                    <DownloadSimpleIcon /> Download
+                    <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" /> Download
                   </Button>
                 ) : null}
               </div>
@@ -368,7 +422,22 @@ function LiveDashboard() {
         description={`${fixtures.length} configured fixture${fixtures.length === 1 ? "" : "s"}`}
       >
         {fixtures.length === 0 ? (
-          <p className="p-6 text-sm text-muted-foreground">No fixtures are configured yet.</p>
+          <Empty className="min-h-48 rounded-none">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <WarningOctagonIcon aria-hidden="true" />
+              </EmptyMedia>
+              <EmptyTitle>No stage output</EmptyTitle>
+              <EmptyDescription>
+                Add a fixture to patch the universe and preview live output.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button nativeButton={false} variant="outline" render={<Link to="/fixtures" />}>
+                Configure Fixtures
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
             {fixtures.map((fixture) => (
@@ -403,6 +472,18 @@ function LiveDashboard() {
           </div>
         )}
       </SectionPanel>
+
+      <ConfirmCredenza
+        open={clearRecordingOpen}
+        title="Clear the recording?"
+        description="This removes the captured audio from memory and revokes its download link."
+        confirmLabel="Clear Recording"
+        icon={<TrashIcon aria-hidden="true" />}
+        destructive
+        pending={recordingMutation.isPending}
+        onOpenChange={setClearRecordingOpen}
+        onConfirm={() => recordingMutation.mutate("clear")}
+      />
     </div>
   )
 }

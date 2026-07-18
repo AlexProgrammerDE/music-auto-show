@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
+import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
 import { Badge } from "@/components/ui/badge"
 import { generateN } from "@/lib/format"
@@ -11,6 +12,7 @@ const dmxChannels = generateN(512)
 
 export const Route = createFileRoute("/dmx")({
   loader: ({ context }) => context.queryClient.ensureQueryData(snapshotQueryOptions),
+  pendingComponent: PageSkeleton,
   component: DmxUniversePage,
 })
 
