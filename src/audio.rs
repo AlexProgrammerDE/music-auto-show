@@ -35,7 +35,8 @@ pub struct AudioCapture {
 
 enum CaptureGuard {
     Cpal {
-        _stream: cpal::Stream,
+        running: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
     },
     Pulse {
         child: Arc<Mutex<Child>>,
@@ -46,19 +47,26 @@ enum CaptureGuard {
 
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
-        if let Self::Pulse {
-            child,
-            running,
-            thread,
-        } = self
-        {
-            running.store(false, Ordering::Relaxed);
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-                let _ = child.wait();
+        match self {
+            Self::Cpal { running, thread } => {
+                running.store(false, Ordering::Relaxed);
+                if let Some(thread) = thread.take() {
+                    let _ = thread.join();
+                }
             }
-            if let Some(thread) = thread.take() {
-                let _ = thread.join();
+            Self::Pulse {
+                child,
+                running,
+                thread,
+            } => {
+                running.store(false, Ordering::Relaxed);
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                if let Some(thread) = thread.take() {
+                    let _ = thread.join();
+                }
             }
         }
     }
@@ -139,6 +147,55 @@ pub fn start_capture(config: &AudioConfig) -> Result<AudioCapture> {
 }
 
 fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<AudioCapture> {
+    let config = config.clone();
+    let running = Arc::new(AtomicBool::new(true));
+    let running_thread = Arc::clone(&running);
+    let (sender, receiver) = mpsc::sync_channel(32);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let thread = thread::Builder::new()
+        .name("cpal-audio-capture".into())
+        .spawn(move || match build_cpal_stream(&config, mode, sender) {
+            Ok((stream, status)) => {
+                if ready_sender.send(Ok(status)).is_err() {
+                    return;
+                }
+                while running_thread.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                drop(stream);
+            }
+            Err(error) => {
+                let _ = ready_sender.send(Err(format!("{error:#}")));
+            }
+        })?;
+    let status = match ready_receiver.recv() {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = thread.join();
+            bail!(error);
+        }
+        Err(error) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = thread.join();
+            bail!("audio capture thread stopped during startup: {error}");
+        }
+    };
+    Ok(AudioCapture {
+        receiver,
+        status,
+        _guard: CaptureGuard::Cpal {
+            running,
+            thread: Some(thread),
+        },
+    })
+}
+
+fn build_cpal_stream(
+    config: &AudioConfig,
+    mode: AudioInputMode,
+    sender: mpsc::SyncSender<Vec<f32>>,
+) -> Result<(cpal::Stream, AudioRuntimeStatus)> {
     let host = cpal::default_host();
     let selected = if config.device_name.is_empty() {
         host.default_input_device()
@@ -153,7 +210,6 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     let channels = supported.channels() as usize;
     let sample_rate = supported.sample_rate().0;
     let stream_config: cpal::StreamConfig = supported.clone().into();
-    let (sender, receiver) = mpsc::sync_channel(32);
     let error_callback = |error| tracing::error!(%error, "audio input stream failed");
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => selected.build_input_stream(
@@ -188,9 +244,9 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     } else {
         String::new()
     };
-    Ok(AudioCapture {
-        receiver,
-        status: AudioRuntimeStatus {
+    Ok((
+        stream,
+        AudioRuntimeStatus {
             configured_device_name: config.device_name.clone(),
             configured_mode: mode as i32,
             actual_mode: if mode == AudioInputMode::Auto {
@@ -214,8 +270,7 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
             last_error: String::new(),
             simulated: false,
         },
-        _guard: CaptureGuard::Cpal { _stream: stream },
-    })
+    ))
 }
 
 fn send_mono<T: Copy>(
@@ -811,6 +866,12 @@ pub fn simulated_audio(elapsed: f32, beat_count: u64) -> (Vec<f32>, BeatEstimate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_handle_is_sendable_between_runtime_threads() {
+        fn assert_send<T: Send>() {}
+        assert_send::<AudioCapture>();
+    }
 
     #[test]
     fn diagnostic_recording_is_a_valid_wav() {
