@@ -729,27 +729,32 @@ impl EffectsEngine {
             return;
         }
         let mode = config.movement_mode();
-        let total_fixtures = config.fixtures.len().max(1);
+        let mut movement_fixtures: Vec<_> = config
+            .fixtures
+            .iter()
+            .enumerate()
+            .filter_map(|(config_index, fixture)| {
+                let (has_pan, has_tilt) = controllable_movement_axes(config, fixture);
+                (has_pan || has_tilt).then_some((config_index, fixture, has_pan, has_tilt))
+            })
+            .collect();
+        movement_fixtures
+            .sort_by_key(|(config_index, fixture, _, _)| (fixture.position, *config_index));
+        let movement_fixture_count = movement_fixtures.len();
+        if movement_fixture_count == 0 {
+            return;
+        }
         if beat && mode == MovementMode::Chase {
             let chase = self
                 .wall_corner_index
                 .entry("__chase_index__".into())
                 .or_default();
-            *chase = (*chase + 1) % total_fixtures;
+            *chase = (*chase + 1) % movement_fixture_count;
         }
 
-        for fixture in &config.fixtures {
-            let profile = find_profile(config, fixture);
-            let channels = effective_channels(fixture, profile);
-            let has_pan = channels
-                .iter()
-                .any(|channel| channel.channel_type == "position_pan");
-            let has_tilt = channels
-                .iter()
-                .any(|channel| channel.channel_type == "position_tilt");
-            if !has_pan && !has_tilt {
-                continue;
-            }
+        for (movement_index, (_, fixture, has_pan, has_tilt)) in
+            movement_fixtures.into_iter().enumerate()
+        {
             self.movement_target(
                 fixture,
                 audio,
@@ -759,7 +764,8 @@ impl EffectsEngine {
                 speed,
                 has_pan,
                 has_tilt,
-                total_fixtures,
+                movement_index,
+                movement_fixture_count,
                 delta_seconds,
             );
             self.interpolate_position(fixture, mode, speed, audio.tempo, delta_seconds);
@@ -777,7 +783,8 @@ impl EffectsEngine {
         speed: f32,
         has_pan: bool,
         has_tilt: bool,
-        total_fixtures: usize,
+        movement_index: usize,
+        movement_fixture_count: usize,
         delta_seconds: f32,
     ) {
         let key = fixture_key(fixture);
@@ -1018,8 +1025,8 @@ impl EffectsEngine {
                 amount += (target - amount)
                     * time_adjusted_factor(0.08 * speed * tempo_scale(audio.tempo), delta_seconds);
                 self.sweep_phase.insert(key.clone(), amount);
-                let normalized = if total_fixtures > 1 {
-                    fixture.position as f32 / (total_fixtures - 1) as f32 * 2.0 - 1.0
+                let normalized = if movement_fixture_count > 1 {
+                    movement_index as f32 / (movement_fixture_count - 1) as f32 * 2.0 - 1.0
                 } else {
                     0.0
                 };
@@ -1049,7 +1056,7 @@ impl EffectsEngine {
                     (0.0, 0.2),
                     (0.6, 0.3),
                 ];
-                if fixture.position as usize % total_fixtures == chase {
+                if movement_index == chase {
                     let (pan, tilt) =
                         positions[(chase + audio.estimated_bar as usize) % positions.len()];
                     if has_pan {
@@ -1062,7 +1069,8 @@ impl EffectsEngine {
                     }
                 } else {
                     let spread =
-                        (fixture.position as f32 / (total_fixtures - 1).max(1) as f32 - 0.5) * 0.3;
+                        (movement_index as f32 / (movement_fixture_count - 1).max(1) as f32 - 0.5)
+                            * 0.3;
                     if has_pan {
                         self.target_pan
                             .insert(key.clone(), pan_center + spread * pan_range / 2.0 * speed);
@@ -1391,6 +1399,20 @@ fn effective_channels<'a>(
     } else {
         &fixture.channels
     }
+}
+
+fn controllable_movement_axes(
+    config: &ValidatedShowConfig,
+    fixture: &FixtureConfig,
+) -> (bool, bool) {
+    let channels = effective_channels(fixture, find_profile(config, fixture));
+    let has_pan = channels.iter().any(|channel| {
+        channel.enabled && channel.fixed_value.is_none() && channel.channel_type == "position_pan"
+    });
+    let has_tilt = channels.iter().any(|channel| {
+        channel.enabled && channel.fixed_value.is_none() && channel.channel_type == "position_tilt"
+    });
+    (has_pan, has_tilt)
 }
 
 fn dmx(value: f32) -> u32 {
@@ -1739,6 +1761,40 @@ mod tests {
         ValidatedShowConfig::new(config, true).expect("test configuration should validate")
     }
 
+    fn test_channel(offset: u32, channel_type: &str) -> ChannelConfig {
+        ChannelConfig {
+            offset,
+            name: channel_type.into(),
+            channel_type: channel_type.into(),
+            default_value: 0,
+            min_value: 0,
+            max_value: 255,
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    fn test_fixture(
+        id: &str,
+        start_channel: u32,
+        position: u32,
+        channels: Vec<ChannelConfig>,
+    ) -> FixtureConfig {
+        FixtureConfig {
+            id: id.into(),
+            name: id.into(),
+            start_channel,
+            position,
+            intensity_scale: 1.0,
+            pan_min: 0,
+            pan_max: 255,
+            tilt_min: 0,
+            tilt_max: 255,
+            channels,
+            ..Default::default()
+        }
+    }
+
     const VISUALIZATION_MODES: [VisualizationMode; 7] = [
         VisualizationMode::Energy,
         VisualizationMode::FrequencySplit,
@@ -1861,6 +1917,7 @@ mod tests {
                 let settings = config.effects.as_mut().expect("effects configuration");
                 settings.mode = visualization as i32;
                 settings.movement_mode = movement as i32;
+                settings.movement_speed = 1.0;
                 settings.smooth_factor = 0.25;
                 let config = validated(config);
                 let mut engine = EffectsEngine::default();
@@ -1954,5 +2011,120 @@ mod tests {
             phase_after_one_second(40),
             epsilon = 0.0001
         );
+    }
+
+    #[test]
+    fn chase_uses_only_controllable_movers_in_show_order() {
+        let mut config = default_show_config(true);
+        let mut fixed_pan = test_channel(1, "position_pan");
+        fixed_pan.fixed_value = Some(0);
+        config.fixtures = vec![
+            test_fixture("static-light", 1, 0, vec![test_channel(1, "intensity_red")]),
+            test_fixture("fixed-mover", 2, 20, vec![fixed_pan]),
+            test_fixture(
+                "later-mover",
+                3,
+                30,
+                vec![
+                    test_channel(1, "position_pan"),
+                    test_channel(2, "position_tilt"),
+                ],
+            ),
+            test_fixture(
+                "earlier-mover",
+                5,
+                10,
+                vec![
+                    test_channel(1, "position_pan"),
+                    test_channel(2, "position_tilt"),
+                ],
+            ),
+        ];
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.movement_mode = MovementMode::Chase as i32;
+        settings.movement_speed = 1.0;
+        let config = validated(config);
+        let mut engine = EffectsEngine::default();
+
+        engine.process(
+            &config,
+            &AudioAnalysis {
+                energy: 0.8,
+                tempo: 120.0,
+                estimated_beat: 1,
+                ..Default::default()
+            },
+            &[],
+            false,
+            Duration::from_millis(25),
+        );
+
+        assert_eq!(engine.wall_corner_index["__chase_index__"], 1);
+        approx::assert_abs_diff_eq!(engine.target_pan["earlier-mover"], 108.375);
+        approx::assert_abs_diff_eq!(engine.target_pan["later-mover"], 191.25);
+        assert_eq!(engine.target_pan["fixed-mover"], 128.0);
+
+        engine.process(
+            &config,
+            &AudioAnalysis {
+                energy: 0.8,
+                tempo: 120.0,
+                estimated_beat: 2,
+                ..Default::default()
+            },
+            &[],
+            false,
+            Duration::from_millis(25),
+        );
+
+        assert_eq!(engine.wall_corner_index["__chase_index__"], 0);
+        approx::assert_abs_diff_eq!(engine.target_pan["earlier-mover"], 229.5);
+        approx::assert_abs_diff_eq!(engine.target_pan["later-mover"], 146.625);
+    }
+
+    #[test]
+    fn fan_spreads_only_movement_capable_fixtures() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![
+            test_fixture("static-light", 1, 0, vec![test_channel(1, "intensity_red")]),
+            test_fixture(
+                "right-mover",
+                2,
+                30,
+                vec![
+                    test_channel(1, "position_pan"),
+                    test_channel(2, "position_tilt"),
+                ],
+            ),
+            test_fixture(
+                "left-mover",
+                4,
+                10,
+                vec![
+                    test_channel(1, "position_pan"),
+                    test_channel(2, "position_tilt"),
+                ],
+            ),
+        ];
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.movement_mode = MovementMode::Fan as i32;
+        settings.movement_speed = 1.0;
+        let config = validated(config);
+        let mut engine = EffectsEngine::default();
+
+        engine.process(
+            &config,
+            &AudioAnalysis {
+                energy: 0.8,
+                tempo: 120.0,
+                ..Default::default()
+            },
+            &[],
+            false,
+            Duration::from_millis(25),
+        );
+
+        assert!(engine.target_pan["left-mover"] < 127.5);
+        assert!(engine.target_pan["right-mover"] > 127.5);
     }
 }

@@ -560,16 +560,11 @@ fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<()
         "strobe effect mode",
     )?;
     validate_range("effects intensity", effects.intensity, 0.0, 1.0)?;
-    validate_range("color speed", effects.color_speed, 0.05, 8.0)?;
+    validate_range("color speed", effects.color_speed, 0.1, 10.0)?;
     validate_range("beat sensitivity", effects.beat_sensitivity, 0.0, 1.0)?;
     validate_range("smooth factor", effects.smooth_factor, 0.0, 1.0)?;
-    validate_range("movement speed", effects.movement_speed, 0.05, 8.0)?;
-    validate_range(
-        "strobe effect speed",
-        effects.strobe_effect_speed,
-        0.05,
-        8.0,
-    )?;
+    validate_range("movement speed", effects.movement_speed, 0.0, 1.0)?;
+    validate_range("strobe effect speed", effects.strobe_effect_speed, 0.0, 1.0)?;
 
     let mut profiles = default_profiles();
     for mut custom in std::mem::take(&mut config.profiles) {
@@ -1317,6 +1312,7 @@ fn migrate_legacy_config(mut value: Value, simulate: bool) -> Value {
             effects.insert("movement_mode".into(), Value::String("figure8".into()));
         }
         normalize_effect_enums(effects);
+        restore_legacy_effect_ranges(effects);
     }
 
     if !root.contains_key("profiles") {
@@ -1454,6 +1450,24 @@ fn normalize_effect_enums(effects: &mut Map<String, Value>) {
     });
 }
 
+fn restore_legacy_effect_ranges(effects: &mut Map<String, Value>) {
+    for key in ["movement_speed", "strobe_effect_speed"] {
+        let Some(value) = effects.get(key).and_then(Value::as_f64) else {
+            continue;
+        };
+        if value > 1.0 && value <= 8.0 {
+            effects.insert(key.into(), Value::from(1.0));
+        }
+    }
+
+    let Some(color_speed) = effects.get("color_speed").and_then(Value::as_f64) else {
+        return;
+    };
+    if (0.05..0.1).contains(&color_speed) {
+        effects.insert("color_speed".into(), Value::from(0.1));
+    }
+}
+
 fn normalize_enum(object: &mut Map<String, Value>, key: &str, parse: impl FnOnce(&str) -> i32) {
     let Some(Value::String(value)) = object.get(key) else {
         return;
@@ -1545,6 +1559,47 @@ mod tests {
             migrated["effects"]["movement_mode"],
             MovementMode::Figure8 as i32
         );
+    }
+
+    #[test]
+    fn restores_effect_ranges_widened_by_the_rust_rewrite() {
+        let config = parse_json(
+            &serde_json::json!({
+                "effects": {
+                    "color_speed": 0.05,
+                    "movement_speed": 4.0,
+                    "strobe_effect_speed": 2.0
+                },
+                "fixtures": []
+            })
+            .to_string(),
+            true,
+        )
+        .expect("rewrite-era effect values should migrate");
+
+        assert_eq!(config.effects().color_speed, 0.1);
+        assert_eq!(config.effects().movement_speed, 1.0);
+        assert_eq!(config.effects().strobe_effect_speed, 1.0);
+    }
+
+    #[test]
+    fn effect_controls_use_the_legacy_ranges() {
+        let mut config = default_show_config(true);
+        let effects = config.effects.as_mut().expect("effects configuration");
+        effects.color_speed = 10.0;
+        effects.movement_speed = 0.0;
+        effects.strobe_effect_speed = 0.0;
+        ValidatedShowConfig::new(config.clone(), true)
+            .expect("legacy effect range endpoints should validate");
+
+        config
+            .effects
+            .as_mut()
+            .expect("effects configuration")
+            .movement_speed = 1.01;
+        let error = ValidatedShowConfig::new(config, true)
+            .expect_err("widened rewrite-era movement speed should be rejected");
+        assert!(error.to_string().contains("movement speed"));
     }
 
     #[test]

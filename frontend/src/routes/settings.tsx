@@ -111,13 +111,13 @@ function configFormValues(config: ShowConfig) {
     smoothFactor: cleanFloat(config.effects?.smoothFactor ?? 0.7),
     strobeOnDrop: config.effects?.strobeOnDrop ?? true,
     movementEnabled: config.effects?.movementEnabled ?? true,
-    movementSpeed: cleanFloat(config.effects?.movementSpeed ?? 1),
+    movementSpeed: cleanFloat(config.effects?.movementSpeed ?? 0.5),
     movementMode: config.effects?.movementMode ?? MovementMode.STANDARD,
     effectFixtureMode: config.effects?.effectFixtureMode ?? EffectFixtureMode.BALANCED,
     rotationMode: config.effects?.rotationMode ?? RotationMode.AUTO_MUSIC,
     strobeEffectEnabled: config.effects?.strobeEffectEnabled ?? true,
     strobeEffectMode: config.effects?.strobeEffectMode ?? StrobeEffectMode.AUTO,
-    strobeEffectSpeed: cleanFloat(config.effects?.strobeEffectSpeed ?? 1),
+    strobeEffectSpeed: cleanFloat(config.effects?.strobeEffectSpeed ?? 0.5),
   }
 }
 
@@ -554,7 +554,7 @@ function SettingsPage() {
                         inputMode="decimal"
                         autoComplete="off"
                         min={0.1}
-                        max={8}
+                        max={5}
                         step={0.05}
                         value={field.state.value}
                         onBlur={field.handleBlur}
@@ -790,9 +790,9 @@ function SettingsPage() {
                       name={field.name}
                       label="Color speed"
                       value={field.state.value}
-                      min={0.05}
-                      max={8}
-                      step={0.05}
+                      min={0.1}
+                      max={10}
+                      step={0.1}
                       unit="×"
                       onBlur={field.handleBlur}
                       onChange={field.handleChange}
@@ -840,10 +840,11 @@ function SettingsPage() {
                       name={field.name}
                       label="Movement speed"
                       value={field.state.value}
-                      min={0.05}
-                      max={8}
-                      step={0.05}
-                      unit="×"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      displayScale={100}
+                      unit="%"
                       onBlur={field.handleBlur}
                       onChange={field.handleChange}
                     />
@@ -856,10 +857,11 @@ function SettingsPage() {
                       name={field.name}
                       label="Strobe speed"
                       value={field.state.value}
-                      min={0.05}
-                      max={8}
-                      step={0.05}
-                      unit="×"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      displayScale={100}
+                      unit="%"
                       onBlur={field.handleBlur}
                       onChange={field.handleChange}
                     />
