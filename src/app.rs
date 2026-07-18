@@ -472,19 +472,19 @@ impl App {
                 .context("audio analyzer is not initialized")?
                 .process_simulated(&samples, beat)
         } else {
-            let mut latest = None;
-            if let Some(capture) = &runtime.capture {
-                while let Ok(samples) = capture.receiver.try_recv() {
-                    latest = Some(samples);
-                }
-            }
-            match latest {
-                Some(samples) => runtime
+            let pending = runtime
+                .capture
+                .as_ref()
+                .map(AudioCapture::drain_samples)
+                .unwrap_or_default();
+            if pending.is_empty() {
+                previous_audio
+            } else {
+                runtime
                     .analyzer
                     .as_mut()
                     .context("audio analyzer is not initialized")?
-                    .process(&samples),
-                None => previous_audio,
+                    .process(&pending)
             }
         };
         let analyzer = runtime
@@ -579,19 +579,19 @@ impl App {
                 .context("audio analyzer is not initialized")?
                 .process_simulated(&samples, beat)
         } else {
-            let mut latest = None;
-            if let Some(capture) = &runtime.capture {
-                while let Ok(samples) = capture.receiver.try_recv() {
-                    latest = Some(samples);
-                }
-            }
-            match latest {
-                Some(samples) => runtime
+            let pending = runtime
+                .capture
+                .as_ref()
+                .map(AudioCapture::drain_samples)
+                .unwrap_or_default();
+            if pending.is_empty() {
+                previous_audio
+            } else {
+                runtime
                     .analyzer
                     .as_mut()
                     .context("audio analyzer is not initialized")?
-                    .process(&samples),
-                None => previous_audio,
+                    .process(&pending)
             }
         };
         let analyzer = runtime

@@ -5,6 +5,7 @@ import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import {
   BEATS_PER_BAR,
   projectTempoFrame,
+  reconcileTempoSample,
   type TempoFrame,
   type TempoSample,
 } from "@/lib/tempo-pulse"
@@ -168,13 +169,9 @@ export function TempoPulse({
   const tracking = active && tempo > 0
   const roundedTempo = tracking ? Math.round(tempo) : undefined
   const confidencePercent = Math.round(Math.max(0, Math.min(1, confidence)) * 100)
-  const status = !active
-    ? "Audio stopped"
-    : tracking
-      ? `${confidencePercent}% beat lock`
-      : "Finding tempo"
+  const status = !active ? "Audio stopped" : tracking ? "Tracking beat phase" : "Finding tempo"
   const description = tracking
-    ? `${roundedTempo} BPM, four-beat measure, ${confidencePercent}% confidence`
+    ? `${roundedTempo} BPM, four-beat measure, ${confidencePercent}% beat signal`
     : status
 
   const render = useEffectEvent((now: number) => {
@@ -185,15 +182,16 @@ export function TempoPulse({
   })
 
   useEffect(() => {
-    sampleRef.current = {
+    const sampledAt = performance.now()
+    sampleRef.current = reconcileTempoSample(sampleRef.current, {
       active,
       barPosition,
       beatPosition,
-      sampledAt: performance.now(),
+      sampledAt,
       tempo,
-    }
+    })
     confidenceRef.current = confidence
-    render(performance.now())
+    render(sampledAt)
   }, [active, barPosition, beatPosition, confidence, tempo])
 
   useEffect(() => {

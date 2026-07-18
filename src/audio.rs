@@ -28,13 +28,17 @@ const MAX_RECORDING_SECONDS: f32 = 30.0;
 const PIPEWIRE_DEFAULT_SINK_ID: &str = "pipewire:sink_default";
 
 pub struct AudioCapture {
-    pub receiver: Receiver<Vec<f32>>,
+    receiver: Receiver<Vec<f32>>,
     status: AudioRuntimeStatus,
     stream_error: Arc<Mutex<String>>,
     _guard: CaptureGuard,
 }
 
 impl AudioCapture {
+    pub fn drain_samples(&self) -> Vec<f32> {
+        drain_queued_samples(&self.receiver)
+    }
+
     pub fn sample_rate(&self) -> u32 {
         self.status.sample_rate
     }
@@ -49,6 +53,14 @@ impl AudioCapture {
         }
         status
     }
+}
+
+fn drain_queued_samples(receiver: &Receiver<Vec<f32>>) -> Vec<f32> {
+    let mut pending = Vec::new();
+    while let Ok(mut samples) = receiver.try_recv() {
+        pending.append(&mut samples);
+    }
+    pending
 }
 
 struct CaptureGuard {
@@ -943,6 +955,19 @@ mod tests {
     fn capture_handle_is_sendable_between_runtime_threads() {
         fn assert_send<T: Send>() {}
         assert_send::<AudioCapture>();
+    }
+
+    #[test]
+    fn capture_drain_preserves_every_queued_sample_in_order() {
+        let (sender, receiver) = mpsc::sync_channel(4);
+        sender.send(vec![1.0, 2.0]).expect("first block queues");
+        sender.send(vec![3.0]).expect("second block queues");
+        sender.send(vec![4.0, 5.0]).expect("third block queues");
+
+        assert_eq!(
+            drain_queued_samples(&receiver),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0]
+        );
     }
 
     #[test]

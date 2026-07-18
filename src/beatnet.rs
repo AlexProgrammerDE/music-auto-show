@@ -85,7 +85,10 @@ impl BeatNetPlus {
         let mut latest = None;
         for features in self.feature_extractor.push(samples_22khz)? {
             let activations = self.network.infer(&features);
-            latest = Some(self.decoder.update(activations[0], activations[1]));
+            latest = Some(merge_frame_estimate(
+                latest,
+                self.decoder.update(activations[0], activations[1]),
+            ));
         }
         Ok(latest)
     }
@@ -95,6 +98,17 @@ impl BeatNetPlus {
         self.network.reset();
         self.decoder.reset();
     }
+}
+
+fn merge_frame_estimate(previous: Option<BeatEstimate>, mut latest: BeatEstimate) -> BeatEstimate {
+    if let Some(previous) = previous {
+        latest.beat |= previous.beat;
+        latest.downbeat |= previous.downbeat;
+        latest.confidence = latest.confidence.max(previous.confidence);
+        latest.beat_activation = latest.beat_activation.max(previous.beat_activation);
+        latest.downbeat_activation = latest.downbeat_activation.max(previous.downbeat_activation);
+    }
+    latest
 }
 
 struct FeatureExtractor {
@@ -625,5 +639,39 @@ mod tests {
     fn softmax_is_normalized() {
         let probabilities = softmax3([1.0, 2.0, 3.0]);
         approx::assert_abs_diff_eq!(probabilities.iter().sum::<f32>(), 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn batched_frames_preserve_transient_beat_events() {
+        let previous = BeatEstimate {
+            beat: true,
+            downbeat: true,
+            confidence: 0.8,
+            beat_activation: 0.9,
+            downbeat_activation: 0.7,
+            ..Default::default()
+        };
+        let latest = BeatEstimate {
+            tempo: 128.0,
+            beat_position: 0.12,
+            bar_position: 0.03,
+            estimated_beat: 12,
+            estimated_bar: 3,
+            confidence: 0.1,
+            beat_activation: 0.2,
+            downbeat_activation: 0.05,
+            ..Default::default()
+        };
+
+        let merged = merge_frame_estimate(Some(previous), latest);
+
+        assert!(merged.beat);
+        assert!(merged.downbeat);
+        assert_eq!(merged.confidence, 0.8);
+        assert_eq!(merged.beat_activation, 0.9);
+        assert_eq!(merged.downbeat_activation, 0.7);
+        assert_eq!(merged.tempo, 128.0);
+        assert_eq!(merged.beat_position, 0.12);
+        assert_eq!(merged.estimated_beat, 12);
     }
 }

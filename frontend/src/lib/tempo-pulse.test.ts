@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { projectTempoFrame } from "@/lib/tempo-pulse"
+import { projectTempoFrame, reconcileTempoSample } from "@/lib/tempo-pulse"
 
 describe("projectTempoFrame", () => {
   it("advances beat and bar phase at the detected tempo", () => {
@@ -82,5 +82,98 @@ describe("projectTempoFrame", () => {
     expect(impact.impact).toBe(1)
     expect(decay.impact).toBeGreaterThan(0)
     expect(decay.impact).toBeLessThan(impact.impact)
+  })
+})
+
+describe("reconcileTempoSample", () => {
+  it("adopts the first active observation immediately", () => {
+    const observed = {
+      active: true,
+      tempo: 128,
+      beatPosition: 0.4,
+      barPosition: 0.6,
+      sampledAt: 2_000,
+    }
+
+    expect(
+      reconcileTempoSample(
+        {
+          active: false,
+          tempo: 0,
+          beatPosition: 0,
+          barPosition: 0,
+          sampledAt: 1_000,
+        },
+        observed,
+      ),
+    ).toEqual(observed)
+  })
+
+  it("bounds phase and tempo corrections between live observations", () => {
+    const reconciled = reconcileTempoSample(
+      {
+        active: true,
+        tempo: 120,
+        beatPosition: 0.2,
+        barPosition: 0.05,
+        sampledAt: 1_000,
+      },
+      {
+        active: true,
+        tempo: 140,
+        beatPosition: 0.1,
+        barPosition: 0.025,
+        sampledAt: 1_050,
+      },
+    )
+
+    expect(reconciled.beatPosition).toBeCloseTo(0.28)
+    expect(reconciled.barPosition).toBeCloseTo(0.07)
+    expect(reconciled.tempo).toBe(122)
+  })
+
+  it("uses the shortest correction across phase wraparound", () => {
+    const reconciled = reconcileTempoSample(
+      {
+        active: true,
+        tempo: 60,
+        beatPosition: 0.98,
+        barPosition: 0.245,
+        sampledAt: 1_000,
+      },
+      {
+        active: true,
+        tempo: 60,
+        beatPosition: 0.04,
+        barPosition: 0.26,
+        sampledAt: 1_010,
+      },
+    )
+
+    expect(reconciled.beatPosition).toBeCloseTo(0.0025)
+    expect(reconciled.barPosition).toBeCloseTo(0.250625)
+  })
+
+  it("resynchronizes after a long observation gap", () => {
+    const observed = {
+      active: true,
+      tempo: 90,
+      beatPosition: 0.7,
+      barPosition: 0.9,
+      sampledAt: 4_000,
+    }
+
+    expect(
+      reconcileTempoSample(
+        {
+          active: true,
+          tempo: 120,
+          beatPosition: 0.1,
+          barPosition: 0.2,
+          sampledAt: 1_000,
+        },
+        observed,
+      ),
+    ).toEqual(observed)
   })
 })
