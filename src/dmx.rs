@@ -14,7 +14,10 @@ use serialport::{
 };
 use tracing::{info, warn};
 
-use crate::proto::v1::{DmxConfig, DmxRuntimeStatus};
+use crate::{
+    proto::v1::{DmxConfig, DmxRuntimeStatus},
+    timing::PeriodicSchedule,
+};
 
 /// ANSI E1.11 DMX512-A transmits every slot as 8N2 at 250 kbit/s.
 const DMX_BAUD_RATE: u32 = 250_000;
@@ -212,11 +215,12 @@ impl WorkerState {
     }
 
     fn run(mut self, receiver: Receiver<WorkerCommand>) {
-        let mut next_frame = Instant::now();
+        let mut schedule =
+            PeriodicSchedule::immediate(frame_interval(self.config.fps), Instant::now());
         loop {
             // Waiting on the command channel avoids polling while still waking
             // exactly when the next periodic frame is due.
-            let timeout = next_frame.saturating_duration_since(Instant::now());
+            let timeout = schedule.remaining(Instant::now());
             match receiver.recv_timeout(timeout) {
                 Ok(WorkerCommand::Reconfigure {
                     config,
@@ -225,7 +229,7 @@ impl WorkerState {
                 }) => {
                     self.reconfigure(config, blackout_frames);
                     let _ = reply.send(());
-                    next_frame = Instant::now();
+                    schedule.reset(frame_interval(self.config.fps), Instant::now());
                 }
                 Ok(WorkerCommand::Shutdown {
                     blackout_frames,
@@ -242,16 +246,9 @@ impl WorkerState {
                 }
             }
 
-            if Instant::now() >= next_frame {
-                let frame_started = Instant::now();
+            if schedule.is_due(Instant::now()) {
                 self.send_latest();
-                // Anchor cadence to the frame start. Adding the interval after
-                // a blocking USB write would count transmission time twice.
-                next_frame = next_frame_deadline(
-                    frame_started,
-                    frame_interval(self.config.fps),
-                    Instant::now(),
-                );
+                schedule.advance(Instant::now());
             }
         }
     }
@@ -569,15 +566,6 @@ pub(crate) fn frame_interval(fps: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(fps.max(DMX_MIN_FPS)))
 }
 
-/// Calculates an absolute cadence without sleeping in addition to work time.
-pub(crate) fn next_frame_deadline(
-    started: Instant,
-    interval: Duration,
-    finished: Instant,
-) -> Instant {
-    (started + interval).max(finished)
-}
-
 #[cfg(test)]
 fn nominal_packet_duration(universe_size: usize) -> Duration {
     Duration::from_micros(
@@ -709,20 +697,6 @@ mod tests {
         assert_eq!(
             remaining_break_spacing(DMX_MIN_BREAK_TO_BREAK),
             Duration::ZERO
-        );
-    }
-
-    #[test]
-    fn frame_deadlines_include_transmission_without_adding_it_twice() {
-        let started = Instant::now();
-        let interval = Duration::from_millis(25);
-        assert_eq!(
-            next_frame_deadline(started, interval, started + Duration::from_millis(23)),
-            started + interval
-        );
-        assert_eq!(
-            next_frame_deadline(started, interval, started + Duration::from_millis(30)),
-            started + Duration::from_millis(30)
         );
     }
 

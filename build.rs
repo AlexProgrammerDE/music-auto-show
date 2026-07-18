@@ -17,7 +17,7 @@ fn main() {
         .build_server(true)
         .build_client(false)
         .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .message_attribute(".", "#[serde(default)]")
+        .message_attribute(".", "#[serde(default, deny_unknown_fields)]")
         .enum_attribute(".", "#[serde(rename_all = \"snake_case\")]")
         .compile_protos(
             &["proto/music_auto_show/v1/music_auto_show.proto"],

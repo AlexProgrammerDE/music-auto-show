@@ -217,6 +217,7 @@ fn app_status(error: AppError) -> Status {
     match error {
         AppError::Config(error) if error.is_invalid_input() => Status::invalid_argument(message),
         AppError::FailedPrecondition(_) => Status::failed_precondition(message),
+        AppError::ResourceExhausted => Status::resource_exhausted(message),
         AppError::Unavailable | AppError::Runtime(_) => Status::unavailable(message),
         AppError::Config(_) => Status::internal(message),
     }

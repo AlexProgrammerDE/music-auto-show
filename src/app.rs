@@ -2,13 +2,13 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex as StdMutex, MutexGuard,
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, oneshot, watch},
@@ -18,25 +18,24 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    audio::{AudioAnalyzer, AudioCapture, list_devices, simulated_audio, start_capture},
+    audio::{AudioWorker, AudioWorkerSnapshot, list_devices},
     config::{self, ConfigError, ValidatedShowConfig},
-    dmx::{
-        DmxWorker, frame_interval as dmx_frame_interval,
-        next_frame_deadline as dmx_next_frame_deadline,
-    },
+    dmx::{DmxWorker, frame_interval as dmx_frame_interval},
     effects::EffectsEngine,
     media::MediaState,
     proto::v1::{
-        AudioInputMode, AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxConfig,
-        DmxRuntimeStatus, MediaInfo, Recording, RecordingStatus, RunState, ShowCommand, ShowConfig,
-        ShowSnapshot,
+        AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxConfig, DmxRuntimeStatus, MediaInfo,
+        Recording, RecordingStatus, RunState, ShowCommand, ShowConfig, ShowSnapshot,
     },
+    timing::PeriodicSchedule,
 };
 
 /// Idle snapshots only need periodic DMX health updates, not one update per frame.
 const IDLE_DMX_STATUS_INTERVAL: Duration = Duration::from_secs(1);
 /// Multiple zero frames make shutdown visible even if one USB transfer is lost.
 const SHUTDOWN_BLACKOUT_FRAMES: usize = 3;
+const RUNTIME_COMMAND_DEPTH: usize = 32;
+const RECORDING_MONITOR_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -48,6 +47,8 @@ pub enum AppError {
     Runtime(#[source] anyhow::Error),
     #[error("show runtime is unavailable")]
     Unavailable,
+    #[error("show runtime command queue is full")]
+    ResourceExhausted,
 }
 
 impl From<anyhow::Error> for AppError {
@@ -57,17 +58,13 @@ impl From<anyhow::Error> for AppError {
 }
 
 struct Runtime {
-    analyzer: Option<AudioAnalyzer>,
-    capture: Option<AudioCapture>,
+    mode: RuntimeMode,
     // The dedicated worker owns serial timing so effect processing never waits
     // for a full DMX packet to drain over USB.
     dmx: DmxWorker,
     last_idle_dmx_publish: Instant,
     effects: EffectsEngine,
-    simulation_started: Instant,
-    simulation_beat: u64,
-    simulation_was_beat: bool,
-    recording_monitor: bool,
+    last_effect_tick: Instant,
     frame_count: u64,
     fps_started: Instant,
 }
@@ -75,17 +72,34 @@ struct Runtime {
 impl Runtime {
     fn new(dmx: DmxWorker) -> Self {
         Self {
-            analyzer: None,
-            capture: None,
+            mode: RuntimeMode::Stopped,
             dmx,
             last_idle_dmx_publish: Instant::now(),
             effects: EffectsEngine::default(),
-            simulation_started: Instant::now(),
-            simulation_beat: 0,
-            simulation_was_beat: false,
-            recording_monitor: false,
+            last_effect_tick: Instant::now(),
             frame_count: 0,
             fps_started: Instant::now(),
+        }
+    }
+}
+
+enum RuntimeMode {
+    Stopped,
+    Starting,
+    Running(AudioWorker),
+    Monitoring(AudioWorker),
+    Stopping,
+    Error,
+}
+
+impl RuntimeMode {
+    fn run_state(&self) -> RunState {
+        match self {
+            Self::Stopped | Self::Monitoring(_) => RunState::Stopped,
+            Self::Starting => RunState::Starting,
+            Self::Running(_) => RunState::Running,
+            Self::Stopping => RunState::Stopping,
+            Self::Error => RunState::Error,
         }
     }
 }
@@ -112,9 +126,7 @@ enum RuntimeCommand {
     ClearRecording {
         reply: oneshot::Sender<Result<RecordingStatus, AppError>>,
     },
-    Shutdown {
-        reply: oneshot::Sender<()>,
-    },
+    Shutdown,
 }
 
 pub struct App {
@@ -122,7 +134,7 @@ pub struct App {
     config_tx: watch::Sender<Arc<ValidatedShowConfig>>,
     snapshot_tx: watch::Sender<Arc<ShowSnapshot>>,
     media_tx: watch::Sender<Arc<MediaState>>,
-    command_tx: Sender<RuntimeCommand>,
+    command_tx: SyncSender<RuntimeCommand>,
     command_rx: StdMutex<Option<Receiver<RuntimeCommand>>>,
     runtime_thread: StdMutex<Option<thread::JoinHandle<()>>>,
     media_task: Mutex<Option<JoinHandle<()>>>,
@@ -137,7 +149,7 @@ impl App {
         let (config_tx, _) = watch::channel(show_config);
         let (snapshot_tx, _) = watch::channel(snapshot);
         let (media_tx, _) = watch::channel(Arc::new(MediaState::default()));
-        let (command_tx, command_rx) = mpsc::channel();
+        let (command_tx, command_rx) = mpsc::sync_channel(RUNTIME_COMMAND_DEPTH);
         Ok(Self {
             config_path,
             config_tx,
@@ -190,14 +202,7 @@ impl App {
         self.shutdown.cancel();
         let runtime_thread = lock_unpoisoned(&self.runtime_thread).take();
         if let Some(runtime_thread) = runtime_thread {
-            let (reply, stopped) = oneshot::channel();
-            if self
-                .command_tx
-                .send(RuntimeCommand::Shutdown { reply })
-                .is_ok()
-            {
-                let _ = stopped.await;
-            }
+            let _ = self.command_tx.try_send(RuntimeCommand::Shutdown);
             let joined = tokio::task::spawn_blocking(move || runtime_thread.join()).await;
             match joined {
                 Ok(Ok(())) => {}
@@ -296,9 +301,11 @@ impl App {
     }
 
     fn send_command(&self, command: RuntimeCommand) -> Result<(), AppError> {
-        self.command_tx
-            .send(command)
-            .map_err(|_| AppError::Unavailable)
+        match self.command_tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(AppError::ResourceExhausted),
+            Err(TrySendError::Disconnected(_)) => Err(AppError::Unavailable),
+        }
     }
 }
 
@@ -323,14 +330,18 @@ impl RuntimeLoop {
     }
 
     fn run(mut self, receiver: Receiver<RuntimeCommand>) {
-        let mut next_frame = Instant::now();
+        let mut schedule = PeriodicSchedule::immediate(self.frame_interval(), Instant::now());
         loop {
-            let timeout = next_frame.saturating_duration_since(Instant::now());
-            match receiver.recv_timeout(timeout) {
-                Ok(RuntimeCommand::Shutdown { reply }) => {
+            let received = receiver.recv_timeout(schedule.remaining(Instant::now()));
+            if self.app.shutdown.is_cancelled() {
+                self.stop_show();
+                self.shutdown_dmx();
+                return;
+            }
+            match received {
+                Ok(RuntimeCommand::Shutdown) => {
                     self.stop_show();
                     self.shutdown_dmx();
-                    let _ = reply.send(());
                     return;
                 }
                 Ok(command) => self.handle_command(command),
@@ -342,16 +353,16 @@ impl RuntimeLoop {
                 }
             }
 
-            if Instant::now() >= next_frame {
-                let frame_started = Instant::now();
+            let frame_interval = self.frame_interval();
+            if schedule.period() != frame_interval {
+                schedule.reset(frame_interval, Instant::now());
+            }
+            if schedule.is_due(Instant::now()) {
                 if let Err(error) = self.tick() {
                     error!(%error, "show frame failed");
                     self.fail_show(error.to_string());
                 }
-                // Keep effect cadence anchored to the start of the frame. This
-                // prevents processing time from being added to every interval.
-                next_frame =
-                    dmx_next_frame_deadline(frame_started, self.frame_interval(), Instant::now());
+                schedule.advance(Instant::now());
             }
         }
     }
@@ -376,14 +387,16 @@ impl RuntimeLoop {
             RuntimeCommand::ClearRecording { reply } => {
                 let _ = reply.send(self.clear_recording());
             }
-            RuntimeCommand::Shutdown { reply } => {
-                let _ = reply.send(());
-            }
+            RuntimeCommand::Shutdown => {}
         }
     }
 
     fn frame_interval(&self) -> Duration {
-        dmx_frame_interval(self.config.dmx().fps)
+        if matches!(&self.runtime.mode, RuntimeMode::Monitoring(_)) {
+            RECORDING_MONITOR_INTERVAL
+        } else {
+            dmx_frame_interval(self.config.dmx().fps)
+        }
     }
 
     fn update_config(&mut self, updated: ShowConfig) -> Result<ShowConfig, AppError> {
@@ -398,8 +411,8 @@ impl RuntimeLoop {
             ));
         }
         let updated = Arc::new(ValidatedShowConfig::new(updated, self.app.cli_simulate)?);
-        config::save(&self.app.config_path, &updated)?;
-        let was_running = self.snapshot.run_state == RunState::Running as i32;
+        let previous = Arc::clone(&self.config);
+        let was_running = matches!(&self.runtime.mode, RuntimeMode::Running(_));
         let dmx_changed = self.config.dmx() != updated.dmx();
         if was_running {
             self.stop_show();
@@ -407,16 +420,25 @@ impl RuntimeLoop {
         if dmx_changed {
             // Reconfiguration is acknowledged only after the old port has sent
             // its blackout sequence and the worker has adopted the new config.
-            self.runtime.dmx.reconfigure(
+            if let Err(error) = self.runtime.dmx.reconfigure(
                 effective_dmx_config(&updated, self.app.cli_simulate),
                 SHUTDOWN_BLACKOUT_FRAMES,
-            )?;
+            ) {
+                if was_running {
+                    let _ = self.start_show();
+                }
+                return Err(error.into());
+            }
         }
         self.config = Arc::clone(&updated);
+        if was_running && let Err(error) = self.start_show() {
+            return Err(self.rollback_config(previous, was_running, dmx_changed, error));
+        }
+        if let Err(error) = config::save(&self.app.config_path, &updated) {
+            return Err(self.rollback_config(previous, was_running, dmx_changed, error.into()));
+        }
         self.app.config_tx.send_replace(updated);
-        if was_running {
-            self.start_show()?;
-        } else {
+        if !was_running {
             reset_inactive_runtime_snapshot(
                 &mut self.snapshot,
                 &self.config,
@@ -425,6 +447,46 @@ impl RuntimeLoop {
             self.publish();
         }
         Ok(self.config.as_proto().clone())
+    }
+
+    fn rollback_config(
+        &mut self,
+        previous: Arc<ValidatedShowConfig>,
+        was_running: bool,
+        dmx_changed: bool,
+        original: AppError,
+    ) -> AppError {
+        if !matches!(&self.runtime.mode, RuntimeMode::Stopped) {
+            self.stop_show();
+        }
+        let rollback = (|| -> Result<(), AppError> {
+            if dmx_changed {
+                self.runtime.dmx.reconfigure(
+                    effective_dmx_config(&previous, self.app.cli_simulate),
+                    SHUTDOWN_BLACKOUT_FRAMES,
+                )?;
+            }
+            self.config = Arc::clone(&previous);
+            if was_running {
+                self.start_show()?;
+            } else {
+                reset_inactive_runtime_snapshot(
+                    &mut self.snapshot,
+                    &self.config,
+                    self.app.cli_simulate,
+                );
+                self.publish();
+            }
+            config::save(&self.app.config_path, &previous)?;
+            Ok(())
+        })();
+
+        match rollback {
+            Ok(()) => original,
+            Err(rollback) => AppError::Runtime(anyhow!(
+                "configuration update failed: {original}; rollback also failed: {rollback}"
+            )),
+        }
     }
 
     fn control(&mut self, command: ShowCommand) -> Result<CommandResult, AppError> {
@@ -441,53 +503,43 @@ impl RuntimeLoop {
     }
 
     fn start_show(&mut self) -> Result<CommandResult, AppError> {
-        if self.snapshot.run_state == RunState::Running as i32 {
-            return Ok(self.command_result(true, "Show is already running"));
+        match &self.runtime.mode {
+            RuntimeMode::Running(_) => {
+                return Ok(self.command_result(true, "Show is already running"));
+            }
+            RuntimeMode::Monitoring(_) => {
+                return Err(AppError::FailedPrecondition(
+                    "stop the audio recording before starting the show".into(),
+                ));
+            }
+            RuntimeMode::Starting | RuntimeMode::Stopping => {
+                return Err(AppError::FailedPrecondition(
+                    "show runtime is transitioning".into(),
+                ));
+            }
+            RuntimeMode::Stopped | RuntimeMode::Error => {}
         }
-        if self
-            .snapshot
-            .recording
-            .as_ref()
-            .is_some_and(|recording| recording.recording)
-        {
-            return Err(AppError::FailedPrecondition(
-                "stop the audio recording before starting the show".into(),
-            ));
-        }
-        self.set_run_state(RunState::Starting, "Starting audio and effects");
-        let startup = (|| {
-            let audio_config = self.config.audio();
-            let simulate_audio = self.app.cli_simulate || audio_config.simulate;
-            let capture = if simulate_audio {
-                None
-            } else {
-                Some(start_capture(audio_config)?)
-            };
-            let sample_rate = capture.as_ref().map_or(44_100, AudioCapture::sample_rate);
-            let analyzer = AudioAnalyzer::new(
-                sample_rate,
-                audio_config.gain,
-                &audio_config.beatnet_model_path,
-            );
-            self.runtime.analyzer = Some(analyzer);
-            self.runtime.capture = capture;
-            self.runtime.effects = EffectsEngine::default();
-            self.runtime.simulation_started = Instant::now();
-            self.runtime.simulation_beat = 0;
-            self.runtime.simulation_was_beat = false;
-            self.runtime.recording_monitor = false;
-            self.runtime.frame_count = 0;
-            self.runtime.fps_started = Instant::now();
-            Ok::<_, anyhow::Error>(simulate_audio)
-        })();
-        let simulate_audio = match startup {
-            Ok(simulation) => simulation,
+        self.runtime.mode = RuntimeMode::Starting;
+        self.publish_mode("Starting audio and effects");
+        let audio = match AudioWorker::start(
+            self.config.audio(),
+            self.config.audio_mode(),
+            self.app.cli_simulate,
+        ) {
+            Ok(audio) => audio,
             Err(error) => {
                 self.fail_show(error.to_string());
                 return Err(error.into());
             }
         };
-        self.set_run_state(RunState::Running, "Show running");
+        let simulate_audio = audio.snapshot().runtime.simulated;
+        self.runtime.mode = RuntimeMode::Running(audio);
+        self.runtime.effects = EffectsEngine::default();
+        self.runtime.frame_count = 0;
+        self.runtime.fps_started = Instant::now();
+        let now = Instant::now();
+        self.runtime.last_effect_tick = now.checked_sub(self.frame_interval()).unwrap_or(now);
+        self.publish_mode("Show running");
         info!(
             simulate_audio,
             simulate_dmx = self.runtime.dmx.status().simulated,
@@ -497,14 +549,14 @@ impl RuntimeLoop {
     }
 
     fn stop_show(&mut self) {
-        if self.snapshot.run_state == RunState::Stopped as i32 {
+        if matches!(&self.runtime.mode, RuntimeMode::Stopped) {
             return;
         }
-        self.set_run_state(RunState::Stopping, "Stopping show");
+        let previous = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Stopping);
+        self.publish_mode("Stopping show");
+        drop(previous);
         self.runtime.dmx.blackout();
-        self.runtime.capture = None;
-        self.runtime.analyzer = None;
-        self.runtime.recording_monitor = false;
+        self.runtime.mode = RuntimeMode::Stopped;
         self.snapshot.run_state = RunState::Stopped as i32;
         self.snapshot.status_message = "Stopped".into();
         self.snapshot.recording = Some(stopped_recording_status());
@@ -538,55 +590,43 @@ impl RuntimeLoop {
     }
 
     fn start_recording(&mut self) -> Result<RecordingStatus, AppError> {
-        let running = self.snapshot.run_state == RunState::Running as i32;
-        if !running {
-            let audio_config = self.config.audio();
-            let simulate_audio = self.app.cli_simulate || audio_config.simulate;
-            let capture = if simulate_audio {
-                None
-            } else {
-                Some(start_capture(audio_config)?)
-            };
-            let sample_rate = capture.as_ref().map_or(44_100, AudioCapture::sample_rate);
-            self.runtime.analyzer = Some(AudioAnalyzer::new(
-                sample_rate,
-                audio_config.gain,
-                &audio_config.beatnet_model_path,
-            ));
-            self.runtime.capture = capture;
-            self.runtime.simulation_started = Instant::now();
-            self.runtime.simulation_beat = 0;
-            self.runtime.simulation_was_beat = false;
-            self.runtime.recording_monitor = true;
-        }
-        let analyzer = self
-            .runtime
-            .analyzer
-            .as_mut()
-            .context("audio input is not running")?;
-        if !analyzer.start_recording() {
-            return Err(AppError::FailedPrecondition(
-                "audio recording could not start".into(),
-            ));
-        }
-        let status = analyzer.recording_status();
+        let status = match &self.runtime.mode {
+            RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => {
+                audio.start_recording()?
+            }
+            RuntimeMode::Stopped | RuntimeMode::Error => {
+                let audio = AudioWorker::start(
+                    self.config.audio(),
+                    self.config.audio_mode(),
+                    self.app.cli_simulate,
+                )?;
+                let status = audio.start_recording()?;
+                self.runtime.mode = RuntimeMode::Monitoring(audio);
+                self.snapshot.status_message = "Recording input check".into();
+                status
+            }
+            RuntimeMode::Starting | RuntimeMode::Stopping => {
+                return Err(AppError::FailedPrecondition(
+                    "show runtime is transitioning".into(),
+                ));
+            }
+        };
         self.snapshot.recording = Some(status.clone());
         self.publish();
         Ok(status)
     }
 
     fn stop_recording(&mut self) -> Result<Recording, AppError> {
-        let recording = self
-            .runtime
-            .analyzer
-            .as_mut()
-            .context("audio input is not running")?
-            .stop_recording()?;
-        let stopped_monitor = self.runtime.recording_monitor;
+        let stopped_monitor = matches!(&self.runtime.mode, RuntimeMode::Monitoring(_));
+        let recording = match &self.runtime.mode {
+            RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => {
+                audio.stop_recording()?
+            }
+            _ => return Err(anyhow!("audio input is not running").into()),
+        };
         if stopped_monitor {
-            self.runtime.capture = None;
-            self.runtime.analyzer = None;
-            self.runtime.recording_monitor = false;
+            let monitor = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Stopped);
+            drop(monitor);
         }
         if let Some(status) = recording.status.clone() {
             self.snapshot.recording = Some(status);
@@ -604,18 +644,16 @@ impl RuntimeLoop {
     }
 
     fn clear_recording(&mut self) -> Result<RecordingStatus, AppError> {
-        let analyzer = self
-            .runtime
-            .analyzer
-            .as_mut()
-            .context("audio input is not running")?;
-        analyzer.clear_recording();
-        let status = analyzer.recording_status();
-        let stopped_monitor = self.runtime.recording_monitor;
+        let stopped_monitor = matches!(&self.runtime.mode, RuntimeMode::Monitoring(_));
+        let status = match &self.runtime.mode {
+            RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => {
+                audio.clear_recording()?
+            }
+            _ => return Err(anyhow!("audio input is not running").into()),
+        };
         if stopped_monitor {
-            self.runtime.capture = None;
-            self.runtime.analyzer = None;
-            self.runtime.recording_monitor = false;
+            let monitor = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Stopped);
+            drop(monitor);
         }
         self.snapshot.recording = Some(status.clone());
         if stopped_monitor {
@@ -631,65 +669,37 @@ impl RuntimeLoop {
     }
 
     fn tick(&mut self) -> Result<(), AppError> {
-        if self.snapshot.run_state != RunState::Running as i32 {
-            let universe = self.zero_universe();
-            self.runtime.dmx.set_universe(&universe)?;
-            if self.runtime.recording_monitor {
-                return self.tick_recording_monitor();
-            }
-            self.snapshot.dmx_universe = universe;
-            if self.runtime.last_idle_dmx_publish.elapsed() >= IDLE_DMX_STATUS_INTERVAL {
-                self.snapshot.dmx_runtime = Some(self.runtime.dmx.status());
-                self.runtime.last_idle_dmx_publish = Instant::now();
-                self.publish();
-            }
-            return Ok(());
+        let running_audio = match &self.runtime.mode {
+            RuntimeMode::Running(audio) => Some(audio.snapshot()),
+            _ => None,
+        };
+        if let Some(audio) = running_audio {
+            return self.tick_show(audio);
         }
-        let simulate = self.app.cli_simulate || self.config.audio().simulate;
+
+        let monitoring_audio = match &self.runtime.mode {
+            RuntimeMode::Monitoring(audio) => Some(audio.snapshot()),
+            _ => None,
+        };
+        let universe = self.zero_universe();
+        self.runtime.dmx.set_universe(&universe)?;
+        if let Some(audio) = monitoring_audio {
+            return self.tick_recording_monitor(audio);
+        }
+        self.snapshot.dmx_universe = universe;
+        if self.runtime.last_idle_dmx_publish.elapsed() >= IDLE_DMX_STATUS_INTERVAL {
+            self.snapshot.dmx_runtime = Some(self.runtime.dmx.status());
+            self.runtime.last_idle_dmx_publish = Instant::now();
+            self.publish();
+        }
+        Ok(())
+    }
+
+    fn tick_show(&mut self, audio_frame: AudioWorkerSnapshot) -> Result<(), AppError> {
         let blackout = self.snapshot.blackout;
-        let previous_audio = self.snapshot.audio.clone().unwrap_or_default();
         let previous_effects_fps = self.snapshot.effects_fps;
         let detected_media = self.app.media_tx.borrow().info().clone();
-        let audio = if simulate {
-            let elapsed = self.runtime.simulation_started.elapsed().as_secs_f32();
-            let (samples, mut beat) = simulated_audio(elapsed, self.runtime.simulation_beat);
-            if beat.beat && !self.runtime.simulation_was_beat {
-                self.runtime.simulation_beat += 1;
-                beat.estimated_beat = self.runtime.simulation_beat;
-                beat.estimated_bar = self.runtime.simulation_beat / 4;
-                beat.downbeat = self.runtime.simulation_beat.is_multiple_of(4);
-            }
-            self.runtime.simulation_was_beat = beat.beat;
-            self.runtime
-                .analyzer
-                .as_mut()
-                .context("audio analyzer is not initialized")?
-                .process_simulated(&samples, beat)
-        } else {
-            let pending = self
-                .runtime
-                .capture
-                .as_ref()
-                .map(AudioCapture::drain_samples)
-                .unwrap_or_default();
-            if pending.is_empty() {
-                previous_audio
-            } else {
-                self.runtime
-                    .analyzer
-                    .as_mut()
-                    .context("audio analyzer is not initialized")?
-                    .process(&pending)
-            }
-        };
-        let analyzer = self
-            .runtime
-            .analyzer
-            .as_ref()
-            .context("audio analyzer is not initialized")?;
-        let beatnet = analyzer.beatnet_status();
-        let recording = analyzer.recording_status();
-        let media = if simulate {
+        let media = if audio_frame.runtime.simulated {
             MediaInfo {
                 track_name: "Simulated Audio".into(),
                 is_playing: true,
@@ -704,10 +714,16 @@ impl RuntimeLoop {
         } else {
             detected_media
         };
-        let output =
-            self.runtime
-                .effects
-                .process(&self.config, &audio, &media.album_colors, blackout);
+        let now = Instant::now();
+        let delta = now.saturating_duration_since(self.runtime.last_effect_tick);
+        self.runtime.last_effect_tick = now;
+        let output = self.runtime.effects.process(
+            &self.config,
+            &audio_frame.analysis,
+            &media.album_colors,
+            blackout,
+            delta,
+        );
         self.runtime.dmx.set_universe(&output.universe)?;
         self.runtime.frame_count += 1;
         let elapsed = self.runtime.fps_started.elapsed().as_secs_f32();
@@ -719,21 +735,17 @@ impl RuntimeLoop {
         } else {
             previous_effects_fps
         };
-        let audio_runtime = self.runtime.capture.as_ref().map_or_else(
-            || simulated_audio_status(&self.config),
-            AudioCapture::status,
-        );
         self.snapshot.status_message = if blackout {
             "Blackout active"
         } else {
             "Show running"
         }
         .into();
-        self.snapshot.audio = Some(audio);
-        self.snapshot.audio_runtime = Some(audio_runtime);
+        self.snapshot.audio = Some(audio_frame.analysis);
+        self.snapshot.audio_runtime = Some(audio_frame.runtime);
         self.snapshot.dmx_runtime = Some(self.runtime.dmx.status());
-        self.snapshot.recording = Some(recording);
-        self.snapshot.beatnet = Some(beatnet);
+        self.snapshot.recording = Some(audio_frame.recording);
+        self.snapshot.beatnet = Some(audio_frame.beatnet);
         self.snapshot.media = Some(media);
         self.snapshot.fixture_states = output.fixture_states;
         self.snapshot.dmx_universe = output.universe;
@@ -742,57 +754,12 @@ impl RuntimeLoop {
         Ok(())
     }
 
-    fn tick_recording_monitor(&mut self) -> Result<(), AppError> {
-        if !self.runtime.recording_monitor {
-            return Ok(());
-        }
-        let simulate = self.app.cli_simulate || self.config.audio().simulate;
-        let previous_audio = self.snapshot.audio.clone().unwrap_or_default();
-        let audio = if simulate {
-            let elapsed = self.runtime.simulation_started.elapsed().as_secs_f32();
-            let (samples, mut beat) = simulated_audio(elapsed, self.runtime.simulation_beat);
-            if beat.beat && !self.runtime.simulation_was_beat {
-                self.runtime.simulation_beat += 1;
-                beat.estimated_beat = self.runtime.simulation_beat;
-                beat.estimated_bar = self.runtime.simulation_beat / 4;
-                beat.downbeat = self.runtime.simulation_beat.is_multiple_of(4);
-            }
-            self.runtime.simulation_was_beat = beat.beat;
-            self.runtime
-                .analyzer
-                .as_mut()
-                .context("audio analyzer is not initialized")?
-                .process_simulated(&samples, beat)
-        } else {
-            let pending = self
-                .runtime
-                .capture
-                .as_ref()
-                .map(AudioCapture::drain_samples)
-                .unwrap_or_default();
-            if pending.is_empty() {
-                previous_audio
-            } else {
-                self.runtime
-                    .analyzer
-                    .as_mut()
-                    .context("audio analyzer is not initialized")?
-                    .process(&pending)
-            }
-        };
-        let analyzer = self
-            .runtime
-            .analyzer
-            .as_ref()
-            .context("audio analyzer is not initialized")?;
+    fn tick_recording_monitor(&mut self, audio: AudioWorkerSnapshot) -> Result<(), AppError> {
         self.snapshot.status_message = "Recording input check".into();
-        self.snapshot.audio = Some(audio);
-        self.snapshot.audio_runtime = Some(self.runtime.capture.as_ref().map_or_else(
-            || simulated_audio_status(&self.config),
-            AudioCapture::status,
-        ));
-        self.snapshot.recording = Some(analyzer.recording_status());
-        self.snapshot.beatnet = Some(analyzer.beatnet_status());
+        self.snapshot.audio = Some(audio.analysis);
+        self.snapshot.audio_runtime = Some(audio.runtime);
+        self.snapshot.recording = Some(audio.recording);
+        self.snapshot.beatnet = Some(audio.beatnet);
         self.snapshot.media = Some(self.app.media_tx.borrow().info().clone());
         self.snapshot.dmx_runtime = Some(self.runtime.dmx.status());
         self.snapshot.dmx_universe = self.zero_universe();
@@ -810,17 +777,16 @@ impl RuntimeLoop {
         }
     }
 
-    fn set_run_state(&mut self, state: RunState, message: &str) {
-        self.snapshot.run_state = state as i32;
+    fn publish_mode(&mut self, message: &str) {
+        self.snapshot.run_state = self.runtime.mode.run_state() as i32;
         self.snapshot.status_message = message.into();
         self.publish();
     }
 
     fn fail_show(&mut self, message: String) {
         self.runtime.dmx.blackout();
-        self.runtime.capture = None;
-        self.runtime.analyzer = None;
-        self.runtime.recording_monitor = false;
+        let previous = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Error);
+        drop(previous);
         self.snapshot.run_state = RunState::Error as i32;
         self.snapshot.status_message = message;
         self.snapshot.recording = Some(stopped_recording_status());
@@ -929,19 +895,6 @@ fn stopped_audio_status(config: &ValidatedShowConfig, simulate: bool) -> AudioRu
     }
 }
 
-fn simulated_audio_status(config: &ValidatedShowConfig) -> AudioRuntimeStatus {
-    let mut status = stopped_audio_status(config, true);
-    status.actual_mode = AudioInputMode::Auto as i32;
-    status.device_name = "Simulated audio generator".into();
-    status.device_type = "simulated".into();
-    status.host_api = "Simulation".into();
-    status.channels = 1;
-    status.sample_rate = 44_100;
-    status.selection_reason = "simulated".into();
-    status.running = true;
-    status
-}
-
 fn stopped_dmx_status(config: &ValidatedShowConfig, simulate: bool) -> DmxRuntimeStatus {
     DmxRuntimeStatus {
         configured_port: config.dmx().port.clone(),
@@ -1046,6 +999,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_command_queue_applies_backpressure() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = App::load(directory.path().join("config.json"), true)
+            .await
+            .expect("simulated application should load");
+
+        for _ in 0..RUNTIME_COMMAND_DEPTH {
+            let (reply, _response) = oneshot::channel();
+            app.send_command(RuntimeCommand::SetBlackout {
+                enabled: false,
+                reply,
+            })
+            .expect("queue should accept its bounded capacity");
+        }
+        let (reply, _response) = oneshot::channel();
+        let error = app
+            .send_command(RuntimeCommand::SetBlackout {
+                enabled: false,
+                reply,
+            })
+            .expect_err("queue should reject overload");
+
+        assert!(matches!(error, AppError::ResourceExhausted));
+    }
+
+    #[tokio::test]
     async fn dmx_sends_zero_universes_while_the_show_is_stopped() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let app = Arc::new(
@@ -1099,6 +1078,66 @@ mod tests {
 
         assert!(first.expect("first start should succeed").success);
         assert!(second.expect("second start should succeed").success);
+        assert_eq!(app.snapshot().await.run_state, RunState::Running as i32);
+        app.stop_runtime().await;
+    }
+
+    #[tokio::test]
+    async fn stopped_recording_monitor_uses_its_own_audio_clock() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = Arc::new(
+            App::load(directory.path().join("config.json"), true)
+                .await
+                .expect("simulated application should load"),
+        );
+        app.start_runtime()
+            .await
+            .expect("show runtime should start");
+        app.start_recording().await.expect("recording should start");
+
+        let recording = wait_for_snapshot(&app, |snapshot| {
+            snapshot
+                .recording
+                .as_ref()
+                .is_some_and(|recording| recording.duration_seconds >= 0.08)
+        })
+        .await;
+
+        assert_eq!(recording.run_state, RunState::Stopped as i32);
+        let result = app.stop_recording().await.expect("recording should stop");
+        assert!(
+            result
+                .status
+                .is_some_and(|recording| recording.duration_seconds >= 0.08)
+        );
+        app.stop_runtime().await;
+    }
+
+    #[tokio::test]
+    async fn failed_config_persistence_restores_the_running_show() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let blocked_parent = directory.path().join("not-a-directory");
+        std::fs::write(&blocked_parent, b"file").expect("blocking file should be written");
+        let app = Arc::new(
+            App::load(blocked_parent.join("config.json"), true)
+                .await
+                .expect("default configuration should load"),
+        );
+        app.start_runtime()
+            .await
+            .expect("show runtime should start");
+        app.control(ShowCommand::Start)
+            .await
+            .expect("show should start");
+        let original = app.config().await;
+        let mut updated = original.clone();
+        updated.name = "Configuration that cannot persist".into();
+
+        app.update_config(updated)
+            .await
+            .expect_err("configuration persistence should fail");
+
+        assert_eq!(app.config().await.name, original.name);
         assert_eq!(app.snapshot().await.run_state, RunState::Running as i32);
         app.stop_runtime().await;
     }

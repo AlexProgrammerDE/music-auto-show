@@ -49,8 +49,14 @@ impl ConfigError {
 pub struct ValidatedShowConfig {
     proto: ShowConfig,
     audio: AudioConfig,
+    audio_mode: AudioInputMode,
     dmx: DmxConfig,
     effects: EffectsConfig,
+    visualization_mode: VisualizationMode,
+    movement_mode: MovementMode,
+    effect_fixture_mode: EffectFixtureMode,
+    rotation_mode: RotationMode,
+    strobe_effect_mode: StrobeEffectMode,
 }
 
 impl ValidatedShowConfig {
@@ -68,11 +74,29 @@ impl ValidatedShowConfig {
         let effects = config
             .effects
             .ok_or_else(|| ConfigError::Invalid("effects configuration is missing".into()))?;
+        let audio_mode = AudioInputMode::try_from(audio.mode)
+            .map_err(|_| ConfigError::Invalid("audio input mode is invalid".into()))?;
+        let visualization_mode = VisualizationMode::try_from(effects.mode)
+            .map_err(|_| ConfigError::Invalid("visualization mode is invalid".into()))?;
+        let movement_mode = MovementMode::try_from(effects.movement_mode)
+            .map_err(|_| ConfigError::Invalid("movement mode is invalid".into()))?;
+        let effect_fixture_mode = EffectFixtureMode::try_from(effects.effect_fixture_mode)
+            .map_err(|_| ConfigError::Invalid("effect fixture mode is invalid".into()))?;
+        let rotation_mode = RotationMode::try_from(effects.rotation_mode)
+            .map_err(|_| ConfigError::Invalid("rotation mode is invalid".into()))?;
+        let strobe_effect_mode = StrobeEffectMode::try_from(effects.strobe_effect_mode)
+            .map_err(|_| ConfigError::Invalid("strobe effect mode is invalid".into()))?;
         Ok(Self {
             proto: config,
             audio,
+            audio_mode,
             dmx,
             effects,
+            visualization_mode,
+            movement_mode,
+            effect_fixture_mode,
+            rotation_mode,
+            strobe_effect_mode,
         })
     }
 
@@ -88,12 +112,36 @@ impl ValidatedShowConfig {
         &self.audio
     }
 
+    pub fn audio_mode(&self) -> AudioInputMode {
+        self.audio_mode
+    }
+
     pub fn dmx(&self) -> &DmxConfig {
         &self.dmx
     }
 
     pub fn effects(&self) -> &EffectsConfig {
         &self.effects
+    }
+
+    pub fn visualization_mode(&self) -> VisualizationMode {
+        self.visualization_mode
+    }
+
+    pub fn movement_mode(&self) -> MovementMode {
+        self.movement_mode
+    }
+
+    pub fn effect_fixture_mode(&self) -> EffectFixtureMode {
+        self.effect_fixture_mode
+    }
+
+    pub fn rotation_mode(&self) -> RotationMode {
+        self.rotation_mode
+    }
+
+    pub fn strobe_effect_mode(&self) -> StrobeEffectMode {
+        self.strobe_effect_mode
     }
 }
 

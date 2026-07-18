@@ -1,0 +1,2482 @@
+{
+  "name": "My Light Show",
+  "dmx": {
+    "port": "",
+    "universe_size": 512,
+    "fps": 40,
+    "simulate": false
+  },
+  "audio": {
+    "mode": 1,
+    "simulate": false,
+    "gain": 1.0,
+    "beatnet_model_path": "models/beatnet-plus.pt",
+    "device_id": ""
+  },
+  "effects": {
+    "mode": 1,
+    "intensity": 0.4,
+    "force_max_brightness": false,
+    "color_speed": 3.35,
+    "beat_sensitivity": 0.65,
+    "smooth_factor": 0.3,
+    "strobe_on_drop": false,
+    "movement_enabled": true,
+    "movement_speed": 1.55,
+    "movement_mode": 11,
+    "effect_fixture_mode": 1,
+    "rotation_mode": 4,
+    "strobe_effect_enabled": true,
+    "strobe_effect_mode": 2,
+    "strobe_effect_speed": 1.4
+  },
+  "profiles": [
+    {
+      "name": "Purelight Muvy WashQ 14ch",
+      "manufacturer": "Purelight",
+      "model": "Muvy WashQ",
+      "fixture_type": "moving_head",
+      "channel_count": 14,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Pan",
+          "channel_type": "position_pan",
+          "default_value": 128,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Pan Fine",
+          "channel_type": "position_pan_fine",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Tilt",
+          "channel_type": "position_tilt",
+          "default_value": 128,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "Tilt Fine",
+          "channel_type": "position_tilt_fine",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 5,
+          "name": "XY Speed",
+          "channel_type": "speed_pan_tilt_fast_slow",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 6,
+          "name": "Dimmer/Shutter",
+          "channel_type": "intensity_master_dimmer",
+          "default_value": 255,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 7,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 8,
+              "max_value": 134,
+              "name": "Master Dimmer",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 135,
+              "max_value": 239,
+              "name": "Strobe (slow to fast)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 240,
+              "max_value": 255,
+              "name": "Open",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 7,
+          "name": "Red",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 8,
+          "name": "Green",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 9,
+          "name": "Blue",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 10,
+          "name": "White",
+          "channel_type": "intensity_white",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 11,
+          "name": "Color Macro",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 8,
+              "name": "No function (manual RGB)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 9,
+              "max_value": 20,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 21,
+              "max_value": 34,
+              "name": "Red",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 35,
+              "max_value": 49,
+              "name": "Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 50,
+              "max_value": 63,
+              "name": "Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 64,
+              "max_value": 77,
+              "name": "White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 78,
+              "max_value": 91,
+              "name": "RGB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 92,
+              "max_value": 105,
+              "name": "RB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 106,
+              "max_value": 119,
+              "name": "RG",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 120,
+              "max_value": 133,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 134,
+              "max_value": 147,
+              "name": "RG",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 148,
+              "max_value": 161,
+              "name": "RGB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 162,
+              "max_value": 189,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 190,
+              "max_value": 201,
+              "name": "RBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 202,
+              "max_value": 217,
+              "name": "Warm White (RGBW Mix)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 218,
+              "max_value": 232,
+              "name": "Cool White (RGBW Mix)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 233,
+              "max_value": 255,
+              "name": "Macro Color (speed via Ch12)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 12,
+          "name": "Color Speed",
+          "channel_type": "effect_speed",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 13,
+          "name": "Macro P/T/M",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Manual operation",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Movement patterns and color change",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 14,
+          "name": "Reset",
+          "channel_type": "maintenance",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 249,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 250,
+              "max_value": 255,
+              "name": "Reset (hold 3+ sec)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "standard_rgbw",
+      "dual_color_map": [],
+      "pan_max_degrees": 545,
+      "tilt_max_degrees": 184
+    },
+    {
+      "name": "Generic RGB PAR",
+      "manufacturer": "Generic",
+      "model": "RGB PAR",
+      "fixture_type": "par",
+      "channel_count": 3,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Red",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Green",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Blue",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "standard_rgb",
+      "dual_color_map": [],
+      "pan_max_degrees": 540,
+      "tilt_max_degrees": 270
+    },
+    {
+      "name": "Generic RGBW PAR",
+      "manufacturer": "Generic",
+      "model": "RGBW PAR",
+      "fixture_type": "par",
+      "channel_count": 4,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Red",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Green",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Blue",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "White",
+          "channel_type": "intensity_white",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "standard_rgbw",
+      "dual_color_map": [],
+      "pan_max_degrees": 540,
+      "tilt_max_degrees": 270
+    },
+    {
+      "name": "Generic Dimmer+RGBW",
+      "manufacturer": "Generic",
+      "model": "Dimmer+RGBW PAR",
+      "fixture_type": "par",
+      "channel_count": 5,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Dimmer",
+          "channel_type": "intensity_master_dimmer",
+          "default_value": 255,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Red",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Green",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "Blue",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 5,
+          "name": "White",
+          "channel_type": "intensity_white",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "standard_rgbw",
+      "dual_color_map": [],
+      "pan_max_degrees": 540,
+      "tilt_max_degrees": 270
+    },
+    {
+      "name": "Showtec Techno Derby 4ch",
+      "manufacturer": "Showtec",
+      "model": "Techno Derby",
+      "fixture_type": "effect",
+      "channel_count": 4,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Color",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 5,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 6,
+              "max_value": 20,
+              "name": "Red",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 21,
+              "max_value": 35,
+              "name": "Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 36,
+              "max_value": 50,
+              "name": "Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 51,
+              "max_value": 65,
+              "name": "White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 66,
+              "max_value": 80,
+              "name": "Red + Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 81,
+              "max_value": 95,
+              "name": "Red + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 96,
+              "max_value": 110,
+              "name": "Red + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 111,
+              "max_value": 125,
+              "name": "Green + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 126,
+              "max_value": 140,
+              "name": "Green + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 141,
+              "max_value": 155,
+              "name": "Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 156,
+              "max_value": 170,
+              "name": "Red + Green + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 171,
+              "max_value": 185,
+              "name": "Red + Green + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 186,
+              "max_value": 200,
+              "name": "Green + Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 201,
+              "max_value": 215,
+              "name": "Red + Green + Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 216,
+              "max_value": 229,
+              "name": "Color change slow",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 230,
+              "max_value": 255,
+              "name": "Color change fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Strobe",
+          "channel_type": "shutter_strobe_slow_fast",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 5,
+              "name": "Strobe off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 6,
+              "max_value": 255,
+              "name": "Strobe slow to fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Pattern Rotation",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 127,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": true,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 127,
+              "name": "Manual rotation position",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": true,
+              "is_auto": false
+            },
+            {
+              "min_value": 128,
+              "max_value": 255,
+              "name": "Auto rotation slow to fast",
+              "description": "",
+              "usable": false,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": true
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "LED Array Patterns",
+          "channel_type": "effect_pattern",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 9,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": true,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 10,
+              "max_value": 19,
+              "name": "Pattern 1",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 20,
+              "max_value": 29,
+              "name": "Pattern 2",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 30,
+              "max_value": 39,
+              "name": "Pattern 3",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 40,
+              "max_value": 49,
+              "name": "Pattern 4",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 50,
+              "max_value": 59,
+              "name": "Pattern 5",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 60,
+              "max_value": 69,
+              "name": "Pattern 6",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 70,
+              "max_value": 79,
+              "name": "Pattern 7",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 80,
+              "max_value": 89,
+              "name": "Pattern 8",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 90,
+              "max_value": 99,
+              "name": "Pattern 9",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 100,
+              "max_value": 109,
+              "name": "Pattern 10",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 110,
+              "max_value": 119,
+              "name": "Pattern 11",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 120,
+              "max_value": 129,
+              "name": "Pattern 12",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 130,
+              "max_value": 139,
+              "name": "Pattern 13",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 140,
+              "max_value": 149,
+              "name": "Pattern 14",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 150,
+              "max_value": 159,
+              "name": "Pattern 15",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 160,
+              "max_value": 169,
+              "name": "Pattern 16",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 170,
+              "max_value": 179,
+              "name": "Pattern 17",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 180,
+              "max_value": 255,
+              "name": "Pattern 18 (all on)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "color_macro",
+      "dual_color_map": [],
+      "pan_max_degrees": 540,
+      "tilt_max_degrees": 270
+    },
+    {
+      "name": "Lixada DJ Projektor 7ch",
+      "manufacturer": "Lixada",
+      "model": "DJ Projektor",
+      "fixture_type": "effect",
+      "channel_count": 7,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Master Dimmer",
+          "channel_type": "intensity_master_dimmer",
+          "default_value": 255,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Dimmer 0-100%",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Red/Yellow",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Red/Yellow intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Green/Violet",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Green/Violet intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "Blue/White",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Blue/White intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 5,
+          "name": "Strobe",
+          "channel_type": "shutter_strobe_slow_fast",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Strobe off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Strobe slow to fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 6,
+          "name": "Motor Position",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 135,
+              "name": "Manual position",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": true,
+              "is_auto": false
+            },
+            {
+              "min_value": 136,
+              "max_value": 255,
+              "name": "Auto motion",
+              "description": "",
+              "usable": false,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": true
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 7,
+          "name": "Color Presets",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Manual control (no preset)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Color presets",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "color_mixing": "dual_color_channels",
+      "dual_color_map": [
+        {
+          "primary_hue": 0.0,
+          "secondary_hue": 0.12
+        },
+        {
+          "primary_hue": 0.33,
+          "secondary_hue": 0.83
+        },
+        {
+          "primary_hue": 0.67,
+          "secondary_hue": null
+        }
+      ],
+      "pan_max_degrees": 540,
+      "tilt_max_degrees": 270
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "7354e9ea-238f-48b8-8145-5679a3ebfbfb",
+      "name": "New Fixture 1",
+      "profile_name": "Showtec Techno Derby 4ch",
+      "start_channel": 1,
+      "position": 0,
+      "intensity_scale": 1.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Color",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 5,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 6,
+              "max_value": 20,
+              "name": "Red",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 21,
+              "max_value": 35,
+              "name": "Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 36,
+              "max_value": 50,
+              "name": "Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 51,
+              "max_value": 65,
+              "name": "White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 66,
+              "max_value": 80,
+              "name": "Red + Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 81,
+              "max_value": 95,
+              "name": "Red + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 96,
+              "max_value": 110,
+              "name": "Red + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 111,
+              "max_value": 125,
+              "name": "Green + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 126,
+              "max_value": 140,
+              "name": "Green + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 141,
+              "max_value": 155,
+              "name": "Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 156,
+              "max_value": 170,
+              "name": "Red + Green + Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 171,
+              "max_value": 185,
+              "name": "Red + Green + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 186,
+              "max_value": 200,
+              "name": "Green + Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 201,
+              "max_value": 215,
+              "name": "Red + Green + Blue + White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 216,
+              "max_value": 229,
+              "name": "Color change slow",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 230,
+              "max_value": 255,
+              "name": "Color change fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Strobe",
+          "channel_type": "shutter_strobe_slow_fast",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 5,
+              "name": "Strobe off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 6,
+              "max_value": 255,
+              "name": "Strobe slow to fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Pattern Rotation",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 127,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": true,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 127,
+              "name": "Manual rotation position",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": true,
+              "is_auto": false
+            },
+            {
+              "min_value": 128,
+              "max_value": 255,
+              "name": "Auto rotation slow to fast",
+              "description": "",
+              "usable": false,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": true
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "LED Array Patterns",
+          "channel_type": "effect_pattern",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 9,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": true,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 10,
+              "max_value": 19,
+              "name": "Pattern 1",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 20,
+              "max_value": 29,
+              "name": "Pattern 2",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 30,
+              "max_value": 39,
+              "name": "Pattern 3",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 40,
+              "max_value": 49,
+              "name": "Pattern 4",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 50,
+              "max_value": 59,
+              "name": "Pattern 5",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 60,
+              "max_value": 69,
+              "name": "Pattern 6",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 70,
+              "max_value": 79,
+              "name": "Pattern 7",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 80,
+              "max_value": 89,
+              "name": "Pattern 8",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 90,
+              "max_value": 99,
+              "name": "Pattern 9",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 100,
+              "max_value": 109,
+              "name": "Pattern 10",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 110,
+              "max_value": 119,
+              "name": "Pattern 11",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 120,
+              "max_value": 129,
+              "name": "Pattern 12",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 130,
+              "max_value": 139,
+              "name": "Pattern 13",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 140,
+              "max_value": 149,
+              "name": "Pattern 14",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 150,
+              "max_value": 159,
+              "name": "Pattern 15",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 160,
+              "max_value": 169,
+              "name": "Pattern 16",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 170,
+              "max_value": 179,
+              "name": "Pattern 17",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 180,
+              "max_value": 255,
+              "name": "Pattern 18 (all on)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "802aab28-2e36-42e0-aadd-df6e0f44752b",
+      "name": "New Fixture 2",
+      "profile_name": "Purelight Muvy WashQ 14ch",
+      "start_channel": 5,
+      "position": 1,
+      "intensity_scale": 1.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Pan",
+          "channel_type": "position_pan",
+          "default_value": 128,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Pan Fine",
+          "channel_type": "position_pan_fine",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Tilt",
+          "channel_type": "position_tilt",
+          "default_value": 128,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "Tilt Fine",
+          "channel_type": "position_tilt_fine",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 5,
+          "name": "XY Speed",
+          "channel_type": "speed_pan_tilt_fast_slow",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 6,
+          "name": "Dimmer/Shutter",
+          "channel_type": "intensity_master_dimmer",
+          "default_value": 255,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 7,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 8,
+              "max_value": 134,
+              "name": "Master Dimmer",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 135,
+              "max_value": 239,
+              "name": "Strobe (slow to fast)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 240,
+              "max_value": 255,
+              "name": "Open",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 7,
+          "name": "Red",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 8,
+          "name": "Green",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 9,
+          "name": "Blue",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 10,
+          "name": "White",
+          "channel_type": "intensity_white",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 11,
+          "name": "Color Macro",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 8,
+              "name": "No function (manual RGB)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 9,
+              "max_value": 20,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 21,
+              "max_value": 34,
+              "name": "Red",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 35,
+              "max_value": 49,
+              "name": "Green",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 50,
+              "max_value": 63,
+              "name": "Blue",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 64,
+              "max_value": 77,
+              "name": "White",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 78,
+              "max_value": 91,
+              "name": "RGB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 92,
+              "max_value": 105,
+              "name": "RB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 106,
+              "max_value": 119,
+              "name": "RG",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 120,
+              "max_value": 133,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 134,
+              "max_value": 147,
+              "name": "RG",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 148,
+              "max_value": 161,
+              "name": "RGB",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 162,
+              "max_value": 189,
+              "name": "RGBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 190,
+              "max_value": 201,
+              "name": "RBW",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 202,
+              "max_value": 217,
+              "name": "Warm White (RGBW Mix)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 218,
+              "max_value": 232,
+              "name": "Cool White (RGBW Mix)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 233,
+              "max_value": 255,
+              "name": "Macro Color (speed via Ch12)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 12,
+          "name": "Color Speed",
+          "channel_type": "effect_speed",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [],
+          "enabled": true
+        },
+        {
+          "offset": 13,
+          "name": "Macro P/T/M",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": 1,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Manual operation",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Movement patterns and color change",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 14,
+          "name": "Reset",
+          "channel_type": "maintenance",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 249,
+              "name": "No function",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 250,
+              "max_value": 255,
+              "name": "Reset (hold 3+ sec)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "a9f88134-395b-404e-82ae-b1f273f601fd",
+      "name": "New Fixture 3",
+      "profile_name": "Lixada DJ Projektor 7ch",
+      "start_channel": 19,
+      "position": 2,
+      "intensity_scale": 1.0,
+      "pan_min": 0,
+      "pan_max": 255,
+      "tilt_min": 0,
+      "tilt_max": 255,
+      "channels": [
+        {
+          "offset": 1,
+          "name": "Master Dimmer",
+          "channel_type": "intensity_master_dimmer",
+          "default_value": 255,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Dimmer 0-100%",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 2,
+          "name": "Red/Yellow",
+          "channel_type": "intensity_red",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Red/Yellow intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 3,
+          "name": "Green/Violet",
+          "channel_type": "intensity_green",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Green/Violet intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 4,
+          "name": "Blue/White",
+          "channel_type": "intensity_blue",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Blue/White intensity",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 5,
+          "name": "Strobe",
+          "channel_type": "shutter_strobe_slow_fast",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Strobe off",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Strobe slow to fast",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 6,
+          "name": "Motor Position",
+          "channel_type": "effect",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 135,
+              "name": "Manual position",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": true,
+              "is_auto": false
+            },
+            {
+              "min_value": 136,
+              "max_value": 255,
+              "name": "Auto motion",
+              "description": "",
+              "usable": false,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": true
+            }
+          ],
+          "enabled": true
+        },
+        {
+          "offset": 7,
+          "name": "Color Presets",
+          "channel_type": "color_macro",
+          "default_value": 0,
+          "fixed_value": null,
+          "min_value": 0,
+          "max_value": 255,
+          "capabilities": [
+            {
+              "min_value": 0,
+              "max_value": 0,
+              "name": "Manual control (no preset)",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            },
+            {
+              "min_value": 1,
+              "max_value": 255,
+              "name": "Color presets",
+              "description": "",
+              "usable": true,
+              "is_off": false,
+              "is_manual": false,
+              "is_auto": false
+            }
+          ],
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

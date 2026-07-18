@@ -19,3 +19,4 @@ pub mod dmx;
 pub mod effects;
 pub mod media;
 pub mod proto;
+mod timing;

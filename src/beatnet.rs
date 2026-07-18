@@ -7,7 +7,7 @@ use std::{
 use candle_core::{DType, Device, Shape};
 use candle_nn::VarBuilder;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use realfft::{RealFftPlanner, RealToComplex};
+use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 use thiserror::Error;
 
 const SAMPLE_RATE: usize = 22_050;
@@ -18,6 +18,7 @@ const FEATURE_SIZE: usize = FEATURE_BANDS * 2;
 const HIDDEN_SIZE: usize = 150;
 const LSTM_GATES: usize = HIDDEN_SIZE * 4;
 const LSTM_LAYERS: usize = 4;
+const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum BeatNetError {
@@ -127,6 +128,9 @@ struct FeatureExtractor {
     window: Vec<f32>,
     filters: Vec<Filter>,
     fft: std::sync::Arc<dyn RealToComplex<f32>>,
+    fft_input: Vec<f32>,
+    fft_output: Vec<Complex<f32>>,
+    magnitudes: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -145,6 +149,9 @@ impl FeatureExtractor {
                 filters.len()
             )));
         }
+        let fft = planner.plan_fft_forward(WINDOW_SIZE);
+        let fft_input = fft.make_input_vec();
+        let fft_output = fft.make_output_vec();
         Ok(Self {
             samples: VecDeque::with_capacity(WINDOW_SIZE + HOP_SIZE),
             samples_since_frame: 0,
@@ -156,12 +163,15 @@ impl FeatureExtractor {
                 })
                 .collect(),
             filters,
-            fft: planner.plan_fft_forward(WINDOW_SIZE),
+            fft,
+            fft_input,
+            fft_output,
+            magnitudes: vec![0.0; WINDOW_SIZE / 2],
         })
     }
 
     fn push(&mut self, samples: &[f32]) -> Result<Vec<[f32; FEATURE_SIZE]>, BeatNetError> {
-        let mut frames = Vec::new();
+        let mut frames = Vec::with_capacity(samples.len() / HOP_SIZE + 1);
         for &sample in samples {
             self.samples.push_back(sample);
             if self.samples.len() > WINDOW_SIZE {
@@ -177,29 +187,28 @@ impl FeatureExtractor {
     }
 
     fn extract_frame(&mut self) -> Result<[f32; FEATURE_SIZE], BeatNetError> {
-        let mut input: Vec<f32> = self
-            .samples
-            .iter()
+        for ((input, sample), window) in self
+            .fft_input
+            .iter_mut()
+            .zip(&self.samples)
             .zip(&self.window)
-            .map(|(sample, window)| sample * window)
-            .collect();
-        let mut output = self.fft.make_output_vec();
+        {
+            *input = sample * window;
+        }
         self.fft
-            .process(&mut input, &mut output)
+            .process(&mut self.fft_input, &mut self.fft_output)
             .map_err(|error| BeatNetError::FeatureExtraction(error.to_string()))?;
         // madmom excludes the Nyquist bin for an even-sized real FFT.
-        let magnitudes: Vec<f32> = output
-            .iter()
-            .take(WINDOW_SIZE / 2)
-            .map(|value| value.norm())
-            .collect();
+        for (magnitude, value) in self.magnitudes.iter_mut().zip(&self.fft_output) {
+            *magnitude = value.norm();
+        }
         let mut log_bands = [0.0_f32; FEATURE_BANDS];
         for (index, filter) in self.filters.iter().enumerate() {
             let filtered = filter
                 .weights
                 .iter()
                 .enumerate()
-                .map(|(offset, weight)| magnitudes[filter.start + offset] * weight)
+                .map(|(offset, weight)| self.magnitudes[filter.start + offset] * weight)
                 .sum::<f32>();
             log_bands[index] = (filtered + 1.0).log10();
         }
@@ -291,6 +300,15 @@ struct LstmWeights {
 
 impl BeatNetNetwork {
     fn load(path: &Path) -> Result<Self, BeatNetError> {
+        let checkpoint_size = path
+            .metadata()
+            .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?
+            .len();
+        if checkpoint_size > MAX_CHECKPOINT_BYTES {
+            return Err(BeatNetError::InvalidCheckpoint(format!(
+                "checkpoint is {checkpoint_size} bytes; maximum supported size is {MAX_CHECKPOINT_BYTES} bytes"
+            )));
+        }
         let builder = VarBuilder::from_pth(path, DType::F32, &Device::Cpu)
             .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
         let mut lstm = Vec::with_capacity(LSTM_LAYERS);
@@ -333,7 +351,7 @@ impl BeatNetNetwork {
     fn infer(&mut self, features: &[f32; FEATURE_SIZE]) -> [f32; 3] {
         let conv_length = FEATURE_SIZE - 10 + 1;
         let pooled_length = conv_length / 2;
-        let mut pooled = vec![0.0_f32; pooled_length * 2];
+        let mut pooled = [0.0_f32; 278];
         for channel in 0..2 {
             for output in 0..pooled_length {
                 let conv = |position: usize| {
@@ -350,10 +368,11 @@ impl BeatNetNetwork {
             }
         }
 
-        let mut current = dense(&pooled, &self.input_weight, &self.input_bias, HIDDEN_SIZE);
+        let mut current = [0.0_f32; HIDDEN_SIZE];
+        dense_into(&pooled, &self.input_weight, &self.input_bias, &mut current);
         for layer in 0..LSTM_LAYERS {
             let weights = &self.lstm[layer];
-            let mut gates = vec![0.0_f32; LSTM_GATES];
+            let mut gates = [0.0_f32; LSTM_GATES];
             for (gate, value) in gates.iter_mut().enumerate() {
                 let input_sum = dot_row(&weights.input, gate, HIDDEN_SIZE, &current);
                 let hidden_sum =
@@ -363,8 +382,8 @@ impl BeatNetNetwork {
                     + weights.input_bias[gate]
                     + weights.recurrent_bias[gate];
             }
-            let mut next_hidden = vec![0.0; HIDDEN_SIZE];
-            let mut next_cell = vec![0.0; HIDDEN_SIZE];
+            let mut next_hidden = [0.0; HIDDEN_SIZE];
+            let mut next_cell = [0.0; HIDDEN_SIZE];
             for index in 0..HIDDEN_SIZE {
                 let input_gate = sigmoid(gates[index]);
                 let forget_gate = sigmoid(gates[HIDDEN_SIZE + index]);
@@ -373,11 +392,17 @@ impl BeatNetNetwork {
                 next_cell[index] = forget_gate * self.cell[layer][index] + input_gate * candidate;
                 next_hidden[index] = output_gate * next_cell[index].tanh();
             }
-            self.cell[layer] = next_cell;
-            self.hidden[layer] = next_hidden.clone();
+            self.cell[layer].copy_from_slice(&next_cell);
+            self.hidden[layer].copy_from_slice(&next_hidden);
             current = next_hidden;
         }
-        let logits = dense(&current, &self.output_weight, &self.output_bias, 3);
+        let mut logits = [0.0; 3];
+        dense_into(
+            &current,
+            &self.output_weight,
+            &self.output_bias,
+            &mut logits,
+        );
         softmax3([logits[0], logits[1], logits[2]])
     }
 
@@ -394,16 +419,22 @@ fn load_tensor<S: Into<Shape>>(
     shape: S,
     name: &str,
 ) -> Result<Vec<f32>, BeatNetError> {
-    builder
+    let values = builder
         .get(shape, name)
         .and_then(|tensor| tensor.flatten_all()?.to_vec1::<f32>())
-        .map_err(|error| BeatNetError::InvalidCheckpoint(format!("{name}: {error}")))
+        .map_err(|error| BeatNetError::InvalidCheckpoint(format!("{name}: {error}")))?;
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(BeatNetError::InvalidCheckpoint(format!(
+            "{name}: tensor contains a non-finite value"
+        )));
+    }
+    Ok(values)
 }
 
-fn dense(input: &[f32], weight: &[f32], bias: &[f32], outputs: usize) -> Vec<f32> {
-    (0..outputs)
-        .map(|row| dot_row(weight, row, input.len(), input) + bias[row])
-        .collect()
+fn dense_into(input: &[f32], weight: &[f32], bias: &[f32], output: &mut [f32]) {
+    for (row, value) in output.iter_mut().enumerate() {
+        *value = dot_row(weight, row, input.len(), input) + bias[row];
+    }
 }
 
 fn dot_row(weight: &[f32], row: usize, width: usize, input: &[f32]) -> f32 {

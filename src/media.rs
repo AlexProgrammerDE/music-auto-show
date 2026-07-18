@@ -1,8 +1,11 @@
 //! Cross-platform now-playing metadata and album-art color extraction.
 
-use std::{collections::HashMap, fmt::Write, fs, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Write, fs, io::Cursor, sync::Arc, time::Duration};
 
-use image::{DynamicImage, ExtendedColorType, codecs::jpeg::JpegEncoder, imageops::FilterType};
+use image::{
+    DynamicImage, ExtendedColorType, ImageReader, Limits, codecs::jpeg::JpegEncoder,
+    imageops::FilterType,
+};
 use nowhear::{Artwork, MediaSource, MediaSourceBuilder, PlaybackState, PlayerInfo};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
@@ -14,6 +17,8 @@ use crate::proto::v1::{MediaInfo, RgbColor};
 
 const ARTWORK_MAX_EDGE: u32 = 256;
 const ARTWORK_JPEG_QUALITY: u8 = 85;
+const ARTWORK_MAX_SOURCE_EDGE: u32 = 8_192;
+const ARTWORK_MAX_DECODE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 struct ArtworkImage {
@@ -201,7 +206,15 @@ fn read_artwork(artwork: &Artwork) -> Option<Vec<u8>> {
 }
 
 fn process_artwork(image_bytes: &[u8], color_count: usize) -> ProcessedArtwork {
-    let Ok(image) = image::load_from_memory(image_bytes) else {
+    let Ok(mut reader) = ImageReader::new(Cursor::new(image_bytes)).with_guessed_format() else {
+        return ProcessedArtwork::default();
+    };
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(ARTWORK_MAX_SOURCE_EDGE);
+    limits.max_image_height = Some(ARTWORK_MAX_SOURCE_EDGE);
+    limits.max_alloc = Some(ARTWORK_MAX_DECODE_BYTES);
+    reader.limits(limits);
+    let Ok(image) = reader.decode() else {
         return ProcessedArtwork::default();
     };
     let colors = extract_colors(&image, color_count);

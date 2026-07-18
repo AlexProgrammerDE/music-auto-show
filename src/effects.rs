@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     f32::consts::{PI, TAU},
-    time::Instant,
+    time::Duration,
 };
 
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::IndexedRandom};
@@ -15,7 +15,8 @@ use crate::{
     },
 };
 
-const FRAME_TIME: f32 = 0.025;
+const REFERENCE_FRAME_SECONDS: f32 = 0.025;
+const MAX_EFFECT_STEP_SECONDS: f32 = 0.1;
 const REFERENCE_TEMPO: f32 = 120.0;
 
 #[derive(Debug, Clone)]
@@ -32,7 +33,7 @@ pub struct EffectsEngine {
     sweep_phase: HashMap<String, f32>,
     sweep_direction: HashMap<String, f32>,
     wall_corner_index: HashMap<String, usize>,
-    started_at: Instant,
+    elapsed_seconds: f32,
     last_beat: u64,
     last_bar: u64,
     beats_since_move: u64,
@@ -62,7 +63,7 @@ impl Default for EffectsEngine {
             sweep_phase: HashMap::new(),
             sweep_direction: HashMap::new(),
             wall_corner_index: HashMap::new(),
-            started_at: Instant::now(),
+            elapsed_seconds: 0.0,
             last_beat: 0,
             last_bar: 0,
             beats_since_move: 0,
@@ -91,7 +92,12 @@ impl EffectsEngine {
         audio: &AudioAnalysis,
         album_colors: &[RgbColor],
         blackout: bool,
+        delta: Duration,
     ) -> EffectOutput {
+        let delta_seconds = delta
+            .as_secs_f32()
+            .clamp(f32::EPSILON, MAX_EFFECT_STEP_SECONDS);
+        self.elapsed_seconds += delta_seconds;
         self.ensure_fixtures(config);
         let universe_size = config
             .dmx
@@ -107,7 +113,7 @@ impl EffectsEngine {
             };
         }
 
-        let now = self.started_at.elapsed().as_secs_f32();
+        let now = self.elapsed_seconds;
         self.update_album_hues(album_colors);
         let beat_triggered = audio.estimated_beat != self.last_beat;
         let bar_triggered = audio.estimated_bar != self.last_bar;
@@ -121,17 +127,30 @@ impl EffectsEngine {
         if audio.energy < 0.01 && audio.tempo <= 0.0 {
             self.zero_states(config, false);
         } else {
-            self.apply_visualization(config, audio, beat_triggered, bar_triggered, now);
-            self.process_effect_fixtures(config, audio, beat_triggered, bar_triggered);
+            self.apply_visualization(
+                config,
+                audio,
+                beat_triggered,
+                bar_triggered,
+                now,
+                delta_seconds,
+            );
+            self.process_effect_fixtures(
+                config,
+                audio,
+                beat_triggered,
+                bar_triggered,
+                delta_seconds,
+            );
             if effects(config).movement_enabled {
-                self.apply_movement(config, audio, beat_triggered, bar_triggered);
+                self.apply_movement(config, audio, beat_triggered, bar_triggered, delta_seconds);
             }
             if effects(config).force_max_brightness {
                 self.apply_force_max_brightness(config);
             }
         }
 
-        self.apply_smoothing(config);
+        self.apply_smoothing(config, delta_seconds);
         let universe = self.map_universe(config, universe_size);
         EffectOutput {
             fixture_states: self.ordered_states(config),
@@ -181,11 +200,11 @@ impl EffectsEngine {
         beat: bool,
         bar: bool,
         now: f32,
+        delta_seconds: f32,
     ) {
-        match VisualizationMode::try_from(effects(config).mode).unwrap_or(VisualizationMode::Energy)
-        {
+        match config.visualization_mode() {
             VisualizationMode::Energy | VisualizationMode::Unspecified => {
-                self.energy_mode(config, audio, beat, bar, now)
+                self.energy_mode(config, audio, beat, bar, now, delta_seconds)
             }
             VisualizationMode::FrequencySplit => self.frequency_split_mode(config, audio, beat),
             VisualizationMode::BeatPulse => self.beat_pulse_mode(config, audio, beat),
@@ -203,6 +222,7 @@ impl EffectsEngine {
         beat: bool,
         bar: bool,
         now: f32,
+        delta_seconds: f32,
     ) {
         let settings = effects(config);
         if !self.album_hues.is_empty() {
@@ -220,7 +240,8 @@ impl EffectsEngine {
         } else if hue_diff < -0.5 {
             hue_diff += 1.0;
         }
-        self.current_hue = (self.current_hue + hue_diff * 0.1).rem_euclid(1.0);
+        self.current_hue = (self.current_hue + hue_diff * time_adjusted_factor(0.1, delta_seconds))
+            .rem_euclid(1.0);
 
         self.base_intensity = 0.3 + audio.energy * 0.5;
         if beat {
@@ -441,8 +462,9 @@ impl EffectsEngine {
         audio: &AudioAnalysis,
         beat: bool,
         _bar: bool,
+        delta_seconds: f32,
     ) {
-        self.update_rotation(config, audio, beat);
+        self.update_rotation(config, audio, beat, delta_seconds);
         let strobe = self.strobe_value(config, audio, beat);
         let pattern = self.strobe_effect_value(config, audio);
         let effect_rotation = self.preview_rotation(config);
@@ -485,19 +507,21 @@ impl EffectsEngine {
         }
     }
 
-    fn update_rotation(&mut self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn update_rotation(
+        &mut self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat: bool,
+        delta_seconds: f32,
+    ) {
         if audio.energy < 0.01 || audio.tempo <= 0.0 {
             self.rotation_phase = 0.0;
             self.smoothed_rotation = 0.0;
             return;
         }
-        let settings = effects(config);
-        let mode =
-            RotationMode::try_from(settings.rotation_mode).unwrap_or(RotationMode::ManualSlow);
-        let effect_mode = EffectFixtureMode::try_from(settings.effect_fixture_mode)
-            .unwrap_or(EffectFixtureMode::Balanced);
-        let fps = config.dmx.as_ref().map_or(40, |dmx| dmx.fps.max(1));
-        let dt = 1.0 / fps as f32;
+        let mode = config.rotation_mode();
+        let effect_mode = config.effect_fixture_mode();
+        let dt = delta_seconds;
         let tempo_scale = (audio.tempo / REFERENCE_TEMPO).clamp(0.4, 1.8);
         let movement_scale = match effect_mode {
             EffectFixtureMode::StrobeOnly => 0.2,
@@ -547,7 +571,8 @@ impl EffectsEngine {
                 let phase_speed = 0.05 * scale + audio.energy * 0.15 + tempo_factor;
                 self.rotation_phase = (self.rotation_phase + dt * phase_speed * 10.0) % 1.0;
                 let target = 140.0 + audio.energy * 80.0 + tempo_factor * 20.0;
-                self.smoothed_rotation += (target - self.smoothed_rotation) * 0.02;
+                self.smoothed_rotation +=
+                    (target - self.smoothed_rotation) * time_adjusted_factor(0.02, delta_seconds);
             }
         }
     }
@@ -560,8 +585,7 @@ impl EffectsEngine {
         let Some(channel) = channel else {
             return self.smoothed_rotation.clamp(0.0, 255.0) as u32;
         };
-        let mode = RotationMode::try_from(effects(config).rotation_mode)
-            .unwrap_or(RotationMode::ManualSlow);
+        let mode = config.rotation_mode();
         let auto_mode = matches!(
             mode,
             RotationMode::AutoSlow
@@ -581,8 +605,7 @@ impl EffectsEngine {
     }
 
     fn preview_rotation(&self, config: &ValidatedShowConfig) -> f32 {
-        let mode = RotationMode::try_from(effects(config).rotation_mode)
-            .unwrap_or(RotationMode::ManualSlow);
+        let mode = config.rotation_mode();
         match mode {
             RotationMode::Off | RotationMode::Unspecified => 0.0,
             RotationMode::AutoSlow
@@ -596,8 +619,7 @@ impl EffectsEngine {
     }
 
     fn strobe_value(&self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) -> u32 {
-        let mode = EffectFixtureMode::try_from(effects(config).effect_fixture_mode)
-            .unwrap_or(EffectFixtureMode::Balanced);
+        let mode = config.effect_fixture_mode();
         if mode == EffectFixtureMode::MovementOnly {
             return 0;
         }
@@ -633,8 +655,7 @@ impl EffectsEngine {
         if !settings.strobe_effect_enabled {
             return 0;
         }
-        let mode = StrobeEffectMode::try_from(settings.strobe_effect_mode)
-            .unwrap_or(StrobeEffectMode::Auto);
+        let mode = config.strobe_effect_mode();
         let speed = settings.strobe_effect_speed;
         match mode {
             StrobeEffectMode::Off | StrobeEffectMode::Unspecified => 0,
@@ -700,13 +721,14 @@ impl EffectsEngine {
         audio: &AudioAnalysis,
         beat: bool,
         bar: bool,
+        delta_seconds: f32,
     ) {
         let settings = effects(config);
         let speed = settings.movement_speed;
         if speed <= 0.01 || audio.energy < 0.01 || audio.tempo <= 0.0 {
             return;
         }
-        let mode = MovementMode::try_from(settings.movement_mode).unwrap_or(MovementMode::Standard);
+        let mode = config.movement_mode();
         let total_fixtures = config.fixtures.len().max(1);
         if beat && mode == MovementMode::Chase {
             let chase = self
@@ -738,8 +760,9 @@ impl EffectsEngine {
                 has_pan,
                 has_tilt,
                 total_fixtures,
+                delta_seconds,
             );
-            self.interpolate_position(fixture, mode, speed, audio.tempo);
+            self.interpolate_position(fixture, mode, speed, audio.tempo, delta_seconds);
         }
     }
 
@@ -755,6 +778,7 @@ impl EffectsEngine {
         has_pan: bool,
         has_tilt: bool,
         total_fixtures: usize,
+        delta_seconds: f32,
     ) {
         let key = fixture_key(fixture);
         let pan_range = fixture.pan_max.saturating_sub(fixture.pan_min) as f32;
@@ -862,7 +886,7 @@ impl EffectsEngine {
                 let rate = 0.03 * speed * tempo;
                 let mut phase = self.sweep_phase.get(&key).copied().unwrap_or(0.0);
                 let mut direction = self.sweep_direction.get(&key).copied().unwrap_or(1.0);
-                phase += FRAME_TIME * rate * direction;
+                phase += delta_seconds * rate * direction;
                 if phase >= 1.0 {
                     phase = 1.0;
                     direction = -1.0
@@ -887,7 +911,7 @@ impl EffectsEngine {
                 }
                 if energy > 0.6 {
                     self.sweep_phase
-                        .insert(key, phase + FRAME_TIME * rate * 0.3);
+                        .insert(key, phase + delta_seconds * rate * 0.3);
                 }
             }
             MovementMode::Random => {
@@ -912,14 +936,14 @@ impl EffectsEngine {
             MovementMode::Circle => {
                 let rate = 0.08 * speed * tempo_scale(audio.tempo) * (0.8 + energy * 0.4);
                 let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + FRAME_TIME * rate * TAU;
+                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
                 phase %= TAU;
                 self.sweep_phase.insert(key.clone(), phase);
                 if beat {
                     self.sweep_direction.insert(key.clone(), 1.0);
                 }
                 let pulse = (self.sweep_direction.get(&key).copied().unwrap_or(0.0)
-                    - FRAME_TIME * 3.0)
+                    - delta_seconds * 3.0)
                     .max(0.0);
                 self.sweep_direction.insert(key.clone(), pulse);
                 let angle = phase + phase_offset * PI / 3.0;
@@ -940,7 +964,7 @@ impl EffectsEngine {
             MovementMode::Figure8 => {
                 let rate = 0.06 * speed * tempo_scale(audio.tempo) * (0.7 + energy * 0.4);
                 let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + FRAME_TIME * rate * TAU;
+                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
                 phase %= TAU;
                 self.sweep_phase.insert(key.clone(), phase);
                 let angle = phase + phase_offset * PI / 4.0;
@@ -960,7 +984,7 @@ impl EffectsEngine {
             MovementMode::Ballyhoo => {
                 let rate = 0.12 * speed * tempo_scale(audio.tempo) * (0.85 + energy * 0.3);
                 let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + FRAME_TIME * rate * TAU;
+                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
                 phase %= TAU;
                 let angle = phase + phase_offset * PI / 2.0;
                 let size = 0.85 * speed;
@@ -991,7 +1015,8 @@ impl EffectsEngine {
                     };
                     self.sweep_direction.insert(key.clone(), target);
                 }
-                amount += (target - amount) * 0.08 * speed * tempo_scale(audio.tempo);
+                amount += (target - amount)
+                    * time_adjusted_factor(0.08 * speed * tempo_scale(audio.tempo), delta_seconds);
                 self.sweep_phase.insert(key.clone(), amount);
                 let normalized = if total_fixtures > 1 {
                     fixture.position as f32 / (total_fixtures - 1) as f32 * 2.0 - 1.0
@@ -1100,8 +1125,9 @@ impl EffectsEngine {
                 if tilt_phase.abs() <= 1.0 {
                     tilt_phase = self.rng.random::<f32>() * TAU;
                 }
-                pan_phase = (pan_phase + FRAME_TIME * 0.18 * speed * scale * boost * TAU) % TAU;
-                tilt_phase = (tilt_phase + FRAME_TIME * 0.23 * speed * scale * boost * TAU) % TAU;
+                pan_phase = (pan_phase + delta_seconds * 0.18 * speed * scale * boost * TAU) % TAU;
+                tilt_phase =
+                    (tilt_phase + delta_seconds * 0.23 * speed * scale * boost * TAU) % TAU;
                 if beat {
                     let roll = self.rng.random::<f32>();
                     if bass > 0.7 && roll < 0.4 {
@@ -1151,6 +1177,7 @@ impl EffectsEngine {
         mode: MovementMode,
         speed: f32,
         tempo: f32,
+        delta_seconds: f32,
     ) {
         let (mut pan_rate, mut tilt_rate) = match mode {
             MovementMode::Subtle => (0.06, 0.06),
@@ -1168,8 +1195,8 @@ impl EffectsEngine {
             MovementMode::Crazy => (0.55, 0.55),
         };
         let multiplier = tempo_scale(tempo) * (0.2 + speed * 0.8);
-        pan_rate *= multiplier;
-        tilt_rate *= multiplier;
+        pan_rate = time_adjusted_factor(pan_rate * multiplier, delta_seconds);
+        tilt_rate = time_adjusted_factor(tilt_rate * multiplier, delta_seconds);
         let key = fixture_key(fixture);
         let target_pan = self.target_pan.get(&key).copied().unwrap_or(128.0);
         let target_tilt = self.target_tilt.get(&key).copied().unwrap_or(128.0);
@@ -1221,9 +1248,10 @@ impl EffectsEngine {
         }
     }
 
-    fn apply_smoothing(&mut self, config: &ValidatedShowConfig) {
+    fn apply_smoothing(&mut self, config: &ValidatedShowConfig, delta_seconds: f32) {
         let factor = effects(config).smooth_factor.clamp(0.0, 1.0);
-        let inverse = 1.0 - factor;
+        let blend = time_adjusted_factor(1.0 - factor, delta_seconds);
+        let retained = 1.0 - blend;
         for fixture in &config.fixtures {
             let key = fixture_key(fixture);
             let Some(current) = self.states.get(&key) else {
@@ -1235,7 +1263,7 @@ impl EffectsEngine {
             macro_rules! smooth {
                 ($field:ident) => {
                     smoothed.$field =
-                        (smoothed.$field as f32 * factor + current.$field as f32 * inverse) as u32;
+                        (smoothed.$field as f32 * retained + current.$field as f32 * blend) as u32;
                 };
             }
             smooth!(red);
@@ -1387,6 +1415,17 @@ fn tempo_scale(tempo: f32) -> f32 {
     } else {
         (tempo / REFERENCE_TEMPO).clamp(0.4, 1.8)
     }
+}
+
+fn time_adjusted_factor(reference_factor: f32, delta_seconds: f32) -> f32 {
+    let reference_factor = reference_factor.clamp(0.0, 1.0);
+    if reference_factor == 0.0 || delta_seconds <= 0.0 {
+        return 0.0;
+    }
+    if reference_factor == 1.0 {
+        return 1.0;
+    }
+    1.0 - (1.0 - reference_factor).powf(delta_seconds / REFERENCE_FRAME_SECONDS)
 }
 
 fn set_hsv(state: &mut FixtureState, hue: f32, saturation: f32, value: f32) {
@@ -1721,8 +1760,13 @@ mod tests {
     #[test]
     fn blackout_zeroes_the_entire_universe() {
         let config = validated(default_show_config(true));
-        let output =
-            EffectsEngine::default().process(&config, &AudioAnalysis::default(), &[], true);
+        let output = EffectsEngine::default().process(
+            &config,
+            &AudioAnalysis::default(),
+            &[],
+            true,
+            Duration::from_millis(25),
+        );
         assert_eq!(output.universe, vec![0; 512]);
         assert!(output.fixture_states.iter().all(|state| state.dimmer == 0));
     }
@@ -1776,7 +1820,7 @@ mod tests {
             .expect("fixture state")
             .effect_rotation = 0.75;
 
-        engine.apply_smoothing(&config);
+        engine.apply_smoothing(&config, REFERENCE_FRAME_SECONDS);
 
         approx::assert_abs_diff_eq!(
             engine
@@ -1828,7 +1872,13 @@ mod tests {
                         estimated_bar: beat / 4,
                         ..Default::default()
                     };
-                    output = Some(engine.process(&config, &audio, &[], false));
+                    output = Some(engine.process(
+                        &config,
+                        &audio,
+                        &[],
+                        false,
+                        Duration::from_millis(25),
+                    ));
                 }
                 let output = output.expect("effect output should be produced");
                 assert_eq!(output.universe.len(), 512);
@@ -1859,7 +1909,43 @@ mod tests {
             ..Default::default()
         };
         let config = validated(config);
-        let output = EffectsEngine::default().process(&config, &audio, &[], false);
+        let output = EffectsEngine::default().process(
+            &config,
+            &audio,
+            &[],
+            false,
+            Duration::from_millis(25),
+        );
         assert_eq!(output.universe[0], 100);
+    }
+
+    #[test]
+    fn movement_phase_is_stable_across_output_rates() {
+        fn phase_after_one_second(fps: u32) -> f32 {
+            let mut config = default_show_config(true);
+            let settings = config.effects.as_mut().expect("effects configuration");
+            settings.movement_enabled = true;
+            settings.movement_mode = MovementMode::Circle as i32;
+            let config = validated(config);
+            let fixture = fixture_key(&config.fixtures[0]);
+            let audio = AudioAnalysis {
+                energy: 0.8,
+                tempo: 120.0,
+                estimated_beat: 1,
+                ..Default::default()
+            };
+            let mut engine = EffectsEngine::default();
+            let delta = Duration::from_secs_f64(1.0 / f64::from(fps));
+            for _ in 0..fps {
+                engine.process(&config, &audio, &[], false, delta);
+            }
+            engine.sweep_phase[&fixture]
+        }
+
+        approx::assert_abs_diff_eq!(
+            phase_after_one_second(20),
+            phase_after_one_second(40),
+            epsilon = 0.0001
+        );
     }
 }
