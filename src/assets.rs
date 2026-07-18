@@ -44,5 +44,11 @@ fn asset_response(path: &str, bytes: Vec<u8>) -> Response {
         .header(header::CONTENT_TYPE, mime.as_ref())
         .header(header::CACHE_CONTROL, cache_control)
         .body(Body::from(bytes))
-        .expect("static asset response is valid")
+        .unwrap_or_else(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not construct static asset response: {error}"),
+            )
+                .into_response()
+        })
 }

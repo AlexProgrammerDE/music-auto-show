@@ -3,8 +3,8 @@ use std::{
     str::FromStr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
     time::{Duration, Instant},
@@ -26,17 +26,26 @@ const ANALYSIS_RATE: u32 = 44_100;
 const FFT_SIZE: usize = 1_024;
 const MAX_RECORDING_SECONDS: f32 = 30.0;
 const PIPEWIRE_DEFAULT_SINK_ID: &str = "pipewire:sink_default";
+const CAPTURE_QUEUE_DEPTH: usize = 32;
+const CAPTURE_BUFFER_CAPACITY: usize = 8_192;
 
 pub struct AudioCapture {
     receiver: Receiver<Vec<f32>>,
+    available_buffers: SyncSender<Vec<f32>>,
     status: AudioRuntimeStatus,
     stream_error: Arc<Mutex<String>>,
+    dropped_sample_blocks: Arc<AtomicU64>,
     _guard: CaptureGuard,
 }
 
 impl AudioCapture {
     pub fn drain_samples(&self) -> Vec<f32> {
-        drain_queued_samples(&self.receiver)
+        let mut pending = Vec::new();
+        while let Ok(mut samples) = self.receiver.try_recv() {
+            pending.append(&mut samples);
+            let _ = self.available_buffers.try_send(samples);
+        }
+        pending
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -51,10 +60,12 @@ impl AudioCapture {
             status.running = false;
             status.last_error = error.clone();
         }
+        status.dropped_sample_blocks = self.dropped_sample_blocks.load(Ordering::Relaxed);
         status
     }
 }
 
+#[cfg(test)]
 fn drain_queued_samples(receiver: &Receiver<Vec<f32>>) -> Vec<f32> {
     let mut pending = Vec::new();
     while let Ok(mut samples) = receiver.try_recv() {
@@ -143,12 +154,29 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     let running_thread = Arc::clone(&running);
     let stream_error = Arc::new(Mutex::new(String::new()));
     let stream_error_thread = Arc::clone(&stream_error);
-    let (sender, receiver) = mpsc::sync_channel(32);
+    let (sender, receiver) = mpsc::sync_channel(CAPTURE_QUEUE_DEPTH);
+    let (available_buffers, reusable_buffers) = mpsc::sync_channel(CAPTURE_QUEUE_DEPTH);
+    for _ in 0..CAPTURE_QUEUE_DEPTH {
+        available_buffers
+            .send(Vec::with_capacity(CAPTURE_BUFFER_CAPACITY))
+            .map_err(|_| anyhow::anyhow!("failed to initialize audio capture buffers"))?;
+    }
+    let dropped_sample_blocks = Arc::new(AtomicU64::new(0));
+    let dropped_sample_blocks_thread = Arc::clone(&dropped_sample_blocks);
+    let buffer_recycler = available_buffers.clone();
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
         .name("cpal-audio-capture".into())
-        .spawn(
-            move || match build_cpal_stream(&config, mode, sender, stream_error_thread) {
+        .spawn(move || {
+            match build_cpal_stream(
+                &config,
+                mode,
+                sender,
+                reusable_buffers,
+                buffer_recycler,
+                stream_error_thread,
+                dropped_sample_blocks_thread,
+            ) {
                 Ok((stream, status)) => {
                     if ready_sender.send(Ok(status)).is_err() {
                         return;
@@ -161,8 +189,8 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
                 Err(error) => {
                     let _ = ready_sender.send(Err(format!("{error:#}")));
                 }
-            },
-        )?;
+            }
+        })?;
     let status = match ready_receiver.recv() {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
@@ -178,8 +206,10 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     };
     Ok(AudioCapture {
         receiver,
+        available_buffers,
         status,
         stream_error,
+        dropped_sample_blocks,
         _guard: CaptureGuard {
             running,
             thread: Some(thread),
@@ -191,7 +221,10 @@ fn build_cpal_stream(
     config: &AudioConfig,
     mode: AudioInputMode,
     sender: mpsc::SyncSender<Vec<f32>>,
+    reusable_buffers: Receiver<Vec<f32>>,
+    buffer_recycler: SyncSender<Vec<f32>>,
     stream_error: Arc<Mutex<String>>,
+    dropped_sample_blocks: Arc<AtomicU64>,
 ) -> Result<(cpal::Stream, AudioRuntimeStatus)> {
     let selection = select_capture_device(config, mode)?;
     let selected = selection.device;
@@ -206,14 +239,32 @@ fn build_cpal_stream(
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => selected.build_input_stream(
             stream_config,
-            move |data: &[f32], _| send_mono(data, channels, &sender, |sample| sample),
+            move |data: &[f32], _| {
+                send_mono(
+                    data,
+                    channels,
+                    &sender,
+                    &reusable_buffers,
+                    &buffer_recycler,
+                    &dropped_sample_blocks,
+                    |sample| sample,
+                )
+            },
             capture_error_callback(Arc::clone(&stream_error)),
             None,
         )?,
         cpal::SampleFormat::I16 => selected.build_input_stream(
             stream_config,
             move |data: &[i16], _| {
-                send_mono(data, channels, &sender, |sample| sample as f32 / 32_768.0)
+                send_mono(
+                    data,
+                    channels,
+                    &sender,
+                    &reusable_buffers,
+                    &buffer_recycler,
+                    &dropped_sample_blocks,
+                    |sample| sample as f32 / 32_768.0,
+                )
             },
             capture_error_callback(Arc::clone(&stream_error)),
             None,
@@ -221,9 +272,15 @@ fn build_cpal_stream(
         cpal::SampleFormat::U16 => selected.build_input_stream(
             stream_config,
             move |data: &[u16], _| {
-                send_mono(data, channels, &sender, |sample| {
-                    sample as f32 / 32_768.0 - 1.0
-                })
+                send_mono(
+                    data,
+                    channels,
+                    &sender,
+                    &reusable_buffers,
+                    &buffer_recycler,
+                    &dropped_sample_blocks,
+                    |sample| sample as f32 / 32_768.0 - 1.0,
+                )
             },
             capture_error_callback(Arc::clone(&stream_error)),
             None,
@@ -248,6 +305,7 @@ fn build_cpal_stream(
             configured_device_id: config.device_id.clone(),
             device_id: id,
             missing_device_id: selection.missing_device_id,
+            dropped_sample_blocks: 0,
         },
     ))
 }
@@ -434,13 +492,34 @@ fn send_mono<T: Copy>(
     data: &[T],
     channels: usize,
     sender: &mpsc::SyncSender<Vec<f32>>,
+    reusable_buffers: &Receiver<Vec<f32>>,
+    buffer_recycler: &SyncSender<Vec<f32>>,
+    dropped_sample_blocks: &AtomicU64,
     convert: impl Fn(T) -> f32,
 ) {
-    let mono = data
-        .chunks(channels.max(1))
-        .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len() as f32)
-        .collect();
-    let _ = sender.try_send(mono);
+    let Ok(mut mono) = reusable_buffers.try_recv() else {
+        dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let channels = channels.max(1);
+    let frames = data.len().div_ceil(channels);
+    if frames > mono.capacity() {
+        let _ = buffer_recycler.try_send(mono);
+        dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    mono.clear();
+    mono.extend(
+        data.chunks(channels)
+            .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len() as f32),
+    );
+    match sender.try_send(mono) {
+        Ok(()) => {}
+        Err(TrySendError::Full(mono) | TrySendError::Disconnected(mono)) => {
+            let _ = buffer_recycler.try_send(mono);
+            dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 pub struct AudioAnalyzer {
@@ -530,12 +609,29 @@ impl AudioAnalyzer {
         push_bounded(&mut self.high_history, high, 5);
 
         let resampled = self.resampler.process(samples);
-        let beat = self
+        let beat_result = self
             .beatnet
             .as_mut()
-            .and_then(|model| model.push_resampled_samples(&resampled).ok().flatten())
-            .unwrap_or_else(|| fallback_beat(&self.last_analysis));
-        self.beatnet_status.processing = self.beatnet.is_some();
+            .map(|model| model.push_resampled_samples(&resampled));
+        let beat = match beat_result {
+            Some(Ok(Some(beat))) => {
+                self.beatnet_status.processing = true;
+                beat
+            }
+            Some(Ok(None)) => {
+                self.beatnet_status.processing = true;
+                fallback_beat(&self.last_analysis)
+            }
+            Some(Err(error)) => {
+                self.beatnet_status.available = false;
+                self.beatnet_status.processing = false;
+                self.beatnet_status.status = "Inference failed".into();
+                self.beatnet_status.last_error = error.to_string();
+                self.beatnet = None;
+                fallback_beat(&self.last_analysis)
+            }
+            None => fallback_beat(&self.last_analysis),
+        };
         self.onset_history
             .push_back(beat.beat_activation.max(beat.downbeat_activation));
         if self.onset_history.len() > 64 {
@@ -620,7 +716,7 @@ impl AudioAnalyzer {
     pub fn start_recording(&mut self) -> bool {
         self.recording.start()
     }
-    pub fn stop_recording(&mut self) -> Recording {
+    pub fn stop_recording(&mut self) -> Result<Recording> {
         self.recording.stop()
     }
     pub fn clear_recording(&mut self) {
@@ -809,7 +905,9 @@ impl LinearResampler {
             self.position += self.ratio;
         }
         self.position -= input.len() as f64;
-        self.previous = *input.last().expect("non-empty input");
+        if let Some(&last) = input.last() {
+            self.previous = last;
+        }
         output
     }
 }
@@ -881,12 +979,12 @@ impl Recorder {
             error: String::new(),
         }
     }
-    fn stop(&mut self) -> Recording {
+    fn stop(&mut self) -> Result<Recording> {
         self.recording = false;
         let mut wav = Vec::new();
         {
             let cursor = std::io::Cursor::new(&mut wav);
-            if let Ok(mut writer) = hound::WavWriter::new(
+            let mut writer = hound::WavWriter::new(
                 cursor,
                 hound::WavSpec {
                     channels: 1,
@@ -894,17 +992,21 @@ impl Recorder {
                     bits_per_sample: 16,
                     sample_format: hound::SampleFormat::Int,
                 },
-            ) {
-                for sample in &self.samples {
-                    let _ = writer.write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
-                }
-                let _ = writer.finalize();
+            )
+            .context("failed to create diagnostic WAV")?;
+            for sample in &self.samples {
+                writer
+                    .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                    .context("failed to encode diagnostic WAV sample")?;
             }
+            writer
+                .finalize()
+                .context("failed to finalize diagnostic WAV")?;
         }
-        Recording {
+        Ok(Recording {
             status: Some(self.status()),
             wav,
-        }
+        })
     }
 }
 
@@ -971,11 +1073,81 @@ mod tests {
     }
 
     #[test]
+    fn capture_callback_reuses_preallocated_buffers() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (available, reusable) = mpsc::sync_channel(1);
+        available
+            .send(Vec::with_capacity(8))
+            .expect("capture buffer should queue");
+        let dropped = AtomicU64::new(0);
+
+        send_mono(
+            &[1.0_f32, 3.0, 5.0, 7.0],
+            2,
+            &sender,
+            &reusable,
+            &available,
+            &dropped,
+            |sample| sample,
+        );
+
+        assert_eq!(
+            receiver.recv().expect("mono buffer should queue"),
+            vec![2.0, 6.0]
+        );
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn capture_callback_counts_pool_exhaustion() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (available, reusable) = mpsc::sync_channel(1);
+        let dropped = AtomicU64::new(0);
+
+        send_mono(
+            &[1.0_f32, 2.0],
+            1,
+            &sender,
+            &reusable,
+            &available,
+            &dropped,
+            |sample| sample,
+        );
+
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn capture_callback_recycles_oversized_buffers() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (available, reusable) = mpsc::sync_channel(1);
+        available
+            .send(Vec::with_capacity(1))
+            .expect("capture buffer should queue");
+        let dropped = AtomicU64::new(0);
+
+        send_mono(
+            &[1.0_f32, 2.0],
+            1,
+            &sender,
+            &reusable,
+            &available,
+            &dropped,
+            |sample| sample,
+        );
+
+        assert!(receiver.try_recv().is_err());
+        assert!(reusable.try_recv().is_ok());
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn diagnostic_recording_is_a_valid_wav() {
         let mut recorder = Recorder::new(44_100);
         assert!(recorder.start());
         recorder.capture(&vec![0.25; 4_410]);
-        let recording = recorder.stop();
+        let recording = recorder.stop().expect("recording should encode");
         assert!(recording.wav.starts_with(b"RIFF"));
         approx::assert_abs_diff_eq!(
             recording.status.expect("status").duration_seconds,

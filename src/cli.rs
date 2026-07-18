@@ -85,7 +85,12 @@ mod tests {
         ])
         .expect("explicit CLI should parse");
 
-        assert_eq!(cli.listen, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(
+            cli.listen,
+            "0.0.0.0:8080"
+                .parse::<SocketAddr>()
+                .expect("explicit address should be valid")
+        );
         assert_eq!(cli.config, PathBuf::from("/tmp/show.json"));
         assert!(cli.simulate);
         assert_eq!(cli.shutdown_timeout(), Duration::from_secs(30));

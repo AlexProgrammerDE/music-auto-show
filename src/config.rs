@@ -1,7 +1,15 @@
-use std::{fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::Write,
+    ops::Deref,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Result as AnyResult, bail};
 use serde_json::{Map, Value};
+use tempfile::NamedTempFile;
+use thiserror::Error;
 
 use crate::proto::v1::{
     AudioConfig, AudioInputMode, ChannelCapability, ChannelConfig, DmxConfig, DualColorMapping,
@@ -9,38 +17,618 @@ use crate::proto::v1::{
     ShowConfig, StrobeEffectMode, VisualizationMode,
 };
 
-pub fn load(path: &Path, simulate: bool) -> Result<ShowConfig> {
-    if !path.exists() {
-        return Ok(default_show_config(simulate));
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("failed to {operation} {}: {source}", path.display())]
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid JSON: {0}")]
+    InvalidJson(#[source] serde_json::Error),
+    #[error("configuration does not match the show schema: {0}")]
+    InvalidSchema(#[source] serde_json::Error),
+    #[error("failed to serialize show configuration: {0}")]
+    Serialization(#[source] serde_json::Error),
+    #[error("{0}")]
+    Invalid(String),
+}
+
+impl ConfigError {
+    pub fn is_invalid_input(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidJson(_) | Self::InvalidSchema(_) | Self::Invalid(_)
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedShowConfig {
+    proto: ShowConfig,
+    audio: AudioConfig,
+    dmx: DmxConfig,
+    effects: EffectsConfig,
+}
+
+impl ValidatedShowConfig {
+    pub fn new(mut config: ShowConfig, simulate: bool) -> Result<Self, ConfigError> {
+        normalize_config(&mut config, simulate)
+            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+        let audio = config
+            .audio
+            .clone()
+            .ok_or_else(|| ConfigError::Invalid("audio configuration is missing".into()))?;
+        let dmx = config
+            .dmx
+            .clone()
+            .ok_or_else(|| ConfigError::Invalid("DMX configuration is missing".into()))?;
+        let effects = config
+            .effects
+            .ok_or_else(|| ConfigError::Invalid("effects configuration is missing".into()))?;
+        Ok(Self {
+            proto: config,
+            audio,
+            dmx,
+            effects,
+        })
     }
 
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("failed to read configuration from {}", path.display()))?;
-    parse_json(&contents, simulate)
-        .with_context(|| format!("invalid show configuration in {}", path.display()))
+    pub fn as_proto(&self) -> &ShowConfig {
+        &self.proto
+    }
+
+    pub fn into_proto(self) -> ShowConfig {
+        self.proto
+    }
+
+    pub fn audio(&self) -> &AudioConfig {
+        &self.audio
+    }
+
+    pub fn dmx(&self) -> &DmxConfig {
+        &self.dmx
+    }
+
+    pub fn effects(&self) -> &EffectsConfig {
+        &self.effects
+    }
 }
 
-pub fn parse_json(contents: &str, simulate: bool) -> Result<ShowConfig> {
-    let value: Value = serde_json::from_str(contents).context("invalid JSON")?;
+impl Deref for ValidatedShowConfig {
+    type Target = ShowConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.proto
+    }
+}
+
+pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigError> {
+    if !path.exists() {
+        return ValidatedShowConfig::new(default_show_config(simulate), simulate);
+    }
+
+    let contents = fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        operation: "read configuration from",
+        path: path.to_owned(),
+        source,
+    })?;
+    parse_json(&contents, simulate).map_err(|error| match error {
+        ConfigError::Invalid(message) => ConfigError::Invalid(format!(
+            "invalid show configuration in {}: {message}",
+            path.display()
+        )),
+        other => other,
+    })
+}
+
+pub fn parse_json(contents: &str, simulate: bool) -> Result<ValidatedShowConfig, ConfigError> {
+    let value: Value = serde_json::from_str(contents).map_err(ConfigError::InvalidJson)?;
     let migrated = migrate_legacy_config(value, simulate);
-    serde_json::from_value(migrated).context("configuration does not match the show schema")
+    reject_unknown_config_fields(&migrated)?;
+    let config = serde_json::from_value(migrated).map_err(ConfigError::InvalidSchema)?;
+    ValidatedShowConfig::new(config, simulate)
 }
 
-pub fn to_json(config: &ShowConfig) -> Result<String> {
-    serde_json::to_string_pretty(config).context("failed to serialize show configuration")
+pub fn to_json(config: &ValidatedShowConfig) -> Result<String, ConfigError> {
+    serde_json::to_string_pretty(config.as_proto()).map_err(ConfigError::Serialization)
 }
 
-pub fn save(path: &Path, config: &ShowConfig) -> Result<()> {
+pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError> {
     let parent = path
         .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
+        operation: "create configuration directory",
+        path: parent.to_owned(),
+        source,
+    })?;
     let json = to_json(config)?;
-    fs::write(path, format!("{json}\n"))
-        .with_context(|| format!("failed to save configuration to {}", path.display()))
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|source| ConfigError::Io {
+        operation: "create temporary configuration in",
+        path: parent.to_owned(),
+        source,
+    })?;
+    temporary
+        .write_all(format!("{json}\n").as_bytes())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|source| ConfigError::Io {
+            operation: "write configuration to",
+            path: path.to_owned(),
+            source,
+        })?;
+    temporary.persist(path).map_err(|error| ConfigError::Io {
+        operation: "atomically replace configuration at",
+        path: path.to_owned(),
+        source: error.error,
+    })?;
+    sync_directory(parent)
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<(), ConfigError> {
+    let directory = fs::File::open(path).map_err(|source| ConfigError::Io {
+        operation: "open configuration directory",
+        path: path.to_owned(),
+        source,
+    })?;
+    directory.sync_all().map_err(|source| ConfigError::Io {
+        operation: "flush configuration directory",
+        path: path.to_owned(),
+        source,
+    })
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), ConfigError> {
+    Ok(())
+}
+
+fn reject_unknown_config_fields(value: &Value) -> Result<(), ConfigError> {
+    let root = object_at(value, "configuration")?;
+    reject_unknown_keys(
+        root,
+        &["name", "dmx", "audio", "effects", "profiles", "fixtures"],
+        "configuration",
+    )?;
+    validate_optional_object(root, "dmx", &["port", "universe_size", "fps", "simulate"])?;
+    validate_optional_object(
+        root,
+        "audio",
+        &[
+            "mode",
+            "simulate",
+            "gain",
+            "beatnet_model_path",
+            "device_id",
+        ],
+    )?;
+    validate_optional_object(
+        root,
+        "effects",
+        &[
+            "mode",
+            "intensity",
+            "force_max_brightness",
+            "color_speed",
+            "beat_sensitivity",
+            "smooth_factor",
+            "strobe_on_drop",
+            "movement_enabled",
+            "movement_speed",
+            "movement_mode",
+            "effect_fixture_mode",
+            "rotation_mode",
+            "strobe_effect_enabled",
+            "strobe_effect_mode",
+            "strobe_effect_speed",
+        ],
+    )?;
+    validate_object_array(
+        root,
+        "profiles",
+        &[
+            "name",
+            "manufacturer",
+            "model",
+            "fixture_type",
+            "channel_count",
+            "channels",
+            "color_mixing",
+            "dual_color_map",
+            "pan_max_degrees",
+            "tilt_max_degrees",
+        ],
+        |profile, _| {
+            validate_object_array(profile, "channels", CHANNEL_KEYS, validate_channel)?;
+            validate_object_array(
+                profile,
+                "dual_color_map",
+                &["primary_hue", "secondary_hue"],
+                |_, _| Ok(()),
+            )?;
+            Ok(())
+        },
+    )?;
+    validate_object_array(
+        root,
+        "fixtures",
+        &[
+            "id",
+            "name",
+            "profile_name",
+            "start_channel",
+            "position",
+            "intensity_scale",
+            "pan_min",
+            "pan_max",
+            "tilt_min",
+            "tilt_max",
+            "channels",
+        ],
+        |fixture, _| validate_object_array(fixture, "channels", CHANNEL_KEYS, validate_channel),
+    )?;
+    Ok(())
+}
+
+const CHANNEL_KEYS: &[&str] = &[
+    "offset",
+    "name",
+    "channel_type",
+    "default_value",
+    "fixed_value",
+    "min_value",
+    "max_value",
+    "capabilities",
+    "enabled",
+];
+
+fn validate_channel(channel: &Map<String, Value>, _path: &str) -> Result<(), ConfigError> {
+    validate_object_array(
+        channel,
+        "capabilities",
+        &[
+            "min_value",
+            "max_value",
+            "name",
+            "description",
+            "usable",
+            "is_off",
+            "is_manual",
+            "is_auto",
+        ],
+        |_, _| Ok(()),
+    )
+}
+
+fn object_at<'a>(value: &'a Value, path: &str) -> Result<&'a Map<String, Value>, ConfigError> {
+    value
+        .as_object()
+        .ok_or_else(|| ConfigError::Invalid(format!("{path} must be a JSON object")))
+}
+
+fn reject_unknown_keys(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    path: &str,
+) -> Result<(), ConfigError> {
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(ConfigError::Invalid(format!(
+            "unknown field '{key}' in {path}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_optional_object(
+    parent: &Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+) -> Result<(), ConfigError> {
+    let Some(value) = parent.get(key) else {
+        return Ok(());
+    };
+    let object = object_at(value, key)?;
+    reject_unknown_keys(object, allowed, key)
+}
+
+fn validate_object_array(
+    parent: &Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    validate_nested: impl Fn(&Map<String, Value>, &str) -> Result<(), ConfigError>,
+) -> Result<(), ConfigError> {
+    let Some(value) = parent.get(key) else {
+        return Ok(());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| ConfigError::Invalid(format!("{key} must be a JSON array")))?;
+    for (index, value) in values.iter().enumerate() {
+        let path = format!("{key}[{index}]");
+        let object = object_at(value, &path)?;
+        reject_unknown_keys(object, allowed, &path)?;
+        validate_nested(object, &path)?;
+    }
+    Ok(())
+}
+
+fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<()> {
+    if config.name.trim().is_empty() {
+        config.name = "My Light Show".into();
+    }
+    let dmx = config.dmx.get_or_insert_with(Default::default);
+    if dmx.universe_size == 0 {
+        dmx.universe_size = 512;
+    }
+    if dmx.fps == 0 {
+        dmx.fps = 40;
+    }
+    if cli_simulate {
+        dmx.simulate = true;
+    }
+    crate::dmx::validate_config(dmx)?;
+
+    let audio = config.audio.get_or_insert_with(Default::default);
+    audio.mode = match AudioInputMode::try_from(audio.mode) {
+        Ok(AudioInputMode::Unspecified) => AudioInputMode::Auto as i32,
+        Ok(mode) => mode as i32,
+        Err(_) => bail!("audio input mode {} is invalid", audio.mode),
+    };
+    if audio.gain == 0.0 {
+        audio.gain = 1.0;
+    }
+    if audio.beatnet_model_path.trim().is_empty() {
+        audio.beatnet_model_path = "models/beatnet-plus.pt".into();
+    }
+    if !(0.1..=5.0).contains(&audio.gain) {
+        bail!("audio gain must be between 0.1 and 5.0");
+    }
+    if cli_simulate {
+        audio.simulate = true;
+    }
+
+    if config.effects.is_none() {
+        config.effects = default_show_config(cli_simulate).effects;
+    }
+    let effects = config
+        .effects
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("effects configuration is missing"))?;
+    effects.mode = normalized_enum(
+        effects.mode,
+        VisualizationMode::Unspecified as i32,
+        VisualizationMode::Energy as i32,
+        VisualizationMode::try_from,
+        "visualization mode",
+    )?;
+    effects.movement_mode = normalized_enum(
+        effects.movement_mode,
+        MovementMode::Unspecified as i32,
+        MovementMode::Standard as i32,
+        MovementMode::try_from,
+        "movement mode",
+    )?;
+    effects.effect_fixture_mode = normalized_enum(
+        effects.effect_fixture_mode,
+        EffectFixtureMode::Unspecified as i32,
+        EffectFixtureMode::Balanced as i32,
+        EffectFixtureMode::try_from,
+        "effect fixture mode",
+    )?;
+    effects.rotation_mode = normalized_enum(
+        effects.rotation_mode,
+        RotationMode::Unspecified as i32,
+        RotationMode::ManualSlow as i32,
+        RotationMode::try_from,
+        "rotation mode",
+    )?;
+    effects.strobe_effect_mode = normalized_enum(
+        effects.strobe_effect_mode,
+        StrobeEffectMode::Unspecified as i32,
+        StrobeEffectMode::Auto as i32,
+        StrobeEffectMode::try_from,
+        "strobe effect mode",
+    )?;
+    validate_range("effects intensity", effects.intensity, 0.0, 1.0)?;
+    validate_range("color speed", effects.color_speed, 0.05, 8.0)?;
+    validate_range("beat sensitivity", effects.beat_sensitivity, 0.0, 1.0)?;
+    validate_range("smooth factor", effects.smooth_factor, 0.0, 1.0)?;
+    validate_range("movement speed", effects.movement_speed, 0.05, 8.0)?;
+    validate_range(
+        "strobe effect speed",
+        effects.strobe_effect_speed,
+        0.05,
+        8.0,
+    )?;
+
+    let mut profiles = default_profiles();
+    for mut custom in std::mem::take(&mut config.profiles) {
+        custom.channel_count = u32::try_from(custom.channels.len())
+            .map_err(|_| anyhow::anyhow!("fixture profile has too many channels"))?;
+        if let Some(existing) = profiles
+            .iter_mut()
+            .find(|profile| profile.name == custom.name)
+        {
+            *existing = custom;
+        } else {
+            profiles.push(custom);
+        }
+    }
+    let mut profile_names = HashSet::new();
+    for profile in &profiles {
+        if profile.name.trim().is_empty() {
+            bail!("fixture profile has no name");
+        }
+        if !profile_names.insert(profile.name.to_lowercase()) {
+            bail!("fixture profile '{}' is used more than once", profile.name);
+        }
+        validate_channels(&profile.name, &profile.channels)?;
+        for mapping in &profile.dual_color_map {
+            if mapping
+                .primary_hue
+                .is_some_and(|hue| !hue.is_finite() || !(0.0..=1.0).contains(&hue))
+                || mapping
+                    .secondary_hue
+                    .is_some_and(|hue| !hue.is_finite() || !(0.0..=1.0).contains(&hue))
+            {
+                bail!(
+                    "fixture profile '{}' has an invalid color hue",
+                    profile.name
+                );
+            }
+        }
+    }
+    config.profiles = profiles;
+    let profile_channels: HashMap<_, _> = config
+        .profiles
+        .iter()
+        .map(|profile| (profile.name.clone(), profile.channels.clone()))
+        .collect();
+    let universe_size = config.dmx.as_ref().map_or(512, |dmx| dmx.universe_size);
+    let mut fixture_ids = HashSet::new();
+    let mut fixture_names = HashSet::new();
+    for (index, fixture) in config.fixtures.iter_mut().enumerate() {
+        if fixture.id.is_empty() {
+            fixture.id = stable_fixture_id(&fixture.name, fixture.start_channel, index);
+        }
+        if !fixture_ids.insert(fixture.id.clone()) {
+            bail!("fixture id '{}' is used more than once", fixture.id);
+        }
+        if fixture.name.trim().is_empty() {
+            bail!("fixture {} has no name", index + 1);
+        }
+        if !fixture_names.insert(fixture.name.trim().to_lowercase()) {
+            bail!("fixture name '{}' is used more than once", fixture.name);
+        }
+        if fixture.start_channel == 0 || fixture.start_channel > universe_size {
+            bail!("fixture '{}' has an invalid start channel", fixture.name);
+        }
+        if !fixture.intensity_scale.is_finite() || !(0.0..=1.0).contains(&fixture.intensity_scale) {
+            bail!(
+                "fixture '{}' intensity must be between 0 and 1",
+                fixture.name
+            );
+        }
+        if fixture.pan_min > fixture.pan_max || fixture.pan_max > 255 {
+            bail!("fixture '{}' has invalid pan limits", fixture.name);
+        }
+        if fixture.tilt_min > fixture.tilt_max || fixture.tilt_max > 255 {
+            bail!("fixture '{}' has invalid tilt limits", fixture.name);
+        }
+        let channels = if fixture.channels.is_empty() {
+            profile_channels.get(&fixture.profile_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fixture '{}' references unknown profile '{}'",
+                    fixture.name,
+                    fixture.profile_name
+                )
+            })?
+        } else {
+            validate_channels(&fixture.name, &fixture.channels)?;
+            &fixture.channels
+        };
+        let last_channel = fixture
+            .start_channel
+            .saturating_add(
+                channels
+                    .iter()
+                    .map(|channel| channel.offset)
+                    .max()
+                    .unwrap_or(1),
+            )
+            .saturating_sub(1);
+        if last_channel > universe_size {
+            bail!(
+                "fixture '{}' extends past DMX universe channel {}",
+                fixture.name,
+                universe_size
+            );
+        }
+    }
+    Ok(())
+}
+
+fn normalized_enum<T>(
+    value: i32,
+    unspecified: i32,
+    default: i32,
+    parse: impl Fn(i32) -> Result<T, prost::UnknownEnumValue>,
+    name: &str,
+) -> AnyResult<i32> {
+    if value == unspecified {
+        return Ok(default);
+    }
+    parse(value)
+        .map(|_| value)
+        .map_err(|_| anyhow::anyhow!("{name} {value} is invalid"))
+}
+
+fn validate_range(name: &str, value: f32, minimum: f32, maximum: f32) -> AnyResult<()> {
+    if !value.is_finite() || !(minimum..=maximum).contains(&value) {
+        bail!("{name} must be between {minimum} and {maximum}");
+    }
+    Ok(())
+}
+
+fn validate_channels(owner: &str, channels: &[ChannelConfig]) -> AnyResult<()> {
+    let mut offsets = HashSet::new();
+    for channel in channels {
+        if channel.offset == 0 || !offsets.insert(channel.offset) {
+            bail!(
+                "fixture or profile '{}' has an invalid or duplicate channel offset {}",
+                owner,
+                channel.offset
+            );
+        }
+        if channel.min_value > channel.max_value
+            || channel.max_value > 255
+            || channel.default_value > 255
+            || channel.fixed_value.is_some_and(|value| value > 255)
+        {
+            bail!(
+                "fixture or profile '{}' channel '{}' has values outside 0..=255",
+                owner,
+                channel.name
+            );
+        }
+        for capability in &channel.capabilities {
+            if capability.min_value > capability.max_value || capability.max_value > 255 {
+                bail!(
+                    "fixture or profile '{}' channel '{}' has an invalid capability range",
+                    owner,
+                    channel.name
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stable_fixture_id(name: &str, channel: u32, index: usize) -> String {
+    let slug: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "{}-{}-{}",
+        if slug.is_empty() { "fixture" } else { &slug },
+        channel,
+        index + 1
+    )
 }
 
 pub fn default_show_config(simulate: bool) -> ShowConfig {
@@ -575,7 +1163,7 @@ fn migrate_legacy_config(mut value: Value, simulate: bool) -> Value {
     if !root.contains_key("profiles") {
         root.insert(
             "profiles".into(),
-            serde_json::to_value(default_profiles()).expect("default profiles serialize"),
+            serde_json::to_value(default_profiles()).unwrap_or_default(),
         );
     }
     let fixtures = root
@@ -825,13 +1413,70 @@ mod tests {
 
     #[test]
     fn example_configuration_matches_the_rust_schema() {
-        let config = parse_json(include_str!("../example_config.json"), false).unwrap();
+        let config = parse_json(include_str!("../example_config.json"), false)
+            .expect("example configuration should parse");
         assert_eq!(config.name, "Example Light Show");
         assert_eq!(config.fixtures.len(), 2);
-        assert_eq!(
-            config.effects.unwrap().mode(),
-            VisualizationMode::RainbowWave
-        );
+        assert_eq!(config.effects().mode(), VisualizationMode::RainbowWave);
+    }
+
+    #[test]
+    fn rejects_unknown_configuration_fields() {
+        let mut value = serde_json::to_value(default_show_config(true))
+            .expect("default configuration should serialize");
+        value
+            .as_object_mut()
+            .expect("configuration should be an object")
+            .insert("intenisty".into(), Value::from(1));
+
+        let error = parse_json(
+            &serde_json::to_string(&value).expect("configuration should serialize"),
+            true,
+        )
+        .expect_err("unknown field should be rejected");
+
+        assert!(error.to_string().contains("unknown field 'intenisty'"));
+    }
+
+    #[test]
+    fn save_atomically_replaces_an_existing_configuration() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("config.json");
+        fs::write(&path, "truncated")
+            .expect("existing configuration placeholder should be written");
+        let mut raw = default_show_config(true);
+        raw.name = "Atomic replacement".into();
+        let config =
+            ValidatedShowConfig::new(raw, true).expect("replacement configuration should validate");
+
+        save(&path, &config).expect("configuration should be replaced");
+
+        let loaded = load(&path, true).expect("replacement configuration should load");
+        assert_eq!(loaded.name, "Atomic replacement");
+    }
+
+    #[test]
+    fn validation_preserves_explicit_zero_fixture_controls() {
+        let mut config = default_show_config(true);
+        config.fixtures[0].intensity_scale = 0.0;
+        config.fixtures[0].pan_min = 0;
+        config.fixtures[0].pan_max = 0;
+        config.fixtures[0].tilt_min = 0;
+        config.fixtures[0].tilt_max = 0;
+
+        let config = ValidatedShowConfig::new(config, true)
+            .expect("configuration with zero fixture controls should validate");
+        let fixture = &config.fixtures[0];
+        assert_eq!(fixture.intensity_scale, 0.0);
+        assert_eq!(fixture.pan_max, 0);
+        assert_eq!(fixture.tilt_max, 0);
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_fixture_names() {
+        let mut config = default_show_config(true);
+        config.fixtures[1].name = config.fixtures[0].name.to_uppercase();
+        assert!(ValidatedShowConfig::new(config, true).is_err());
     }
 
     #[test]
@@ -849,8 +1494,8 @@ mod tests {
                 ]
             }]
         });
-        let config: ShowConfig =
-            serde_json::from_value(migrate_legacy_config(legacy, false)).unwrap();
+        let config: ShowConfig = serde_json::from_value(migrate_legacy_config(legacy, false))
+            .expect("legacy configuration should migrate");
         let fixture = &config.fixtures[0];
         assert_eq!(fixture.intensity_scale, 0.0);
         assert_eq!(fixture.pan_max, 0);

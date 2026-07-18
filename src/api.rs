@@ -4,7 +4,7 @@ use futures_core::Stream;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    app::App,
+    app::{App, AppError},
     config,
     proto::v1::{
         ClearRecordingRequest, ClearRecordingResponse, ControlShowRequest, ControlShowResponse,
@@ -52,7 +52,7 @@ impl MusicAutoShowService for GrpcApi {
         let mut receiver = self.app.subscribe();
         let app = Arc::clone(&self.app);
         let stream = async_stream::try_stream! {
-            let initial = receiver.borrow().clone();
+            let initial = receiver.borrow().as_ref().clone();
             yield WatchSnapshotsResponse { snapshot: Some(initial) };
             loop {
                 let changed = tokio::select! {
@@ -66,7 +66,7 @@ impl MusicAutoShowService for GrpcApi {
                     () = app.wait_for_shutdown() => break,
                     () = tokio::time::sleep(interval) => {}
                 }
-                let snapshot = receiver.borrow_and_update().clone();
+                let snapshot = receiver.borrow_and_update().as_ref().clone();
                 yield WatchSnapshotsResponse { snapshot: Some(snapshot) };
             }
         };
@@ -90,11 +90,7 @@ impl MusicAutoShowService for GrpcApi {
             .into_inner()
             .config
             .ok_or_else(|| Status::invalid_argument("config is required"))?;
-        let config = self
-            .app
-            .update_config(config)
-            .await
-            .map_err(internal_status)?;
+        let config = self.app.update_config(config).await.map_err(app_status)?;
         Ok(Response::new(UpdateConfigResponse {
             config: Some(config),
         }))
@@ -104,7 +100,7 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         _request: Request<ExportConfigRequest>,
     ) -> Result<Response<ExportConfigResponse>, Status> {
-        let (json, filename) = self.app.export_config().await.map_err(internal_status)?;
+        let (json, filename) = self.app.export_config().await.map_err(app_status)?;
         Ok(Response::new(ExportConfigResponse { json, filename }))
     }
 
@@ -116,11 +112,7 @@ impl MusicAutoShowService for GrpcApi {
         if json.trim().is_empty() {
             return Err(Status::invalid_argument("configuration JSON is required"));
         }
-        let config = self
-            .app
-            .import_config(&json)
-            .await
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let config = self.app.import_config(&json).await.map_err(app_status)?;
         Ok(Response::new(ImportConfigResponse {
             config: Some(config),
         }))
@@ -130,7 +122,7 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         _request: Request<ResetConfigRequest>,
     ) -> Result<Response<ResetConfigResponse>, Status> {
-        let config = self.app.reset_config().await.map_err(internal_status)?;
+        let config = self.app.reset_config().await.map_err(app_status)?;
         Ok(Response::new(ResetConfigResponse {
             config: Some(config),
         }))
@@ -141,7 +133,7 @@ impl MusicAutoShowService for GrpcApi {
         _request: Request<ListAudioDevicesRequest>,
     ) -> Result<Response<ListAudioDevicesResponse>, Status> {
         Ok(Response::new(ListAudioDevicesResponse {
-            devices: self.app.audio_devices(),
+            devices: self.app.audio_devices().await.map_err(app_status)?,
         }))
     }
 
@@ -169,7 +161,7 @@ impl MusicAutoShowService for GrpcApi {
         request: Request<ControlShowRequest>,
     ) -> Result<Response<ControlShowResponse>, Status> {
         let command = request.into_inner().command();
-        let result = self.app.control(command).await.map_err(internal_status)?;
+        let result = self.app.control(command).await.map_err(app_status)?;
         Ok(Response::new(ControlShowResponse {
             result: Some(result),
         }))
@@ -179,7 +171,11 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         request: Request<SetBlackoutRequest>,
     ) -> Result<Response<SetBlackoutResponse>, Status> {
-        let result = self.app.set_blackout(request.into_inner().enabled).await;
+        let result = self
+            .app
+            .set_blackout(request.into_inner().enabled)
+            .await
+            .map_err(app_status)?;
         Ok(Response::new(SetBlackoutResponse {
             result: Some(result),
         }))
@@ -189,11 +185,7 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         _request: Request<StartRecordingRequest>,
     ) -> Result<Response<StartRecordingResponse>, Status> {
-        let status = self
-            .app
-            .start_recording()
-            .await
-            .map_err(failed_precondition)?;
+        let status = self.app.start_recording().await.map_err(app_status)?;
         Ok(Response::new(StartRecordingResponse {
             status: Some(status),
         }))
@@ -203,11 +195,7 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         _request: Request<StopRecordingRequest>,
     ) -> Result<Response<StopRecordingResponse>, Status> {
-        let recording = self
-            .app
-            .stop_recording()
-            .await
-            .map_err(failed_precondition)?;
+        let recording = self.app.stop_recording().await.map_err(app_status)?;
         Ok(Response::new(StopRecordingResponse {
             recording: Some(recording),
         }))
@@ -217,23 +205,21 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         _request: Request<ClearRecordingRequest>,
     ) -> Result<Response<ClearRecordingResponse>, Status> {
-        let status = self
-            .app
-            .clear_recording()
-            .await
-            .map_err(failed_precondition)?;
+        let status = self.app.clear_recording().await.map_err(app_status)?;
         Ok(Response::new(ClearRecordingResponse {
             status: Some(status),
         }))
     }
 }
 
-fn internal_status(error: anyhow::Error) -> Status {
-    Status::internal(error.to_string())
-}
-
-fn failed_precondition(error: anyhow::Error) -> Status {
-    Status::failed_precondition(error.to_string())
+fn app_status(error: AppError) -> Status {
+    let message = error.to_string();
+    match error {
+        AppError::Config(error) if error.is_invalid_input() => Status::invalid_argument(message),
+        AppError::FailedPrecondition(_) => Status::failed_precondition(message),
+        AppError::Unavailable | AppError::Runtime(_) => Status::unavailable(message),
+        AppError::Config(_) => Status::internal(message),
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +255,31 @@ mod tests {
             .await
             .expect("snapshot stream should stop promptly");
         assert!(next.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_structured_config_returns_invalid_argument() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let app = Arc::new(
+            App::load(directory.path().join("config.json"), true)
+                .await
+                .expect("simulated application should load"),
+        );
+        app.start_runtime()
+            .await
+            .expect("show runtime should start");
+        let api = GrpcApi::new(Arc::clone(&app));
+        let mut config = app.config().await;
+        config.audio.as_mut().expect("audio configuration").mode = i32::MAX;
+
+        let error = api
+            .update_config(Request::new(UpdateConfigRequest {
+                config: Some(config),
+            }))
+            .await
+            .expect_err("invalid configuration should be rejected");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        app.stop_runtime().await;
     }
 }

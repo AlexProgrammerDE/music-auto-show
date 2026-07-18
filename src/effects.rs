@@ -6,10 +6,13 @@ use std::{
 
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 
-use crate::proto::v1::{
-    AudioAnalysis, ChannelCapability, ChannelConfig, EffectFixtureMode, EffectsConfig,
-    FixtureConfig, FixtureProfile, FixtureState, MovementMode, RgbColor, RotationMode, ShowConfig,
-    StrobeEffectMode, VisualizationMode,
+use crate::{
+    config::ValidatedShowConfig,
+    proto::v1::{
+        AudioAnalysis, ChannelCapability, ChannelConfig, EffectFixtureMode, EffectsConfig,
+        FixtureConfig, FixtureProfile, FixtureState, MovementMode, RgbColor, RotationMode,
+        StrobeEffectMode, VisualizationMode,
+    },
 };
 
 const FRAME_TIME: f32 = 0.025;
@@ -84,7 +87,7 @@ impl Default for EffectsEngine {
 impl EffectsEngine {
     pub fn process(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         album_colors: &[RgbColor],
         blackout: bool,
@@ -136,7 +139,7 @@ impl EffectsEngine {
         }
     }
 
-    fn ensure_fixtures(&mut self, config: &ShowConfig) {
+    fn ensure_fixtures(&mut self, config: &ValidatedShowConfig) {
         for fixture in &config.fixtures {
             let key = fixture_key(fixture);
             self.states
@@ -173,7 +176,7 @@ impl EffectsEngine {
 
     fn apply_visualization(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         beat: bool,
         bar: bool,
@@ -195,7 +198,7 @@ impl EffectsEngine {
 
     fn energy_mode(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         beat: bool,
         bar: bool,
@@ -243,7 +246,12 @@ impl EffectsEngine {
         }
     }
 
-    fn frequency_split_mode(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn frequency_split_mode(
+        &mut self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat: bool,
+    ) {
         let settings = effects(config);
         let mut fixtures = config.fixtures.clone();
         fixtures.sort_by_key(|fixture| fixture.position);
@@ -267,7 +275,7 @@ impl EffectsEngine {
         }
     }
 
-    fn beat_pulse_mode(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn beat_pulse_mode(&mut self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) {
         let palette = [0.0, 0.15, 0.55, 0.75, 0.9];
         let base_hue = if self.album_hues.is_empty() {
             palette[audio.estimated_bar as usize % palette.len()]
@@ -292,7 +300,12 @@ impl EffectsEngine {
         }
     }
 
-    fn color_cycle_mode(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn color_cycle_mode(
+        &mut self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat: bool,
+    ) {
         let base_hue = if self.album_hues.is_empty() {
             ((audio.estimated_beat % 32) as f32 + audio.beat_position) / 32.0
         } else {
@@ -327,7 +340,7 @@ impl EffectsEngine {
 
     fn rainbow_wave_mode(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         beat: bool,
         now: f32,
@@ -354,7 +367,12 @@ impl EffectsEngine {
         }
     }
 
-    fn strobe_beat_mode(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn strobe_beat_mode(
+        &mut self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat: bool,
+    ) {
         let settings = effects(config);
         for fixture in &config.fixtures {
             let scale = fixture.intensity_scale * settings.intensity;
@@ -378,7 +396,12 @@ impl EffectsEngine {
         }
     }
 
-    fn random_flash_mode(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn random_flash_mode(
+        &mut self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat: bool,
+    ) {
         let settings = effects(config);
         let mut flash_names = Vec::new();
         let flash_hue = if beat && !config.fixtures.is_empty() {
@@ -414,7 +437,7 @@ impl EffectsEngine {
 
     fn process_effect_fixtures(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         beat: bool,
         _bar: bool,
@@ -462,7 +485,7 @@ impl EffectsEngine {
         }
     }
 
-    fn update_rotation(&mut self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) {
+    fn update_rotation(&mut self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) {
         if audio.energy < 0.01 || audio.tempo <= 0.0 {
             self.rotation_phase = 0.0;
             self.smoothed_rotation = 0.0;
@@ -531,7 +554,7 @@ impl EffectsEngine {
 
     fn rotation_value_for_channel(
         &self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         channel: Option<&ChannelConfig>,
     ) -> u32 {
         let Some(channel) = channel else {
@@ -557,7 +580,7 @@ impl EffectsEngine {
         }
     }
 
-    fn preview_rotation(&self, config: &ShowConfig) -> f32 {
+    fn preview_rotation(&self, config: &ValidatedShowConfig) -> f32 {
         let mode = RotationMode::try_from(effects(config).rotation_mode)
             .unwrap_or(RotationMode::ManualSlow);
         match mode {
@@ -572,7 +595,7 @@ impl EffectsEngine {
         }
     }
 
-    fn strobe_value(&self, config: &ShowConfig, audio: &AudioAnalysis, beat: bool) -> u32 {
+    fn strobe_value(&self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) -> u32 {
         let mode = EffectFixtureMode::try_from(effects(config).effect_fixture_mode)
             .unwrap_or(EffectFixtureMode::Balanced);
         if mode == EffectFixtureMode::MovementOnly {
@@ -605,7 +628,7 @@ impl EffectsEngine {
         value
     }
 
-    fn strobe_effect_value(&self, config: &ShowConfig, audio: &AudioAnalysis) -> u32 {
+    fn strobe_effect_value(&self, config: &ValidatedShowConfig, audio: &AudioAnalysis) -> u32 {
         let settings = effects(config);
         if !settings.strobe_effect_enabled {
             return 0;
@@ -673,7 +696,7 @@ impl EffectsEngine {
 
     fn apply_movement(
         &mut self,
-        config: &ShowConfig,
+        config: &ValidatedShowConfig,
         audio: &AudioAnalysis,
         beat: bool,
         bar: bool,
@@ -1169,7 +1192,7 @@ impl EffectsEngine {
         }
     }
 
-    fn apply_force_max_brightness(&mut self, config: &ShowConfig) {
+    fn apply_force_max_brightness(&mut self, config: &ValidatedShowConfig) {
         let settings = effects(config);
         for fixture in &config.fixtures {
             let max_dimmer = dmx(fixture.intensity_scale * settings.intensity);
@@ -1198,7 +1221,7 @@ impl EffectsEngine {
         }
     }
 
-    fn apply_smoothing(&mut self, config: &ShowConfig) {
+    fn apply_smoothing(&mut self, config: &ValidatedShowConfig) {
         let factor = effects(config).smooth_factor.clamp(0.0, 1.0);
         let inverse = 1.0 - factor;
         for fixture in &config.fixtures {
@@ -1244,7 +1267,7 @@ impl EffectsEngine {
         }
     }
 
-    fn map_universe(&self, config: &ShowConfig, universe_size: usize) -> Vec<u8> {
+    fn map_universe(&self, config: &ValidatedShowConfig, universe_size: usize) -> Vec<u8> {
         let mut universe = vec![0_u8; universe_size];
         for fixture in &config.fixtures {
             let Some(state) = self.smoothed.get(&fixture_key(fixture)) else {
@@ -1272,7 +1295,7 @@ impl EffectsEngine {
         universe
     }
 
-    fn zero_states(&mut self, config: &ShowConfig, immediate: bool) {
+    fn zero_states(&mut self, config: &ValidatedShowConfig, immediate: bool) {
         for fixture in &config.fixtures {
             let key = fixture_key(fixture);
             if let Some(state) = self.states.get_mut(&key) {
@@ -1286,7 +1309,7 @@ impl EffectsEngine {
         self.smoothed_rotation = 0.0;
     }
 
-    fn ordered_states(&self, config: &ShowConfig) -> Vec<FixtureState> {
+    fn ordered_states(&self, config: &ValidatedShowConfig) -> Vec<FixtureState> {
         config
             .fixtures
             .iter()
@@ -1295,11 +1318,8 @@ impl EffectsEngine {
     }
 }
 
-fn effects(config: &ShowConfig) -> &EffectsConfig {
-    config
-        .effects
-        .as_ref()
-        .expect("validated config always has effects")
+fn effects(config: &ValidatedShowConfig) -> &EffectsConfig {
+    config.effects()
 }
 
 fn fixture_key(fixture: &FixtureConfig) -> String {
@@ -1324,7 +1344,10 @@ fn default_state(fixture: &FixtureConfig) -> FixtureState {
     }
 }
 
-fn find_profile<'a>(config: &'a ShowConfig, fixture: &FixtureConfig) -> Option<&'a FixtureProfile> {
+fn find_profile<'a>(
+    config: &'a ValidatedShowConfig,
+    fixture: &FixtureConfig,
+) -> Option<&'a FixtureProfile> {
     config
         .profiles
         .iter()
@@ -1666,6 +1689,10 @@ mod tests {
     use super::*;
     use crate::config::default_show_config;
 
+    fn validated(config: crate::proto::v1::ShowConfig) -> ValidatedShowConfig {
+        ValidatedShowConfig::new(config, true).expect("test configuration should validate")
+    }
+
     const VISUALIZATION_MODES: [VisualizationMode; 7] = [
         VisualizationMode::Energy,
         VisualizationMode::FrequencySplit,
@@ -1693,7 +1720,7 @@ mod tests {
 
     #[test]
     fn blackout_zeroes_the_entire_universe() {
-        let config = default_show_config(true);
+        let config = validated(default_show_config(true));
         let output =
             EffectsEngine::default().process(&config, &AudioAnalysis::default(), &[], true);
         assert_eq!(output.universe, vec![0; 512]);
@@ -1719,25 +1746,44 @@ mod tests {
             ..Default::default()
         };
 
-        config.effects.as_mut().unwrap().rotation_mode = RotationMode::ManualSlow as i32;
+        config
+            .effects
+            .as_mut()
+            .expect("effects configuration")
+            .rotation_mode = RotationMode::ManualSlow as i32;
+        let config = validated(config);
         approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 1.0, epsilon = 0.0001);
 
-        config.effects.as_mut().unwrap().rotation_mode = RotationMode::AutoSlow as i32;
+        let mut config = config.into_proto();
+        config
+            .effects
+            .as_mut()
+            .expect("effects configuration")
+            .rotation_mode = RotationMode::AutoSlow as i32;
+        let config = validated(config);
         approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 0.25, epsilon = 0.0001);
     }
 
     #[test]
     fn stage_rotation_survives_fixture_smoothing() {
-        let config = default_show_config(true);
+        let config = validated(default_show_config(true));
         let fixture_key = fixture_key(&config.fixtures[0]);
         let mut engine = EffectsEngine::default();
         engine.ensure_fixtures(&config);
-        engine.states.get_mut(&fixture_key).unwrap().effect_rotation = 0.75;
+        engine
+            .states
+            .get_mut(&fixture_key)
+            .expect("fixture state")
+            .effect_rotation = 0.75;
 
         engine.apply_smoothing(&config);
 
         approx::assert_abs_diff_eq!(
-            engine.smoothed.get(&fixture_key).unwrap().effect_rotation,
+            engine
+                .smoothed
+                .get(&fixture_key)
+                .expect("smoothed fixture state")
+                .effect_rotation,
             0.75,
             epsilon = 0.0001
         );
@@ -1761,10 +1807,11 @@ mod tests {
                     tilt_max: 224,
                     channels: Vec::new(),
                 }];
-                let settings = config.effects.as_mut().unwrap();
+                let settings = config.effects.as_mut().expect("effects configuration");
                 settings.mode = visualization as i32;
                 settings.movement_mode = movement as i32;
                 settings.smooth_factor = 0.25;
+                let config = validated(config);
                 let mut engine = EffectsEngine::default();
                 let mut output = None;
                 for beat in 1..=8 {
@@ -1783,7 +1830,7 @@ mod tests {
                     };
                     output = Some(engine.process(&config, &audio, &[], false));
                 }
-                let output = output.unwrap();
+                let output = output.expect("effect output should be produced");
                 assert_eq!(output.universe.len(), 512);
                 assert!(output.universe.iter().any(|value| *value > 0));
                 let state = &output.fixture_states[0];
@@ -1811,6 +1858,7 @@ mod tests {
             tempo: 120.0,
             ..Default::default()
         };
+        let config = validated(config);
         let output = EffectsEngine::default().process(&config, &audio, &[], false);
         assert_eq!(output.universe[0], 100);
     }

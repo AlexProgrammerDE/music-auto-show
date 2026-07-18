@@ -71,25 +71,26 @@ impl DmxOutput {
         })
     }
 
-    pub fn send(&mut self, universe: &[u8]) -> bool {
+    pub fn send(&mut self, universe: &[u8]) {
         match self {
             Self::Simulated { status } => {
                 status.send_count += 1;
-                true
             }
-            Self::Serial { port, status } => {
-                let result = send_open_dmx(port.as_mut(), universe);
-                if let Err(error) = &result {
-                    status.error_count += 1;
-                    status.consecutive_errors += 1;
-                    status.last_error = error.to_string();
-                } else {
+            Self::Serial { port, status } => match send_open_dmx(port.as_mut(), universe) {
+                Ok(()) => {
                     status.send_count += 1;
                     status.consecutive_errors = 0;
                     status.last_error.clear();
                 }
-                result.is_ok()
-            }
+                Err(error) => {
+                    status.error_count += 1;
+                    status.consecutive_errors += 1;
+                    status.last_error = error.to_string();
+                    if status.consecutive_errors == 1 {
+                        tracing::warn!(%error, "DMX output failed");
+                    }
+                }
+            },
         }
     }
 

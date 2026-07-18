@@ -114,7 +114,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+        let result = write!(output, "{byte:02x}");
+        debug_assert!(result.is_ok(), "writing to a String should be infallible");
     }
     output
 }

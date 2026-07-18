@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt::Write, fs, sync::Arc, time::Duration};
 use image::{DynamicImage, ExtendedColorType, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use nowhear::{Artwork, MediaSource, MediaSourceBuilder, PlaybackState, PlayerInfo};
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use url::Url;
@@ -46,7 +46,7 @@ struct ProcessedArtwork {
     image: Option<ArtworkImage>,
 }
 
-pub async fn monitor(target: &RwLock<MediaState>, shutdown: CancellationToken) {
+pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: CancellationToken) {
     let source = match tokio::select! {
         biased;
         () = shutdown.cancelled() => return,
@@ -119,12 +119,14 @@ pub async fn monitor(target: &RwLock<MediaState>, shutdown: CancellationToken) {
                         .as_ref()
                         .map(|artwork| format!("/media/artwork/{}", artwork.revision)),
                 );
-                *target.write().await = MediaState {
+                target.send_replace(Arc::new(MediaState {
                     info,
                     artwork: cached_artwork.clone(),
-                };
+                }));
             }
-            Ok(None) => *target.write().await = MediaState::default(),
+            Ok(None) => {
+                target.send_replace(Arc::new(MediaState::default()));
+            }
             Err(error) => debug!(%error, "could not read active media session"),
         }
     }
@@ -230,7 +232,8 @@ fn artwork_revision(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .fold(String::with_capacity(64), |mut revision, byte| {
-            write!(revision, "{byte:02x}").expect("writing to a String cannot fail");
+            let result = write!(revision, "{byte:02x}");
+            debug_assert!(result.is_ok(), "writing to a String should be infallible");
             revision
         })
 }

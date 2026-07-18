@@ -240,6 +240,7 @@ message AudioRuntimeStatus {
   string configured_device_id = 14;
   string device_id = 15;
   string missing_device_id = 16;
+  uint64 dropped_sample_blocks = 17;
 }
 
 message DmxRuntimeStatus {
