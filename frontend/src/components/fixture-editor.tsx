@@ -197,22 +197,22 @@ export function FixtureEditor({
 
   return (
     <Credenza open={open} onOpenChange={onOpenChange}>
-      <CredenzaContent className="max-h-[90vh] sm:max-w-5xl">
-        <CredenzaHeader>
+      <CredenzaContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-5xl">
+        <CredenzaHeader className="shrink-0">
           <CredenzaTitle>Edit {fixture.name}</CredenzaTitle>
           <CredenzaDescription>
             Patch, scale, and override the fixture channels used by the effects engine.
           </CredenzaDescription>
         </CredenzaHeader>
         <form
-          className="flex min-h-0 flex-1 flex-col"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
           onSubmit={(event) => {
             event.preventDefault()
             event.stopPropagation()
             void form.handleSubmit()
           }}
         >
-          <CredenzaBody className="grid gap-5 overflow-y-auto">
+          <CredenzaBody className="grid min-h-0 flex-1 gap-5 overflow-y-auto overscroll-contain">
             <FieldGroup className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <form.Field
                 name="name"
@@ -584,7 +584,7 @@ export function FixtureEditor({
             </section>
           </CredenzaBody>
 
-          <CredenzaFooter>
+          <CredenzaFooter className="shrink-0">
             <CredenzaClose type="button">Cancel</CredenzaClose>
             <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
               {([canSubmit, isSubmitting]) => {

@@ -82,12 +82,12 @@ export function ConfirmCredenza({
 
   return (
     <Credenza open={open} onOpenChange={onOpenChange}>
-      <CredenzaContent>
-        <CredenzaHeader>
+      <CredenzaContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
+        <CredenzaHeader className="min-h-0 overflow-y-auto overscroll-contain">
           <CredenzaTitle>{title}</CredenzaTitle>
           <CredenzaDescription>{description}</CredenzaDescription>
         </CredenzaHeader>
-        <CredenzaFooter>
+        <CredenzaFooter className="shrink-0">
           <CredenzaClose disabled={pending}>Cancel</CredenzaClose>
           <Button
             variant={destructive ? "destructive" : "default"}

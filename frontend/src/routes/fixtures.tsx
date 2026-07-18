@@ -279,22 +279,22 @@ function FixturesPage() {
           <PlusIcon data-icon="inline-start" aria-hidden="true" /> Add Fixture
         </Button>
         <Credenza open={dialogOpen} onOpenChange={setDialogOpen}>
-          <CredenzaContent>
-            <CredenzaHeader>
+          <CredenzaContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
+            <CredenzaHeader className="shrink-0">
               <CredenzaTitle>Add Fixture</CredenzaTitle>
               <CredenzaDescription>
                 Choose a fixture profile and its first channel in the universe.
               </CredenzaDescription>
             </CredenzaHeader>
             <form
-              className="flex min-h-0 flex-1 flex-col"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden"
               onSubmit={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
                 void form.handleSubmit()
               }}
             >
-              <CredenzaBody>
+              <CredenzaBody className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 <FieldGroup>
                   <form.Field
                     name="name"
@@ -460,7 +460,7 @@ function FixturesPage() {
                   </FieldSet>
                 </FieldGroup>
               </CredenzaBody>
-              <CredenzaFooter>
+              <CredenzaFooter className="shrink-0">
                 <CredenzaClose type="button">Cancel</CredenzaClose>
                 <form.Subscribe
                   selector={(state) => [state.canSubmit, state.isSubmitting] as const}
