@@ -1,5 +1,5 @@
 import { MusicNotesIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import type { MediaInfo } from "@/gen/music_auto_show/v1/music_auto_show_pb"
@@ -11,6 +11,29 @@ const fallbackPalette = [
   [5, 150, 105],
   [217, 119, 6],
 ] as const
+
+function Artwork({ media }: { readonly media: MediaInfo | undefined }) {
+  const artworkUrl = media?.artworkUrl ?? ""
+  const [failedArtworkUrl, setFailedArtworkUrl] = useState("")
+
+  if (!artworkUrl || failedArtworkUrl === artworkUrl) {
+    return (
+      <span className="flex size-14 shrink-0 items-center justify-center border bg-muted">
+        <MusicNotesIcon className="size-5" aria-hidden="true" />
+      </span>
+    )
+  }
+
+  return (
+    <img
+      src={artworkUrl}
+      alt={media?.trackName ? `${media.trackName} cover artwork` : "Current track cover artwork"}
+      className="size-14 shrink-0 border object-cover"
+      decoding="async"
+      onError={() => setFailedArtworkUrl(artworkUrl)}
+    />
+  )
+}
 
 function Palette({ media }: { readonly media: MediaInfo | undefined }) {
   const ref = useRef<HTMLCanvasElement>(null)
@@ -49,9 +72,7 @@ export function MediaPanel({
 }) {
   return (
     <section className="flex flex-col gap-4 border bg-card p-4 sm:flex-row sm:items-center">
-      <span className="flex size-10 shrink-0 items-center justify-center border bg-muted">
-        <MusicNotesIcon className="size-5" aria-hidden="true" />
-      </span>
+      <Artwork media={media} />
       <div className="min-w-0 flex-1">
         <p className="text-[10px] tracking-[0.14em] text-muted-foreground uppercase">Now playing</p>
         <p className="mt-1 truncate font-heading text-sm font-semibold">

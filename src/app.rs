@@ -18,6 +18,7 @@ use crate::{
     config,
     dmx::{DmxOutput, validate_config},
     effects::EffectsEngine,
+    media::MediaState,
     proto::v1::{
         AudioInputMode, AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxRuntimeStatus,
         MediaInfo, Recording, RecordingStatus, RunState, ShowCommand, ShowConfig, ShowSnapshot,
@@ -62,7 +63,7 @@ pub struct App {
     snapshot_tx: watch::Sender<ShowSnapshot>,
     task: Mutex<Option<JoinHandle<()>>>,
     media_task: Mutex<Option<JoinHandle<()>>>,
-    media: RwLock<MediaInfo>,
+    media: RwLock<MediaState>,
     shutdown: CancellationToken,
     cli_simulate: bool,
 }
@@ -81,7 +82,7 @@ impl App {
             snapshot_tx,
             task: Mutex::new(None),
             media_task: Mutex::new(None),
-            media: RwLock::new(MediaInfo::default()),
+            media: RwLock::new(MediaState::default()),
             shutdown: CancellationToken::new(),
             cli_simulate: simulate,
         })
@@ -431,6 +432,10 @@ impl App {
         list_devices()
     }
 
+    pub async fn media_artwork(&self, revision: &str) -> Option<Arc<[u8]>> {
+        self.media.read().await.artwork(revision)
+    }
+
     async fn tick(&self) -> Result<()> {
         if self.snapshot.read().await.run_state != RunState::Running as i32 {
             if self.runtime.lock().await.recording_monitor {
@@ -449,7 +454,7 @@ impl App {
                 snapshot.effects_fps,
             )
         };
-        let detected_media = self.media.read().await.clone();
+        let detected_media = self.media.read().await.info().clone();
         let mut runtime = self.runtime.lock().await;
         let audio = if simulate {
             let elapsed = runtime.simulation_started.elapsed().as_secs_f32();
@@ -600,7 +605,7 @@ impl App {
             .as_ref()
             .map_or_else(|| simulated_audio_status(&config), AudioCapture::status);
         drop(runtime);
-        let media = self.media.read().await.clone();
+        let media = self.media.read().await.info().clone();
         let mut snapshot = self.snapshot.write().await;
         snapshot.status_message = "Recording input check".into();
         snapshot.audio = Some(audio);

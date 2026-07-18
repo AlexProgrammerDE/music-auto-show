@@ -4,7 +4,13 @@ mod shutdown;
 use std::{future::IntoFuture, sync::Arc};
 
 use anyhow::Context;
-use axum::Router;
+use axum::{
+    Router,
+    extract::Path,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use clap::Parser;
 use cli::Cli;
 use music_auto_show::{
@@ -45,7 +51,15 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let grpc_routes = Routes::new(grpc)
         .into_axum_router()
         .layer(tonic_web::GrpcWebLayer::new());
+    let artwork_app = Arc::clone(&app_state);
     let router = Router::new()
+        .route(
+            "/media/artwork/{revision}",
+            get(move |Path(revision): Path<String>| {
+                let app = Arc::clone(&artwork_app);
+                async move { serve_media_artwork(&app, &revision).await }
+            }),
+        )
         .nest("/api", grpc_routes)
         .fallback(assets::serve)
         .layer(TraceLayer::new_for_http());
@@ -110,6 +124,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
     info!("Music Auto Show stopped");
     Ok(())
+}
+
+async fn serve_media_artwork(app: &App, revision: &str) -> Response {
+    let Some(bytes) = app.media_artwork(revision).await else {
+        return (StatusCode::NOT_FOUND, "Artwork not found").into_response();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes.as_ref().to_vec(),
+    )
+        .into_response()
 }
 
 async fn prepare_beatnet_checkpoint(app: &App) {

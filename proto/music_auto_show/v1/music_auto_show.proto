@@ -190,6 +190,7 @@ message MediaInfo {
   string artist_name = 2;
   bool is_playing = 3;
   repeated RgbColor album_colors = 4;
+  string artwork_url = 5;
 }
 
 message BeatNetStatus {
