@@ -678,33 +678,62 @@ fn waveform(samples: &[f32], gain: f32) -> Vec<f32> {
             if start >= samples.len() {
                 0.0
             } else {
-                (samples[start..end]
-                    .iter()
-                    .map(|sample| sample.abs())
-                    .fold(0.0_f32, f32::max)
-                    / 0.3
-                    * gain)
-                    .min(1.0)
+                let average = samples[start..end].iter().sum::<f32>() / (end - start) as f32;
+                (average / 0.3 * gain).clamp(-1.0, 1.0)
             }
         })
         .collect()
 }
 
 fn spectrum(fft: &[f32], sample_rate: u32, size: usize, gain: f32) -> Vec<f32> {
-    logarithmic_bands(32, 20.0, 16_000.0_f32.min(sample_rate as f32 / 2.0))
-        .map(|(low, high)| (band_power(fft, sample_rate, size, low, high) / 0.01 * gain).min(1.0))
+    let minimum = sample_rate as f32 / size as f32;
+    let power_scale = one_sided_power_scale(size);
+    logarithmic_bands(32, minimum, 16_000.0_f32.min(sample_rate as f32 / 2.0))
+        .map(|(low, high)| {
+            visualization_level(
+                band_peak_power(fft, sample_rate, size, low, high) * power_scale,
+                gain,
+                -72.0,
+                -12.0,
+            )
+        })
         .collect()
 }
 
 fn spectrogram_frame(fft: &[f32], sample_rate: u32, size: usize, gain: f32) -> Vec<f32> {
-    let gain_db = 20.0 * gain.max(0.0001).log10();
-    logarithmic_bands(64, 20.0, 16_000.0_f32.min(sample_rate as f32 / 2.0))
+    let minimum = sample_rate as f32 / size as f32;
+    let power_scale = one_sided_power_scale(size);
+    logarithmic_bands(64, minimum, 16_000.0_f32.min(sample_rate as f32 / 2.0))
         .map(|(low, high)| {
-            let db =
-                10.0 * (band_power(fft, sample_rate, size, low, high) + 1e-12).log10() + gain_db;
-            ((db + 92.0) / 74.0).clamp(0.0, 1.0)
+            visualization_level(
+                band_peak_power(fft, sample_rate, size, low, high) * power_scale,
+                gain,
+                -90.0,
+                -12.0,
+            )
         })
         .collect()
+}
+
+fn band_peak_power(fft: &[f32], sample_rate: u32, size: usize, low: f32, high: f32) -> f32 {
+    let low = (low * size as f32 / sample_rate as f32).floor() as usize;
+    let high = (high * size as f32 / sample_rate as f32).ceil() as usize;
+    let low = low.min(fft.len().saturating_sub(1));
+    let high = high.clamp(low + 1, fft.len());
+    fft[low..high].iter().copied().fold(0.0, f32::max)
+}
+
+fn one_sided_power_scale(size: usize) -> f32 {
+    if size < 2 {
+        return 0.0;
+    }
+    16.0 / (3.0 * size as f32 * (size - 1) as f32)
+}
+
+fn visualization_level(power: f32, gain: f32, floor_db: f32, ceiling_db: f32) -> f32 {
+    let power_db = 10.0 * (power + 1e-12).log10();
+    let gain_db = 20.0 * gain.max(0.0001).log10();
+    ((power_db + gain_db - floor_db) / (ceiling_db - floor_db)).clamp(0.0, 1.0)
 }
 
 fn logarithmic_bands(count: usize, minimum: f32, maximum: f32) -> impl Iterator<Item = (f32, f32)> {
@@ -939,5 +968,51 @@ mod tests {
             analyzer.spectrogram.pop_front();
         }
         assert_eq!(analyzer.spectrogram.len(), 50);
+    }
+
+    #[test]
+    fn fft_visualization_power_matches_signal_power() {
+        let amplitude = 0.2;
+        let frequency_bin = 32.0;
+        let samples: Vec<_> = (0..FFT_SIZE)
+            .map(|index| {
+                amplitude
+                    * (std::f32::consts::TAU * frequency_bin * index as f32 / FFT_SIZE as f32).sin()
+            })
+            .collect();
+        let fft = fft_power(&samples, FFT_SIZE);
+        let measured_power = fft.iter().sum::<f32>() * one_sided_power_scale(FFT_SIZE);
+        approx::assert_abs_diff_eq!(measured_power, amplitude * amplitude * 0.5, epsilon = 0.001);
+    }
+
+    #[test]
+    fn typical_signal_does_not_saturate_visualizations() {
+        let amplitude = 0.2;
+        let frequency_bin = 32.0;
+        let samples: Vec<_> = (0..FFT_SIZE)
+            .map(|index| {
+                amplitude
+                    * (std::f32::consts::TAU * frequency_bin * index as f32 / FFT_SIZE as f32).sin()
+            })
+            .collect();
+        let fft = fft_power(&samples, FFT_SIZE);
+        let spectrum = spectrum(&fft, 48_000, FFT_SIZE, 1.0);
+        let spectrogram = spectrogram_frame(&fft, 48_000, FFT_SIZE, 1.0);
+
+        assert!(spectrum.iter().copied().fold(0.0, f32::max) < 1.0);
+        assert!(spectrogram.iter().copied().fold(0.0, f32::max) < 1.0);
+        assert!(spectrum.iter().any(|value| *value > 0.5));
+        assert!(spectrogram.iter().any(|value| *value > 0.5));
+    }
+
+    #[test]
+    fn waveform_keeps_signal_polarity() {
+        let samples: Vec<_> = (0..100)
+            .map(|index| if index < 50 { 0.15 } else { -0.15 })
+            .collect();
+        let waveform = waveform(&samples, 1.0);
+
+        assert!(waveform.iter().any(|value| *value > 0.0));
+        assert!(waveform.iter().any(|value| *value < 0.0));
     }
 }
