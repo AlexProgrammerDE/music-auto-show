@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use clap::{Parser, ValueHint};
 
-const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:3000";
+const DEFAULT_LISTEN_ADDRESS: &str = "0.0.0.0:3000";
 const DEFAULT_CONFIG_PATH: &str = "config.json";
 const DEFAULT_SHUTDOWN_TIMEOUT_SECONDS: u64 = 10;
 
@@ -59,7 +59,7 @@ mod tests {
 
         assert_eq!(
             cli.listen,
-            DEFAULT_LISTEN_ADDRESS
+            "0.0.0.0:3000"
                 .parse::<SocketAddr>()
                 .expect("default address should be valid")
         );

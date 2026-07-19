@@ -50,13 +50,15 @@ bun install --cwd frontend --frozen-lockfile
 cargo run --release -- --simulate
 ```
 
-Open `http://127.0.0.1:3000`. Simulation exercises audio analysis, the full effects pipeline, live visualizations, and DMX output without hardware.
+Open `http://127.0.0.1:3000` on the host, or `http://<host-ip>:3000` from another device on the same network. Simulation exercises audio analysis, the full effects pipeline, live visualizations, and DMX output without hardware.
 
 For real audio and DMX:
 
 ```bash
-cargo run --release -- --config show.json --listen 127.0.0.1:3000
+cargo run --release -- --config show.json
 ```
+
+The service listens on all network interfaces by default. Music Auto Show does not authenticate access to the web UI or API, so expose port 3000 only on a trusted network. Use `--listen 127.0.0.1:3000` when access should stay local to the host.
 
 On Linux, Automatic and System Audio capture the current PipeWire default sink and follow later output-device changes. CPAL falls back to its native PulseAudio host, then ALSA, when PipeWire is unavailable. Manual selections are stored as CPAL device IDs instead of display names or PulseAudio source strings.
 
@@ -104,7 +106,7 @@ Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/u
 ## Runtime options
 
 ```text
---listen <ADDRESS>            Address for the SPA and gRPC-Web API [default: 127.0.0.1:3000]
+--listen <ADDRESS>            Address for the SPA and gRPC-Web API [default: 0.0.0.0:3000]
 --config <PATH>               JSON configuration to load and save [default: config.json]
 --simulate                    Use generated audio and in-memory DMX
 --shutdown-timeout <SECONDS>  Maximum time to wait for a graceful shutdown [default: 10]
