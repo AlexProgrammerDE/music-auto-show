@@ -60,6 +60,19 @@ cargo run --release -- --config show.json
 
 The service listens on all network interfaces by default. Music Auto Show does not authenticate access to the web UI or API, so expose port 3000 only on a trusted network. Use `--listen 127.0.0.1:3000` when access should stay local to the host.
 
+### Optional Raspberry Pi hotspot
+
+Music Auto Show can provision a dedicated NetworkManager Wi-Fi hotspot without making it part of normal application startup. This is opt-in: running the application normally never changes the host network configuration.
+
+```bash
+sudo ./target/release/music-auto-show hotspot enable
+./target/release/music-auto-show
+```
+
+The setup command generates a strong Wi-Fi password on first use, enables the profile at boot, and prints the Web UI address. The application itself still runs without root privileges. Use `hotspot status`, `hotspot disable`, or `hotspot remove` to manage the dedicated profile.
+
+See [Host the Music Auto Show Wi-Fi network](docs/raspberry-pi-hotspot.md) for Raspberry Pi requirements, custom SSID and adapter options, and recovery steps. Enabling a hotspot can disconnect an SSH session using the same Wi-Fi adapter.
+
 On Linux, Automatic and System Audio capture the current PipeWire default sink and follow later output-device changes. CPAL falls back to its native PulseAudio host, then ALSA, when PipeWire is unavailable. Manual selections are stored as CPAL device IDs instead of display names or PulseAudio source strings.
 
 Bluetooth Receiver makes the host act as a Bluetooth speaker and analyzes the audio sent by a paired phone. On Linux, it controls the system BlueZ adapter and captures the A2DP sink exposed by WirePlumber. `bluetoothd` and the PipeWire BlueZ monitor must be running. This is the supported path on Raspberry Pi OS. On Windows, pair the phone in Bluetooth settings, connect it from the app, and keep the desired playback device selected as the default Windows output. The Settings page reports adapter, pairing, profile, and connection status on both platforms.
@@ -106,11 +119,18 @@ Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/u
 ## Runtime options
 
 ```text
+hotspot <COMMAND>             Manage the optional NetworkManager Wi-Fi hotspot
 --listen <ADDRESS>            Address for the SPA and gRPC-Web API [default: 0.0.0.0:3000]
 --config <PATH>               JSON configuration to load and save [default: config.json]
 --simulate                    Use generated audio and in-memory DMX
 --shutdown-timeout <SECONDS>  Maximum time to wait for a graceful shutdown [default: 10]
 ```
+
+Hotspot commands are `enable`, `status`, `disable`, and `remove`. Hotspot management is supported on Linux with NetworkManager and is independent from normal application startup.
+
+The `enable` options can also be supplied through
+`MUSIC_AUTO_SHOW_HOTSPOT_SSID`, `MUSIC_AUTO_SHOW_HOTSPOT_PASSWORD`, and
+`MUSIC_AUTO_SHOW_HOTSPOT_INTERFACE`.
 
 The same runtime settings can be supplied through `MUSIC_AUTO_SHOW_LISTEN`,
 `MUSIC_AUTO_SHOW_CONFIG`, `MUSIC_AUTO_SHOW_SIMULATE`, and

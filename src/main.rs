@@ -9,6 +9,7 @@
 )]
 
 mod cli;
+mod hotspot;
 mod shutdown;
 
 use std::{future::IntoFuture, sync::Arc};
@@ -22,7 +23,7 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
-use cli::Cli;
+use cli::{Cli, CliCommand};
 use music_auto_show::{
     api::GrpcApi,
     app::App,
@@ -44,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    run(cli).await
+    match &cli.command {
+        Some(CliCommand::Hotspot { command }) => hotspot::execute(command).await,
+        None => run(cli).await,
+    }
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
