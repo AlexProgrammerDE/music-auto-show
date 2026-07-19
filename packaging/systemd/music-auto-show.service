@@ -1,0 +1,18 @@
+[Unit]
+Description=Music Auto Show lighting controller
+Wants=pipewire.service wireplumber.service
+After=pipewire.service wireplumber.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/music-auto-show --config %h/.config/music-auto-show/config.json
+WorkingDirectory=%h/.local/share/music-auto-show
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+
+[Install]
+WantedBy=default.target
