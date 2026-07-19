@@ -13,6 +13,7 @@ import { Effect } from "effect"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { BluetoothReceiverPanel } from "@/components/bluetooth-receiver-panel"
 import { ConfirmCredenza } from "@/components/confirm-credenza"
 import { PageSkeleton } from "@/components/page-skeleton"
 import { SectionPanel } from "@/components/section-panel"
@@ -433,7 +434,7 @@ function SettingsPage() {
         <TabsContent value="audio">
           <SectionPanel
             title="Audio Input"
-            description="System audio, microphone, or simulation"
+            description="System audio, Bluetooth receiver, microphone, or simulation"
             action={
               <Button
                 type="button"
@@ -462,6 +463,9 @@ function SettingsPage() {
               </form.Field>
               <form.Subscribe selector={(state) => state.values.audioMode}>
                 {(audioMode) => {
+                  if (audioMode === AudioInputMode.BLUETOOTH_RECEIVER) {
+                    return <BluetoothReceiverPanel />
+                  }
                   if (
                     audioMode !== AudioInputMode.MANUAL_DEVICE &&
                     audioMode !== AudioInputMode.PIPEWIRE_SINK

@@ -7,6 +7,7 @@ export const showQueryKeys = {
   snapshot: ["show", "snapshot"] as const,
   config: ["show", "config"] as const,
   audioDevices: ["show", "audio-devices"] as const,
+  bluetoothReceiver: ["show", "bluetooth-receiver"] as const,
   fixtureProfiles: ["show", "fixture-profiles"] as const,
 }
 
@@ -24,6 +25,12 @@ export const configQueryOptions = queryOptions({
 export const audioDevicesQueryOptions = queryOptions({
   queryKey: showQueryKeys.audioDevices,
   queryFn: () => runShowApi(Effect.flatMap(ShowApi, (api) => api.listAudioDevices)),
+})
+
+export const bluetoothReceiverQueryOptions = queryOptions({
+  queryKey: showQueryKeys.bluetoothReceiver,
+  queryFn: () => runShowApi(Effect.flatMap(ShowApi, (api) => api.getBluetoothReceiverStatus)),
+  refetchInterval: 2_000,
 })
 
 export const fixtureProfilesQueryOptions = queryOptions({

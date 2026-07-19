@@ -13,6 +13,7 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod beatnet;
+pub mod bluetooth;
 pub mod checkpoint;
 pub mod config;
 pub mod dmx;

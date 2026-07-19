@@ -4,6 +4,7 @@ import { Context, Effect, Layer, ManagedRuntime, Schema } from "effect"
 
 import type {
   AudioDevice,
+  BluetoothReceiverStatus,
   CommandResult,
   FixtureProfile,
   Recording,
@@ -29,6 +30,19 @@ type ShowApiShape = {
   readonly importConfig: (json: string) => Effect.Effect<ShowConfig, RpcFailure>
   readonly resetConfig: Effect.Effect<ShowConfig, RpcFailure>
   readonly listAudioDevices: Effect.Effect<readonly AudioDevice[], RpcFailure>
+  readonly getBluetoothReceiverStatus: Effect.Effect<BluetoothReceiverStatus, RpcFailure>
+  readonly setBluetoothReceiverPairing: (
+    enabled: boolean,
+  ) => Effect.Effect<BluetoothReceiverStatus, RpcFailure>
+  readonly connectBluetoothReceiverDevice: (
+    deviceId: string,
+  ) => Effect.Effect<BluetoothReceiverStatus, RpcFailure>
+  readonly disconnectBluetoothReceiverDevice: (
+    deviceId: string,
+  ) => Effect.Effect<BluetoothReceiverStatus, RpcFailure>
+  readonly forgetBluetoothReceiverDevice: (
+    deviceId: string,
+  ) => Effect.Effect<BluetoothReceiverStatus, RpcFailure>
   readonly listFixtureProfiles: Effect.Effect<readonly FixtureProfile[], RpcFailure>
   readonly controlShow: (command: ShowCommand) => Effect.Effect<CommandResult, RpcFailure>
   readonly setBlackout: (enabled: boolean) => Effect.Effect<CommandResult, RpcFailure>
@@ -101,6 +115,51 @@ const liveApi: ShowApiShape = {
     try: async (signal) => (await client.listAudioDevices({}, { signal })).devices,
     catch: (cause) => rpcFailure("ListAudioDevices", cause),
   }),
+  getBluetoothReceiverStatus: Effect.tryPromise({
+    try: async (signal) =>
+      requireMessage(
+        "GetBluetoothReceiverStatus",
+        (await client.getBluetoothReceiverStatus({}, { signal })).status,
+      ),
+    catch: (cause) => rpcFailure("GetBluetoothReceiverStatus", cause),
+  }),
+  setBluetoothReceiverPairing: (enabled) =>
+    Effect.tryPromise({
+      try: async (signal) =>
+        requireMessage(
+          "SetBluetoothReceiverPairing",
+          (await client.setBluetoothReceiverPairing({ enabled, timeoutSeconds: 120 }, { signal }))
+            .status,
+        ),
+      catch: (cause) => rpcFailure("SetBluetoothReceiverPairing", cause),
+    }),
+  connectBluetoothReceiverDevice: (deviceId) =>
+    Effect.tryPromise({
+      try: async (signal) =>
+        requireMessage(
+          "ConnectBluetoothReceiverDevice",
+          (await client.connectBluetoothReceiverDevice({ deviceId }, { signal })).status,
+        ),
+      catch: (cause) => rpcFailure("ConnectBluetoothReceiverDevice", cause),
+    }),
+  disconnectBluetoothReceiverDevice: (deviceId) =>
+    Effect.tryPromise({
+      try: async (signal) =>
+        requireMessage(
+          "DisconnectBluetoothReceiverDevice",
+          (await client.disconnectBluetoothReceiverDevice({ deviceId }, { signal })).status,
+        ),
+      catch: (cause) => rpcFailure("DisconnectBluetoothReceiverDevice", cause),
+    }),
+  forgetBluetoothReceiverDevice: (deviceId) =>
+    Effect.tryPromise({
+      try: async (signal) =>
+        requireMessage(
+          "ForgetBluetoothReceiverDevice",
+          (await client.forgetBluetoothReceiverDevice({ deviceId }, { signal })).status,
+        ),
+      catch: (cause) => rpcFailure("ForgetBluetoothReceiverDevice", cause),
+    }),
   listFixtureProfiles: Effect.tryPromise({
     try: async (signal) => (await client.listFixtureProfiles({}, { signal })).profiles,
     catch: (cause) => rpcFailure("ListFixtureProfiles", cause),

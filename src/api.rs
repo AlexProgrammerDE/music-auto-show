@@ -8,14 +8,20 @@ use crate::{
     app::{App, AppError},
     config,
     proto::v1::{
-        ClearRecordingRequest, ClearRecordingResponse, ControlShowRequest, ControlShowResponse,
-        ExportConfigRequest, ExportConfigResponse, GetConfigRequest, GetConfigResponse,
+        ClearRecordingRequest, ClearRecordingResponse, ConnectBluetoothReceiverDeviceRequest,
+        ConnectBluetoothReceiverDeviceResponse, ControlShowRequest, ControlShowResponse,
+        DisconnectBluetoothReceiverDeviceRequest, DisconnectBluetoothReceiverDeviceResponse,
+        ExportConfigRequest, ExportConfigResponse, ForgetBluetoothReceiverDeviceRequest,
+        ForgetBluetoothReceiverDeviceResponse, GetBluetoothReceiverStatusRequest,
+        GetBluetoothReceiverStatusResponse, GetConfigRequest, GetConfigResponse,
         GetSnapshotRequest, GetSnapshotResponse, ImportConfigRequest, ImportConfigResponse,
         ListAudioDevicesRequest, ListAudioDevicesResponse, ListFixtureProfilesRequest,
         ListFixtureProfilesResponse, ResetConfigRequest, ResetConfigResponse, SetBlackoutRequest,
-        SetBlackoutResponse, StartRecordingRequest, StartRecordingResponse, StopRecordingRequest,
-        StopRecordingResponse, UpdateConfigRequest, UpdateConfigResponse, WatchSnapshotsRequest,
-        WatchSnapshotsResponse, music_auto_show_service_server::MusicAutoShowService,
+        SetBlackoutResponse, SetBluetoothReceiverPairingRequest,
+        SetBluetoothReceiverPairingResponse, StartRecordingRequest, StartRecordingResponse,
+        StopRecordingRequest, StopRecordingResponse, UpdateConfigRequest, UpdateConfigResponse,
+        WatchSnapshotsRequest, WatchSnapshotsResponse,
+        music_auto_show_service_server::MusicAutoShowService,
     },
 };
 
@@ -143,6 +149,75 @@ impl MusicAutoShowService for GrpcApi {
         }))
     }
 
+    async fn get_bluetooth_receiver_status(
+        &self,
+        _request: Request<GetBluetoothReceiverStatusRequest>,
+    ) -> Result<Response<GetBluetoothReceiverStatusResponse>, Status> {
+        Ok(Response::new(GetBluetoothReceiverStatusResponse {
+            status: Some(self.app.bluetooth_receiver_status().await),
+        }))
+    }
+
+    async fn set_bluetooth_receiver_pairing(
+        &self,
+        request: Request<SetBluetoothReceiverPairingRequest>,
+    ) -> Result<Response<SetBluetoothReceiverPairingResponse>, Status> {
+        let request = request.into_inner();
+        let status = self
+            .app
+            .set_bluetooth_receiver_pairing(request.enabled, request.timeout_seconds)
+            .await
+            .map_err(app_status)?;
+        Ok(Response::new(SetBluetoothReceiverPairingResponse {
+            status: Some(status),
+        }))
+    }
+
+    async fn connect_bluetooth_receiver_device(
+        &self,
+        request: Request<ConnectBluetoothReceiverDeviceRequest>,
+    ) -> Result<Response<ConnectBluetoothReceiverDeviceResponse>, Status> {
+        let device_id = required_device_id(request.into_inner().device_id)?;
+        let status = self
+            .app
+            .connect_bluetooth_receiver_device(&device_id)
+            .await
+            .map_err(app_status)?;
+        Ok(Response::new(ConnectBluetoothReceiverDeviceResponse {
+            status: Some(status),
+        }))
+    }
+
+    async fn disconnect_bluetooth_receiver_device(
+        &self,
+        request: Request<DisconnectBluetoothReceiverDeviceRequest>,
+    ) -> Result<Response<DisconnectBluetoothReceiverDeviceResponse>, Status> {
+        let device_id = required_device_id(request.into_inner().device_id)?;
+        let status = self
+            .app
+            .disconnect_bluetooth_receiver_device(&device_id)
+            .await
+            .map_err(app_status)?;
+        Ok(Response::new(DisconnectBluetoothReceiverDeviceResponse {
+            status: Some(status),
+        }))
+    }
+
+    async fn forget_bluetooth_receiver_device(
+        &self,
+        request: Request<ForgetBluetoothReceiverDeviceRequest>,
+    ) -> Result<Response<ForgetBluetoothReceiverDeviceResponse>, Status> {
+        let device_id = required_device_id(request.into_inner().device_id)?;
+        let status = self
+            .app
+            .forget_bluetooth_receiver_device(&device_id)
+            .await
+            .map_err(app_status)?;
+        Ok(Response::new(ForgetBluetoothReceiverDeviceResponse {
+            status: Some(status),
+        }))
+    }
+
     async fn list_fixture_profiles(
         &self,
         _request: Request<ListFixtureProfilesRequest>,
@@ -216,6 +291,14 @@ impl MusicAutoShowService for GrpcApi {
             status: Some(status),
         }))
     }
+}
+
+fn required_device_id(device_id: String) -> Result<String, Status> {
+    let device_id = device_id.trim();
+    if device_id.is_empty() {
+        return Err(Status::invalid_argument("Bluetooth device ID is required"));
+    }
+    Ok(device_id.into())
 }
 
 fn app_status(error: AppError) -> Status {

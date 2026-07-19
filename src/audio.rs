@@ -32,6 +32,7 @@ const CAPTURE_QUEUE_DEPTH: usize = 32;
 const CAPTURE_BUFFER_CAPACITY: usize = 8_192;
 const AUDIO_WORKER_COMMAND_DEPTH: usize = 8;
 const AUDIO_ANALYSIS_INTERVAL: Duration = Duration::from_millis(20);
+const BLUETOOTH_RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_SIMULATION_CATCHUP: Duration = Duration::from_millis(200);
 
 pub struct AudioCapture {
@@ -213,7 +214,11 @@ struct AudioWorkerState {
     analyzer: AudioAnalyzer,
     capture: Option<AudioCapture>,
     config: AudioConfig,
+    mode: AudioInputMode,
     simulate: bool,
+    runtime_status: AudioRuntimeStatus,
+    last_capture_attempt: Instant,
+    previous_recoverable_stream_events: u64,
     pending: Vec<f32>,
     analysis: AudioAnalysis,
     simulation_sample: u64,
@@ -226,10 +231,19 @@ struct AudioWorkerState {
 impl AudioWorkerState {
     fn new(config: AudioConfig, mode: AudioInputMode, cli_simulate: bool) -> Result<Self> {
         let simulate = cli_simulate || config.simulate;
-        let capture = if simulate {
-            None
+        let (capture, runtime_status) = if simulate {
+            (None, simulated_worker_status(&config))
         } else {
-            Some(start_capture(&config, mode)?)
+            match start_capture(&config, mode) {
+                Ok(capture) => {
+                    let status = capture.status();
+                    (Some(capture), status)
+                }
+                Err(error) if mode == AudioInputMode::BluetoothReceiver => {
+                    (None, waiting_bluetooth_status(&config, error.to_string()))
+                }
+                Err(error) => return Err(error),
+            }
         };
         let sample_rate = capture
             .as_ref()
@@ -238,7 +252,11 @@ impl AudioWorkerState {
             analyzer: AudioAnalyzer::new(sample_rate, config.gain, &config.beatnet_model_path),
             capture,
             config,
+            mode,
             simulate,
+            runtime_status,
+            last_capture_attempt: Instant::now(),
+            previous_recoverable_stream_events: 0,
             pending: Vec::with_capacity(CAPTURE_BUFFER_CAPACITY),
             analysis: AudioAnalysis::default(),
             simulation_sample: 0,
@@ -258,7 +276,11 @@ impl AudioWorkerState {
         loop {
             match receiver.recv_timeout(schedule.remaining(Instant::now())) {
                 Ok(AudioWorkerCommand::StartRecording { reply }) => {
-                    let result = if self.analyzer.start_recording() {
+                    let result = if !self.simulate && self.capture.is_none() {
+                        Err(anyhow::anyhow!(
+                            "connect a Bluetooth audio source before starting an input recording"
+                        ))
+                    } else if self.analyzer.start_recording() {
                         Ok(self.analyzer.recording_status())
                     } else {
                         Err(anyhow::anyhow!("audio recording could not start"))
@@ -301,11 +323,57 @@ impl AudioWorkerState {
             return;
         }
 
+        if self.mode == AudioInputMode::BluetoothReceiver {
+            self.reconcile_bluetooth_capture();
+        }
+
         if let Some(capture) = &self.capture {
             capture.drain_samples_into(&mut self.pending);
         }
         if !self.pending.is_empty() {
             self.analysis = self.analyzer.process(&self.pending);
+        }
+    }
+
+    fn reconcile_bluetooth_capture(&mut self) {
+        let failed_status = self.capture.as_ref().and_then(|capture| {
+            let status = capture.status();
+            (!status.running).then_some(status)
+        });
+        if let Some(status) = failed_status {
+            if let Some(capture) = self.capture.take() {
+                self.previous_recoverable_stream_events = self
+                    .previous_recoverable_stream_events
+                    .saturating_add(capture.recoverable_stream_events());
+            }
+            self.pending.clear();
+            self.runtime_status = waiting_bluetooth_status(&self.config, status.last_error);
+        }
+
+        if self.capture.is_some()
+            || self.last_capture_attempt.elapsed() < BLUETOOTH_RECONNECT_INTERVAL
+        {
+            return;
+        }
+        self.last_capture_attempt = Instant::now();
+        match start_capture(&self.config, self.mode) {
+            Ok(capture) => {
+                let sample_rate = capture.sample_rate();
+                if self.analyzer.sample_rate != sample_rate
+                    && !self.analyzer.recording_status().recording
+                {
+                    self.analyzer = AudioAnalyzer::new(
+                        sample_rate,
+                        self.config.gain,
+                        &self.config.beatnet_model_path,
+                    );
+                }
+                self.runtime_status = capture.status();
+                self.capture = Some(capture);
+            }
+            Err(error) => {
+                self.runtime_status = waiting_bluetooth_status(&self.config, error.to_string());
+            }
         }
     }
 
@@ -340,14 +408,15 @@ impl AudioWorkerState {
     }
 
     fn publish(&self, latest: &ArcSwap<AudioWorkerSnapshot>) {
-        let runtime = self.capture.as_ref().map_or_else(
-            || simulated_worker_status(&self.config),
-            AudioCapture::status,
-        );
-        let recoverable_stream_events = self
+        let runtime = self
             .capture
             .as_ref()
-            .map_or(0, AudioCapture::recoverable_stream_events);
+            .map_or_else(|| self.runtime_status.clone(), AudioCapture::status);
+        let recoverable_stream_events = self.previous_recoverable_stream_events.saturating_add(
+            self.capture
+                .as_ref()
+                .map_or(0, AudioCapture::recoverable_stream_events),
+        );
         latest.store(Arc::new(AudioWorkerSnapshot {
             analysis: self.analysis.clone(),
             runtime,
@@ -398,6 +467,36 @@ fn simulated_worker_status(config: &AudioConfig) -> AudioRuntimeStatus {
         running: true,
         simulated: true,
         ..Default::default()
+    }
+}
+
+fn waiting_bluetooth_status(config: &AudioConfig, error: String) -> AudioRuntimeStatus {
+    AudioRuntimeStatus {
+        configured_mode: AudioInputMode::BluetoothReceiver as i32,
+        actual_mode: AudioInputMode::BluetoothReceiver as i32,
+        configured_device_id: config.device_id.clone(),
+        device_name: "Bluetooth audio receiver".into(),
+        device_type: "bluetooth_receiver".into(),
+        host_api: bluetooth_receiver_host_api().into(),
+        selection_reason: "waiting_for_bluetooth_audio".into(),
+        running: false,
+        last_error: error,
+        ..Default::default()
+    }
+}
+
+fn bluetooth_receiver_host_api() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        "PipeWire"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "WASAPI"
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        "Unsupported"
     }
 }
 
@@ -662,7 +761,12 @@ fn build_cpal_stream(
             configured_mode: mode as i32,
             actual_mode: selection.actual_mode as i32,
             device_name: name,
-            device_type: capture_device_type(&id, &description).into(),
+            device_type: if mode == AudioInputMode::BluetoothReceiver {
+                "bluetooth_receiver"
+            } else {
+                capture_device_type(&id, &description)
+            }
+            .into(),
             host_api: selected.id()?.host().to_string(),
             channels: channels as u32,
             sample_rate,
@@ -725,6 +829,15 @@ fn select_capture_device(config: &AudioConfig, mode: AudioInputMode) -> Result<D
         AudioInputMode::Microphone => host
             .default_input_device()
             .map(|device| (device, "default_input")),
+        AudioInputMode::BluetoothReceiver => (!config.device_id.is_empty())
+            .then_some(config.device_id.as_str())
+            .and_then(resolve_configured_device)
+            .filter(is_bluetooth_capture_device)
+            .map(|device| (device, "configured_bluetooth_receiver"))
+            .or_else(|| {
+                bluetooth_capture_device(&host)
+                    .map(|device| (device, "connected_bluetooth_receiver"))
+            }),
         AudioInputMode::Auto | AudioInputMode::Unspecified => default_system_output(&host)
             .map(|device| (device, "auto_default_system_output"))
             .or_else(|| {
@@ -734,7 +847,9 @@ fn select_capture_device(config: &AudioConfig, mode: AudioInputMode) -> Result<D
     }
     .context("no capturable audio device is available")?;
 
-    let actual_mode = if is_pipewire_sink(&selected.0) {
+    let actual_mode = if mode == AudioInputMode::BluetoothReceiver {
+        AudioInputMode::BluetoothReceiver
+    } else if is_pipewire_sink(&selected.0) {
         AudioInputMode::PipewireSink
     } else if supports_system_output_capture(&selected.0) {
         AudioInputMode::SystemAudio
@@ -754,6 +869,20 @@ fn select_capture_device(config: &AudioConfig, mode: AudioInputMode) -> Result<D
         actual_mode,
         reason,
         missing_device_id,
+    })
+}
+
+fn bluetooth_capture_device(host: &cpal::Host) -> Option<cpal::Device> {
+    if host.id().to_string() == "wasapi" {
+        return default_system_output(host);
+    }
+    host.devices().ok()?.find(is_bluetooth_capture_device)
+}
+
+fn is_bluetooth_capture_device(device: &cpal::Device) -> bool {
+    device.description().is_ok_and(|description| {
+        description.interface_type() == cpal::InterfaceType::Bluetooth
+            && (device.supports_input() || supports_system_output_capture(device))
     })
 }
 
@@ -814,6 +943,9 @@ fn capture_stream_config(
 }
 
 fn capture_device_type(id: &str, description: &cpal::DeviceDescription) -> &'static str {
+    if description.interface_type() == cpal::InterfaceType::Bluetooth {
+        return "bluetooth_receiver";
+    }
     let system_output = (id.starts_with("pipewire:")
         && (id == PIPEWIRE_DEFAULT_SINK_ID
             || description.direction() == cpal::DeviceDirection::Duplex))
@@ -1491,6 +1623,24 @@ mod tests {
     fn capture_handle_is_sendable_between_runtime_threads() {
         fn assert_send<T: Send>() {}
         assert_send::<AudioCapture>();
+    }
+
+    #[test]
+    fn bluetooth_receiver_waits_without_falling_back_to_a_microphone() {
+        let config = AudioConfig {
+            mode: AudioInputMode::BluetoothReceiver as i32,
+            device_id: "stale-device".into(),
+            ..Default::default()
+        };
+
+        let status = waiting_bluetooth_status(&config, "source disconnected".into());
+
+        assert_eq!(status.actual_mode, AudioInputMode::BluetoothReceiver as i32);
+        assert_eq!(status.device_type, "bluetooth_receiver");
+        assert_eq!(status.configured_device_id, "stale-device");
+        assert_eq!(status.selection_reason, "waiting_for_bluetooth_audio");
+        assert!(!status.running);
+        assert_eq!(status.last_error, "source disconnected");
     }
 
     #[test]

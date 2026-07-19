@@ -1375,6 +1375,7 @@ fn normalize_audio_mode(audio: &mut Map<String, Value>) {
         "manual_device" => AudioInputMode::ManualDevice,
         "pipewire_sink" => AudioInputMode::PipewireSink,
         "microphone" => AudioInputMode::Microphone,
+        "bluetooth_receiver" => AudioInputMode::BluetoothReceiver,
         _ => AudioInputMode::Unspecified,
     };
     audio.insert("mode".into(), Value::from(value as i32));
@@ -1559,6 +1560,21 @@ mod tests {
             migrated["effects"]["movement_mode"],
             MovementMode::Figure8 as i32
         );
+    }
+
+    #[test]
+    fn migrates_bluetooth_receiver_audio_mode_name() {
+        let config = parse_json(
+            &serde_json::json!({
+                "audio": { "mode": "bluetooth_receiver" },
+                "fixtures": []
+            })
+            .to_string(),
+            true,
+        )
+        .expect("Bluetooth receiver mode should migrate");
+
+        assert_eq!(config.audio_mode(), AudioInputMode::BluetoothReceiver);
     }
 
     #[test]

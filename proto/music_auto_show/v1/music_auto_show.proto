@@ -11,6 +11,11 @@ service MusicAutoShowService {
   rpc ImportConfig(ImportConfigRequest) returns (ImportConfigResponse);
   rpc ResetConfig(ResetConfigRequest) returns (ResetConfigResponse);
   rpc ListAudioDevices(ListAudioDevicesRequest) returns (ListAudioDevicesResponse);
+  rpc GetBluetoothReceiverStatus(GetBluetoothReceiverStatusRequest) returns (GetBluetoothReceiverStatusResponse);
+  rpc SetBluetoothReceiverPairing(SetBluetoothReceiverPairingRequest) returns (SetBluetoothReceiverPairingResponse);
+  rpc ConnectBluetoothReceiverDevice(ConnectBluetoothReceiverDeviceRequest) returns (ConnectBluetoothReceiverDeviceResponse);
+  rpc DisconnectBluetoothReceiverDevice(DisconnectBluetoothReceiverDeviceRequest) returns (DisconnectBluetoothReceiverDeviceResponse);
+  rpc ForgetBluetoothReceiverDevice(ForgetBluetoothReceiverDeviceRequest) returns (ForgetBluetoothReceiverDeviceResponse);
   rpc ListFixtureProfiles(ListFixtureProfilesRequest) returns (ListFixtureProfilesResponse);
   rpc ControlShow(ControlShowRequest) returns (ControlShowResponse);
   rpc SetBlackout(SetBlackoutRequest) returns (SetBlackoutResponse);
@@ -72,6 +77,45 @@ message ListAudioDevicesRequest {}
 
 message ListAudioDevicesResponse {
   repeated AudioDevice devices = 1;
+}
+
+message GetBluetoothReceiverStatusRequest {}
+
+message GetBluetoothReceiverStatusResponse {
+  BluetoothReceiverStatus status = 1;
+}
+
+message SetBluetoothReceiverPairingRequest {
+  bool enabled = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message SetBluetoothReceiverPairingResponse {
+  BluetoothReceiverStatus status = 1;
+}
+
+message ConnectBluetoothReceiverDeviceRequest {
+  string device_id = 1;
+}
+
+message ConnectBluetoothReceiverDeviceResponse {
+  BluetoothReceiverStatus status = 1;
+}
+
+message DisconnectBluetoothReceiverDeviceRequest {
+  string device_id = 1;
+}
+
+message DisconnectBluetoothReceiverDeviceResponse {
+  BluetoothReceiverStatus status = 1;
+}
+
+message ForgetBluetoothReceiverDeviceRequest {
+  string device_id = 1;
+}
+
+message ForgetBluetoothReceiverDeviceResponse {
+  BluetoothReceiverStatus status = 1;
 }
 
 message ListFixtureProfilesRequest {}
@@ -286,6 +330,29 @@ message AudioDevice {
   bool is_default_loopback = 10;
 }
 
+message BluetoothReceiverStatus {
+  bool supported = 1;
+  bool receiver_ready = 2;
+  string platform = 3;
+  string adapter_name = 4;
+  bool powered = 5;
+  bool discoverable = 6;
+  bool pairable = 7;
+  string status_message = 8;
+  string last_error = 9;
+  string setup_hint = 10;
+  repeated BluetoothReceiverDevice devices = 11;
+}
+
+message BluetoothReceiverDevice {
+  string id = 1;
+  string name = 2;
+  bool paired = 3;
+  bool trusted = 4;
+  bool connected = 5;
+  bool audio_capable = 6;
+}
+
 enum AudioInputMode {
   AUDIO_INPUT_MODE_UNSPECIFIED = 0;
   AUDIO_INPUT_MODE_AUTO = 1;
@@ -293,6 +360,7 @@ enum AudioInputMode {
   AUDIO_INPUT_MODE_MANUAL_DEVICE = 3;
   AUDIO_INPUT_MODE_PIPEWIRE_SINK = 4;
   AUDIO_INPUT_MODE_MICROPHONE = 5;
+  AUDIO_INPUT_MODE_BLUETOOTH_RECEIVER = 6;
 }
 
 message ShowConfig {

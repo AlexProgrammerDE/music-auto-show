@@ -20,14 +20,15 @@ use tracing::{error, info, warn};
 
 use crate::{
     audio::{AudioWorker, AudioWorkerSnapshot, list_devices},
+    bluetooth::BluetoothReceiver,
     config::{self, ConfigError, ValidatedShowConfig},
     dmx::{DmxWorker, frame_interval as dmx_frame_interval},
     effects::EffectsEngine,
     media::MediaState,
     proto::v1::{
-        AudioRuntimeStatus, BeatNetStatus, CommandResult, DmxConfig, DmxRuntimeStatus, MediaInfo,
-        Recording, RecordingStatus, RunState, RuntimeTimingStatus, ShowCommand, ShowConfig,
-        ShowSnapshot,
+        AudioRuntimeStatus, BeatNetStatus, BluetoothReceiverStatus, CommandResult, DmxConfig,
+        DmxRuntimeStatus, MediaInfo, Recording, RecordingStatus, RunState, RuntimeTimingStatus,
+        ShowCommand, ShowConfig, ShowSnapshot,
     },
     timing::PeriodicSchedule,
 };
@@ -154,6 +155,7 @@ pub struct App {
     command_rx: StdMutex<Option<Receiver<RuntimeCommand>>>,
     runtime_thread: StdMutex<Option<thread::JoinHandle<()>>>,
     media_task: Mutex<Option<JoinHandle<()>>>,
+    bluetooth: BluetoothReceiver,
     shutdown: CancellationToken,
     cli_simulate: bool,
     command_queue_rejections: AtomicU64,
@@ -177,6 +179,7 @@ impl App {
             command_rx: StdMutex::new(Some(command_rx)),
             runtime_thread: StdMutex::new(None),
             media_task: Mutex::new(None),
+            bluetooth: BluetoothReceiver::new(),
             shutdown: CancellationToken::new(),
             cli_simulate: simulate,
             command_queue_rejections: AtomicU64::new(0),
@@ -313,6 +316,51 @@ impl App {
             .map_err(|error| {
                 AppError::Runtime(anyhow!(error).context("audio device enumeration task failed"))
             })
+    }
+
+    pub async fn bluetooth_receiver_status(&self) -> BluetoothReceiverStatus {
+        self.bluetooth.status().await
+    }
+
+    pub async fn set_bluetooth_receiver_pairing(
+        &self,
+        enabled: bool,
+        timeout_seconds: u32,
+    ) -> Result<BluetoothReceiverStatus, AppError> {
+        self.bluetooth
+            .set_pairing(enabled, timeout_seconds)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn connect_bluetooth_receiver_device(
+        &self,
+        device_id: &str,
+    ) -> Result<BluetoothReceiverStatus, AppError> {
+        self.bluetooth
+            .connect(device_id)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn disconnect_bluetooth_receiver_device(
+        &self,
+        device_id: &str,
+    ) -> Result<BluetoothReceiverStatus, AppError> {
+        self.bluetooth
+            .disconnect(device_id)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn forget_bluetooth_receiver_device(
+        &self,
+        device_id: &str,
+    ) -> Result<BluetoothReceiverStatus, AppError> {
+        self.bluetooth
+            .forget(device_id)
+            .await
+            .map_err(AppError::from)
     }
 
     pub async fn media_artwork(&self, revision: &str) -> Option<Arc<[u8]>> {

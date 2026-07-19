@@ -479,13 +479,15 @@ impl DmxOutput {
             .and_then(|ports| ports.into_iter().find(|port| port.port_name == port_name))
             .map(|port| format_port(&port))
             .unwrap_or_else(|| "Unknown serial device".into());
-        let mut port = serialport::new(&port_name, DMX_BAUD_RATE)
+        let port_builder = serialport::new(&port_name, DMX_BAUD_RATE)
             .data_bits(DataBits::Eight)
             .stop_bits(StopBits::Two)
             .parity(Parity::None)
             .flow_control(FlowControl::None)
-            .timeout(DMX_SERIAL_TIMEOUT)
-            .exclusive(true)
+            .timeout(DMX_SERIAL_TIMEOUT);
+        #[cfg(unix)]
+        let port_builder = port_builder.exclusive(true);
+        let mut port = port_builder
             .open()
             .with_context(|| format!("failed to open DMX interface {port_name}"))?;
         if let Err(error) = port.write_request_to_send(false) {

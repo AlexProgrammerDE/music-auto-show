@@ -43,6 +43,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ureq = "3.3"
 url = "2.5"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17.4", features = ["bluetoothd"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Devices_Enumeration",
+  "Foundation",
+  "Media_Audio",
+  "System",
+] }
+
 [build-dependencies]
 protoc-bin-vendored = "3.2"
 tonic-prost-build = "0.14.6"

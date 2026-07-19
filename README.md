@@ -5,7 +5,7 @@ Music Auto Show turns live system audio into real-time DMX lighting. A Rust serv
 ## What is included
 
 - Native BeatNet+ inference with the official 288-feature network shape and causal beat, downbeat, tempo, phase, and bar tracking
-- System audio, microphone, and deterministic simulation inputs through CPAL
+- System audio, Bluetooth receiver, microphone, and deterministic simulation inputs through CPAL
 - Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash visualizations
 - All movement modes from the original app, including sweeps, circles, figure eight, ballyhoo, fan, chase, strobe position, and crazy movement
 - Per-fixture channel mapping, fixed values, channel ranges, movement limits, intensity scaling, and built-in profiles
@@ -25,13 +25,13 @@ Linux builds need ALSA, udev, and PipeWire development libraries. CPAL builds it
 
 ```bash
 # Debian or Ubuntu
-sudo apt install clang libasound2-dev libpipewire-0.3-dev libudev-dev pkg-config
+sudo apt install clang libasound2-dev libdbus-1-dev libpipewire-0.3-dev libudev-dev pkg-config
 
 # Fedora
-sudo dnf install alsa-lib-devel clang pipewire-devel pkgconf-pkg-config systemd-devel
+sudo dnf install alsa-lib-devel clang dbus-devel pipewire-devel pkgconf-pkg-config systemd-devel
 
 # Arch Linux
-sudo pacman -S alsa-lib clang pipewire pkgconf systemd-libs
+sudo pacman -S alsa-lib clang dbus pipewire pkgconf systemd-libs
 ```
 
 On Linux, add the hardware user to the serial-port group before using Open DMX:
@@ -59,6 +59,8 @@ cargo run --release -- --config show.json --listen 127.0.0.1:3000
 ```
 
 On Linux, Automatic and System Audio capture the current PipeWire default sink and follow later output-device changes. CPAL falls back to its native PulseAudio host, then ALSA, when PipeWire is unavailable. Manual selections are stored as CPAL device IDs instead of display names or PulseAudio source strings.
+
+Bluetooth Receiver makes the host act as a Bluetooth speaker and analyzes the audio sent by a paired phone. On Linux, it controls the system BlueZ adapter and captures the A2DP sink exposed by WirePlumber. `bluetoothd` and the PipeWire BlueZ monitor must be running. This is the supported path on Raspberry Pi OS. On Windows, pair the phone in Bluetooth settings, connect it from the app, and keep the desired playback device selected as the default Windows output. The Settings page reports adapter, pairing, profile, and connection status on both platforms.
 
 The configuration file is created with defaults when it does not exist. The Settings page can load an older JSON configuration, migrate it through Rust, save the active file, or export a portable copy.
 
