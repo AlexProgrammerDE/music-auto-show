@@ -2,8 +2,6 @@ use anyhow::Result;
 
 use crate::proto::v1::BluetoothReceiverStatus;
 
-const RECEIVER_NAME: &str = "Music Auto Show";
-
 pub struct BluetoothReceiver {
     platform: platform::PlatformReceiver,
 }
@@ -11,7 +9,7 @@ pub struct BluetoothReceiver {
 impl BluetoothReceiver {
     pub fn new() -> Self {
         Self {
-            platform: platform::PlatformReceiver::new(RECEIVER_NAME),
+            platform: platform::PlatformReceiver::new(),
         }
     }
 
@@ -53,7 +51,10 @@ mod platform {
     use std::str::FromStr;
 
     use anyhow::{Context, Result};
-    use bluer::{Adapter, Address, Session, agent::Agent};
+    use bluer::{
+        Adapter, Address, Session,
+        agent::{Agent, AgentHandle},
+    };
     use tokio::sync::{Mutex, MutexGuard};
 
     use crate::proto::v1::{BluetoothReceiverDevice, BluetoothReceiverStatus};
@@ -62,20 +63,31 @@ mod platform {
     const A2DP_SOURCE_UUID_PREFIX: &str = "0000110a";
 
     pub struct PlatformReceiver {
-        receiver_name: String,
         state: Mutex<Option<LinuxState>>,
     }
 
     struct LinuxState {
-        _session: Session,
+        session: Session,
         adapter: Adapter,
-        _agent: bluer::agent::AgentHandle,
+        pairing_session: Option<PairingSession>,
+    }
+
+    struct PairingSession {
+        _agent: AgentHandle,
+        previous_adapter_state: AdapterState,
+    }
+
+    struct AdapterState {
+        powered: bool,
+        pairable: bool,
+        pairable_timeout: u32,
+        discoverable: bool,
+        discoverable_timeout: u32,
     }
 
     impl PlatformReceiver {
-        pub fn new(receiver_name: &str) -> Self {
+        pub fn new() -> Self {
             Self {
-                receiver_name: receiver_name.into(),
                 state: Mutex::new(None),
             }
         }
@@ -103,15 +115,38 @@ mod platform {
             let state = state
                 .as_mut()
                 .context("Bluetooth receiver state was not initialized")?;
-            state.adapter.set_powered(true).await?;
             if enabled {
-                state.adapter.set_pairable_timeout(timeout_seconds).await?;
-                state
-                    .adapter
-                    .set_discoverable_timeout(timeout_seconds)
+                if state.pairing_session.is_none() {
+                    let previous_adapter_state = AdapterState::capture(&state.adapter).await?;
+                    let agent = state
+                        .session
+                        .register_agent(Agent {
+                            request_default: true,
+                            ..Default::default()
+                        })
+                        .await
+                        .context("could not register the Bluetooth pairing agent")?;
+                    state.pairing_session = Some(PairingSession {
+                        _agent: agent,
+                        previous_adapter_state,
+                    });
+                }
+                if let Err(error) = enable_pairing(&state.adapter, timeout_seconds).await {
+                    if let Some(pairing_session) = &state.pairing_session {
+                        let _ = pairing_session
+                            .previous_adapter_state
+                            .restore(&state.adapter)
+                            .await;
+                    }
+                    state.pairing_session = None;
+                    return Err(error);
+                }
+            } else if let Some(pairing_session) = &state.pairing_session {
+                pairing_session
+                    .previous_adapter_state
+                    .restore(&state.adapter)
                     .await?;
-                state.adapter.set_pairable(true).await?;
-                state.adapter.set_discoverable(true).await?;
+                state.pairing_session = None;
             } else {
                 state.adapter.set_discoverable(false).await?;
                 state.adapter.set_pairable(false).await?;
@@ -127,6 +162,17 @@ mod platform {
                 .context("Bluetooth receiver state was not initialized")?;
             let device = state.adapter.device(address)?;
             if !device.is_paired().await? {
+                let _temporary_agent = if state.pairing_session.is_none() {
+                    Some(
+                        state
+                            .session
+                            .register_agent(Agent::default())
+                            .await
+                            .context("could not register the Bluetooth pairing agent")?,
+                    )
+                } else {
+                    None
+                };
                 device.pair().await?;
             }
             device.set_trusted(true).await?;
@@ -170,13 +216,46 @@ mod platform {
         async fn initialized_state(&self) -> Result<MutexGuard<'_, Option<LinuxState>>> {
             let mut state = self.state.lock().await;
             if state.is_none() {
-                *state = Some(initialize(&self.receiver_name).await?);
+                *state = Some(initialize().await?);
             }
             Ok(state)
         }
     }
 
-    async fn initialize(receiver_name: &str) -> Result<LinuxState> {
+    impl AdapterState {
+        async fn capture(adapter: &Adapter) -> Result<Self> {
+            Ok(Self {
+                powered: adapter.is_powered().await?,
+                pairable: adapter.is_pairable().await?,
+                pairable_timeout: adapter.pairable_timeout().await?,
+                discoverable: adapter.is_discoverable().await?,
+                discoverable_timeout: adapter.discoverable_timeout().await?,
+            })
+        }
+
+        async fn restore(&self, adapter: &Adapter) -> Result<()> {
+            adapter.set_powered(true).await?;
+            adapter.set_pairable_timeout(self.pairable_timeout).await?;
+            adapter
+                .set_discoverable_timeout(self.discoverable_timeout)
+                .await?;
+            adapter.set_pairable(self.pairable).await?;
+            adapter.set_discoverable(self.discoverable).await?;
+            adapter.set_powered(self.powered).await?;
+            Ok(())
+        }
+    }
+
+    async fn enable_pairing(adapter: &Adapter, timeout_seconds: u32) -> Result<()> {
+        adapter.set_powered(true).await?;
+        adapter.set_pairable_timeout(timeout_seconds).await?;
+        adapter.set_discoverable_timeout(timeout_seconds).await?;
+        adapter.set_pairable(true).await?;
+        adapter.set_discoverable(true).await?;
+        Ok(())
+    }
+
+    async fn initialize() -> Result<LinuxState> {
         let session = Session::new()
             .await
             .context("could not connect to the BlueZ system service")?;
@@ -184,19 +263,10 @@ mod platform {
             .default_adapter()
             .await
             .context("no system Bluetooth adapter is available")?;
-        adapter.set_powered(true).await?;
-        adapter.set_alias(receiver_name.into()).await?;
-        let agent = session
-            .register_agent(Agent {
-                request_default: true,
-                ..Default::default()
-            })
-            .await
-            .context("could not register the Bluetooth pairing agent")?;
         Ok(LinuxState {
-            _session: session,
+            session,
             adapter,
-            _agent: agent,
+            pairing_session: None,
         })
     }
 
@@ -226,12 +296,6 @@ mod platform {
                 continue;
             }
             let trusted = device.is_trusted().await.unwrap_or(false);
-            let trusted = if paired && !trusted {
-                device.set_trusted(true).await?;
-                true
-            } else {
-                trusted
-            };
             devices.push(BluetoothReceiverDevice {
                 id: address.to_string(),
                 name,
@@ -307,7 +371,7 @@ mod platform {
     }
 
     impl PlatformReceiver {
-        pub fn new(_receiver_name: &str) -> Self {
+        pub fn new() -> Self {
             Self {
                 connections: Mutex::new(HashMap::new()),
             }
@@ -451,7 +515,7 @@ mod platform {
     pub struct PlatformReceiver;
 
     impl PlatformReceiver {
-        pub fn new(_receiver_name: &str) -> Self {
+        pub fn new() -> Self {
             Self
         }
 
