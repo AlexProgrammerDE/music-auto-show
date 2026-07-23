@@ -50,7 +50,7 @@
     "@types/three": "0.185.1",
     "@vitejs/plugin-react": "^6",
     "jsdom": "^29.1.1",
-    "oxfmt": "^0.59.0",
+    "oxfmt": "^0.60.0",
     "oxlint": "^1.74.0",
     "typescript": "~6",
     "vite": "^8",

@@ -22,7 +22,7 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 mime_guess = "2.0"
 nowhear = { version = "0.5.1", features = ["tracing"] }
 prost = "0.14.4"
-rand = "0.9"
+rand = "0.10"
 realfft = "3.5"
 rust-embed = "8.12.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -37,7 +37,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-web = "0.14.6"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ureq = "3.3"
