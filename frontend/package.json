@@ -44,7 +44,7 @@
     "@tanstack/router-plugin": "^1.168.22",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^24",
+    "@types/node": "^26.0.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "0.185.1",
