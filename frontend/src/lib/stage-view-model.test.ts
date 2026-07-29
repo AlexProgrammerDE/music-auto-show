@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import { FixtureStateSchema } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
+  beamAngleFromZoom,
   beamTargetFromDirection,
   fixtureBrightness,
   fixtureColor,
@@ -30,6 +31,16 @@ describe("stage view model", () => {
     expect(belowCenter).toBeCloseTo(-aboveCenter)
     expect(Math.abs(belowCenter)).toBeLessThan(0.005)
     expect(physicalAxisValue(255, 255, -270, 270)).toBe(270)
+    expect(physicalAxisValue(0, 0, 270, -270)).toBe(270)
+    expect(physicalAxisValue(255, 255, 270, -270)).toBe(-270)
+  })
+
+  it("maps live zoom through ordered physical optics", () => {
+    expect(beamAngleFromZoom(25, 0, 10, 50)).toBe(10)
+    expect(beamAngleFromZoom(25, 255, 10, 50)).toBe(50)
+    expect(beamAngleFromZoom(25, 0, 50, 10)).toBe(50)
+    expect(beamAngleFromZoom(25, 255, 50, 10)).toBe(10)
+    expect(beamAngleFromZoom(25, 128, 0, 0)).toBe(25)
   })
 
   it("rotates an effect fan around its forward optical axis", () => {
@@ -43,25 +54,30 @@ describe("stage view model", () => {
     expect(magnitude).toBeCloseTo(1)
   })
 
-  it("keeps continuous Techno Derby strobe mode on across every emitter", () => {
+  it("shows continuous Techno Derby strobe as steady under reduced motion", () => {
     expect(
       Array.from({ length: 16 }, (_, emitterIndex) =>
-        strobePatternLevel(18, emitterIndex, 16, 2.4),
+        strobePatternLevel(18, emitterIndex, 16, 0, 0.5, true),
       ),
-    ).toEqual(Array.from({ length: 16 }, () => 1))
+    ).toEqual(Array.from({ length: 16 }, () => 0.6))
   })
 
   it("previews Techno Derby chase patterns as deterministic selective groups", () => {
     const firstFrame = Array.from({ length: 16 }, (_, emitterIndex) =>
-      strobePatternLevel(1, emitterIndex, 16, 0.5),
+      strobePatternLevel(1, emitterIndex, 16, 0.5, 0.5),
     )
     const repeatedFrame = Array.from({ length: 16 }, (_, emitterIndex) =>
-      strobePatternLevel(1, emitterIndex, 16, 0.5),
+      strobePatternLevel(1, emitterIndex, 16, 0.5, 0.5),
     )
 
     expect(firstFrame).toEqual(repeatedFrame)
     expect(firstFrame.filter((level) => level === 1)).toHaveLength(1)
-    expect(strobePatternLevel(0, 0, 16, 0.5)).toBe(0)
+    expect(strobePatternLevel(0, 0, 16, 0.5, 0.5)).toBe(0)
+  })
+
+  it("uses configured speed for continuous Techno Derby strobe timing", () => {
+    expect(strobePatternLevel(18, 0, 16, 0.1, 0)).toBe(1)
+    expect(strobePatternLevel(18, 0, 16, 0.1, 1)).toBe(0)
   })
 
   it("stops a transformed beam at the stage floor", () => {

@@ -13,7 +13,7 @@
     <manufacturer>Lixada</manufacturer>
     <short_manufacturer>Lixada</short_manufacturer>
     <Modules index="0">
-      <Module index="0" name="Rotating effect housing" class="Conventional" beamtype="None">
+      <Module index="0" name="LED Mini Butterfly" class="Conventional" beamtype="Effect">
         <Body><Size x="0.200" y="0.170" z="0.140"/></Body>
         <ChannelType index="0" attribute="DIM" feature="DIMMER" preset="DIMMER" coarse="1" default="0">
           <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0" physto="1" subattribute="DIM" subattribute_user_name="Master dimmer" attribute="DIM" feature="DIMMER"/>
@@ -55,17 +55,9 @@
           </ChannelFunction>
         </ChannelType>
       </Module>
-      <Module index="1" name="Color effect 1" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
-      <Module index="2" name="Color effect 2" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
-      <Module index="3" name="Color effect 3" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
-      <Module index="4" name="Color effect 4" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
     </Modules>
     <Instances index="1">
       <Instance index="0" module_index="0"/>
-      <Instance index="1" module_index="1"/>
-      <Instance index="2" module_index="2"/>
-      <Instance index="3" module_index="3"/>
-      <Instance index="4" module_index="4"/>
     </Instances>
     <Wheels index="2"/>
     <VirtualFunctionBlocks index="3"/>

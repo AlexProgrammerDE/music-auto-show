@@ -69,15 +69,15 @@
             <ChannelSet index="0" name="Manual RGBW" from_dmx="0" to_dmx="8"/>
           </ChannelFunction>
           <ChannelFunction index="1" min_dmx_24="589824" max_dmx_24="16777215" subattribute="COLORMIXCOLOR" subattribute_user_name="Color macro" attribute="COLORMIXER" feature="COLORMIX">
-            <ChannelSet index="0" name="RGBW" from_dmx="9" to_dmx="20"/>
+            <ChannelSet index="0" name="RGB" from_dmx="9" to_dmx="20"/>
             <ChannelSet index="1" name="Red" from_dmx="21" to_dmx="34"/>
             <ChannelSet index="2" name="Green" from_dmx="35" to_dmx="49"/>
             <ChannelSet index="3" name="Blue" from_dmx="50" to_dmx="63"/>
-            <ChannelSet index="4" name="White" from_dmx="64" to_dmx="77"/>
+            <ChannelSet index="4" name="No function" from_dmx="64" to_dmx="77"/>
             <ChannelSet index="5" name="RGB" from_dmx="78" to_dmx="91"/>
             <ChannelSet index="6" name="Red Blue" from_dmx="92" to_dmx="105"/>
             <ChannelSet index="7" name="Red Green" from_dmx="106" to_dmx="119"/>
-            <ChannelSet index="8" name="RGBW" from_dmx="120" to_dmx="133"/>
+            <ChannelSet index="8" name="RGB" from_dmx="120" to_dmx="133"/>
             <ChannelSet index="9" name="Red Green" from_dmx="134" to_dmx="147"/>
             <ChannelSet index="10" name="RGB" from_dmx="148" to_dmx="161"/>
             <ChannelSet index="11" name="RGBW" from_dmx="162" to_dmx="189"/>

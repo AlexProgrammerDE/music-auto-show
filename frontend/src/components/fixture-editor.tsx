@@ -1,4 +1,4 @@
-import { clone } from "@bufbuild/protobuf"
+import { clone, create } from "@bufbuild/protobuf"
 import { useForm } from "@tanstack/react-form"
 
 import {
@@ -32,8 +32,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import {
   FixtureConfigSchema,
+  FixtureStagePlacementSchema,
   FixtureVisualKind,
   type FixtureConfig,
   type GrandMa2FixtureType,
@@ -57,6 +59,10 @@ function fixtureTypeLabel(fixtureType: GrandMa2FixtureType) {
   return `${fixtureType.manufacturer} ${fixtureType.name} · ${fixtureType.mode} · ${source}`
 }
 
+function stageInputValue(value: number | undefined, fallback: number) {
+  return Math.round((value ?? fallback) * 100) / 100
+}
+
 export function FixtureEditor({
   fixture,
   fixtureTypes,
@@ -69,6 +75,7 @@ export function FixtureEditor({
   onOpenChange,
   onSave,
 }: FixtureEditorProps) {
+  const placement = fixture.stagePlacement
   const form = useForm({
     defaultValues: {
       name: fixture.name,
@@ -80,6 +87,16 @@ export function FixtureEditor({
       movementPanMax: fixture.movementPanMax,
       movementTiltMin: fixture.movementTiltMin,
       movementTiltMax: fixture.movementTiltMax,
+      placementX: stageInputValue(placement?.xM, 0),
+      placementY: stageInputValue(placement?.yM, 3.35),
+      placementZ: stageInputValue(placement?.zM, 0),
+      rotationX: stageInputValue(placement?.rotationXDegrees, 0),
+      rotationY: stageInputValue(placement?.rotationYDegrees, 0),
+      rotationZ: stageInputValue(placement?.rotationZDegrees, 0),
+      focusTargetEnabled: placement?.focusTargetEnabled ?? true,
+      focusTargetX: stageInputValue(placement?.focusTargetXM, 0),
+      focusTargetY: stageInputValue(placement?.focusTargetYM, 0),
+      focusTargetZ: stageInputValue(placement?.focusTargetZM, 4.2),
     },
     onSubmit: async ({ value }) => {
       const next = clone(FixtureConfigSchema, fixture)
@@ -92,6 +109,18 @@ export function FixtureEditor({
       next.movementPanMax = value.movementPanMax
       next.movementTiltMin = value.movementTiltMin
       next.movementTiltMax = value.movementTiltMax
+      next.stagePlacement = create(FixtureStagePlacementSchema, {
+        xM: value.placementX,
+        yM: value.placementY,
+        zM: value.placementZ,
+        rotationXDegrees: value.rotationX,
+        rotationYDegrees: value.rotationY,
+        rotationZDegrees: value.rotationZ,
+        focusTargetEnabled: value.focusTargetEnabled,
+        focusTargetXM: value.focusTargetX,
+        focusTargetYM: value.focusTargetY,
+        focusTargetZM: value.focusTargetZ,
+      })
       await onSave(next)
     },
   })
@@ -204,7 +233,7 @@ export function FixtureEditor({
                         <FieldDescription className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">{selected.channelCount} channels</Badge>
                           <span>
-                            DMX functions and visualization metadata come from the grandMA2 file.
+                            DMX functions and physical ranges come from the grandMA2 file.
                           </span>
                         </FieldDescription>
                       ) : null}
@@ -239,7 +268,7 @@ export function FixtureEditor({
               <form.Field name="position">
                 {(field) => (
                   <Field>
-                    <FieldLabel htmlFor={field.name}>Stage position</FieldLabel>
+                    <FieldLabel htmlFor={field.name}>Show order</FieldLabel>
                     <Input
                       id={field.name}
                       name={field.name}
@@ -277,6 +306,96 @@ export function FixtureEditor({
                 )}
               </form.Field>
             </FieldGroup>
+
+            <FieldSet className="border p-4">
+              <FieldLegend>Stage placement</FieldLegend>
+              <FieldDescription>
+                Set the fixture origin in meters, then rotate its mount. X runs left to right, Y is
+                height, and Z runs from the truss toward the audience.
+              </FieldDescription>
+              <FieldGroup className="grid gap-4 sm:grid-cols-3">
+                {(
+                  [
+                    ["placementX", "Position X", -100, 100],
+                    ["placementY", "Position Y", -10, 100],
+                    ["placementZ", "Position Z", -100, 100],
+                    ["rotationX", "Rotation X", -360, 360],
+                    ["rotationY", "Rotation Y", -360, 360],
+                    ["rotationZ", "Rotation Z", -360, 360],
+                  ] as const
+                ).map(([name, label, min, max]) => (
+                  <form.Field key={name} name={name}>
+                    {(field) => (
+                      <Field>
+                        <FieldLabel htmlFor={field.name}>{label}</FieldLabel>
+                        <Input
+                          id={field.name}
+                          name={field.name}
+                          type="number"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          min={min}
+                          max={max}
+                          step={0.01}
+                          value={field.state.value}
+                          onBlur={field.handleBlur}
+                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                        />
+                      </Field>
+                    )}
+                  </form.Field>
+                ))}
+              </FieldGroup>
+              <form.Field name="focusTargetEnabled">
+                {(field) => (
+                  <Field orientation="horizontal">
+                    <Switch
+                      id={field.name}
+                      name={field.name}
+                      checked={field.state.value}
+                      onCheckedChange={field.handleChange}
+                    />
+                    <FieldLabel htmlFor={field.name}>Aim fixed fixture at a focus point</FieldLabel>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Subscribe selector={(state) => state.values.focusTargetEnabled}>
+                {(focusTargetEnabled) =>
+                  focusTargetEnabled ? (
+                    <FieldGroup className="grid gap-4 sm:grid-cols-3">
+                      {(
+                        [
+                          ["focusTargetX", "Focus X", -100, 100],
+                          ["focusTargetY", "Focus Y", -10, 100],
+                          ["focusTargetZ", "Focus Z", -100, 100],
+                        ] as const
+                      ).map(([name, label, min, max]) => (
+                        <form.Field key={name} name={name}>
+                          {(field) => (
+                            <Field>
+                              <FieldLabel htmlFor={field.name}>{label}</FieldLabel>
+                              <Input
+                                id={field.name}
+                                name={field.name}
+                                type="number"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                min={min}
+                                max={max}
+                                step={0.01}
+                                value={field.state.value}
+                                onBlur={field.handleBlur}
+                                onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                              />
+                            </Field>
+                          )}
+                        </form.Field>
+                      ))}
+                    </FieldGroup>
+                  ) : null
+                }
+              </form.Subscribe>
+            </FieldSet>
 
             <form.Subscribe selector={(state) => state.values.fixtureTypeId}>
               {(fixtureTypeId) => {

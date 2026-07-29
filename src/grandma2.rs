@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
-use base64::{Engine, prelude::BASE64_STANDARD};
 use quick_xml::{
     Reader, XmlVersion,
     events::{BytesStart, Event},
@@ -19,8 +18,6 @@ pub const SHOWTEC_TECHNO_DERBY_ID: &str = "builtin:showtec-techno-derby-4ch:0";
 pub const LIXADA_MINI_BUTTERFLY_ID: &str = "builtin:lixada-mini-butterfly-7ch:0";
 
 const MAX_FIXTURE_FILE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_MESH_VERTICES: usize = 100_000;
-const MAX_MESH_INDICES: usize = 600_000;
 
 const BUILTIN_FILES: [(&str, &str, &str); 3] = [
     (
@@ -420,7 +417,6 @@ struct RawModule {
     beam_intensity: f32,
     size: Option<[f32; 3]>,
     channels: Vec<RawChannel>,
-    models: Vec<RawModelNode>,
 }
 
 #[derive(Default)]
@@ -460,53 +456,11 @@ struct RawInstance {
     patch: u32,
 }
 
-#[derive(Default)]
-struct RawMesh {
-    name: String,
-    vertices: String,
-    faces: String,
-    color_rgb: u32,
-}
-
-struct RawModelNode {
-    name: String,
-    model_type: String,
-    axis_to_parent: String,
-    location: [f32; 3],
-    rotation: [f32; 3],
-    scaling: [f32; 3],
-    mesh: Option<RawMesh>,
-    children: Vec<RawModelNode>,
-    beam_diameter: f32,
-    beam_clipping_distance: f32,
-}
-
-impl Default for RawModelNode {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            model_type: String::new(),
-            axis_to_parent: String::new(),
-            location: [0.0; 3],
-            rotation: [0.0; 3],
-            scaling: [1.0; 3],
-            mesh: None,
-            children: Vec::new(),
-            beam_diameter: 0.0,
-            beam_clipping_distance: 0.0,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 enum TextCapture {
     Manufacturer,
     Revision,
     Warning,
-    Vertices,
-    Faces,
-    BeamDiameter,
-    BeamClippingDistance,
 }
 
 fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
@@ -517,8 +471,6 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
     let mut module = None::<RawModule>;
     let mut channel = None::<RawChannel>;
     let mut function = None::<RawFunction>;
-    let mut model_stack = Vec::<RawModelNode>::new();
-    let mut model_elements = Vec::<bool>::new();
     let mut capture = None::<TextCapture>;
     let mut root_seen = false;
 
@@ -549,8 +501,6 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                             }
                     }
                     "Module" if fixture.is_some() => {
-                        model_stack.clear();
-                        model_elements.clear();
                         module = Some(raw_module(&reader, &element)?);
                     }
                     "Size" if module.is_some() => {
@@ -573,50 +523,6 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                         if let Some(fixture) = &mut fixture {
                             fixture.instances.push(raw_instance(&reader, &element)?);
                         }
-                    }
-                    "Model" if module.is_some() => {
-                        if let Some(node) = raw_model(&reader, &element)? {
-                            model_stack.push(node);
-                            model_elements.push(true);
-                        } else {
-                            model_elements.push(false);
-                        }
-                    }
-                    "Location" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.location = raw_vector(&reader, &element, [0.0; 3])?;
-                        }
-                    }
-                    "Rotation" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.rotation = raw_vector(&reader, &element, [0.0; 3])?;
-                        }
-                    }
-                    "Scaling" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.scaling = raw_vector(&reader, &element, [1.0; 3])?;
-                        }
-                    }
-                    "Vertices" if current_raw_mesh(&mut model_stack).is_some() => {
-                        capture = Some(TextCapture::Vertices);
-                    }
-                    "Faces" if current_raw_mesh(&mut model_stack).is_some() => {
-                        capture = Some(TextCapture::Faces);
-                    }
-                    "DiffuseColor" if current_raw_mesh(&mut model_stack).is_some() => {
-                        if let Some(mesh) = current_raw_mesh(&mut model_stack) {
-                            mesh.color_rgb = rgb_from_floats(
-                                float_attr(&reader, &element, "r")?.unwrap_or(0.16),
-                                float_attr(&reader, &element, "g")?.unwrap_or(0.16),
-                                float_attr(&reader, &element, "b")?.unwrap_or(0.16),
-                            );
-                        }
-                    }
-                    "BeamDiameterAtOffset" if !model_stack.is_empty() => {
-                        capture = Some(TextCapture::BeamDiameter)
-                    }
-                    "BeamClippingDistance" if !model_stack.is_empty() => {
-                        capture = Some(TextCapture::BeamClippingDistance)
                     }
                     _ => {}
                 }
@@ -644,35 +550,6 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                             fixture.instances.push(raw_instance(&reader, &element)?);
                         }
                     }
-                    "Model" if module.is_some() => {
-                        if let Some(node) = raw_model(&reader, &element)? {
-                            attach_raw_model(&mut model_stack, module.as_mut(), node);
-                        }
-                    }
-                    "Location" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.location = raw_vector(&reader, &element, [0.0; 3])?;
-                        }
-                    }
-                    "Rotation" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.rotation = raw_vector(&reader, &element, [0.0; 3])?;
-                        }
-                    }
-                    "Scaling" if !model_stack.is_empty() => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.scaling = raw_vector(&reader, &element, [1.0; 3])?;
-                        }
-                    }
-                    "DiffuseColor" if current_raw_mesh(&mut model_stack).is_some() => {
-                        if let Some(mesh) = current_raw_mesh(&mut model_stack) {
-                            mesh.color_rgb = rgb_from_floats(
-                                float_attr(&reader, &element, "r")?.unwrap_or(0.16),
-                                float_attr(&reader, &element, "g")?.unwrap_or(0.16),
-                                float_attr(&reader, &element, "b")?.unwrap_or(0.16),
-                            );
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -698,46 +575,13 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                             fixture.warnings.push(value);
                         }
                     }
-                    Some(TextCapture::Vertices) => {
-                        if let Some(mesh) = current_raw_mesh(&mut model_stack) {
-                            mesh.vertices.push_str(&value);
-                        }
-                    }
-                    Some(TextCapture::Faces) => {
-                        if let Some(mesh) = current_raw_mesh(&mut model_stack) {
-                            mesh.faces.push_str(&value);
-                        }
-                    }
-                    Some(TextCapture::BeamDiameter) => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.beam_diameter = parse_finite_text(&value, "BeamDiameterAtOffset")?;
-                        }
-                    }
-                    Some(TextCapture::BeamClippingDistance) => {
-                        if let Some(node) = model_stack.last_mut() {
-                            node.beam_clipping_distance =
-                                parse_finite_text(&value, "BeamClippingDistance")?;
-                        }
-                    }
                     None => {}
                 }
             }
             Event::End(element) => {
                 let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
                 match name.as_str() {
-                    "manufacturer"
-                    | "Info"
-                    | "Vertices"
-                    | "Faces"
-                    | "BeamDiameterAtOffset"
-                    | "BeamClippingDistance" => capture = None,
-                    "Model" if module.is_some() => {
-                        if model_elements.pop().unwrap_or(false)
-                            && let Some(node) = model_stack.pop()
-                        {
-                            attach_raw_model(&mut model_stack, module.as_mut(), node);
-                        }
-                    }
+                    "manufacturer" | "Info" => capture = None,
                     "ChannelFunction" => {
                         if let (Some(channel), Some(function)) = (&mut channel, function.take()) {
                             channel.functions.push(function);
@@ -749,9 +593,6 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                         }
                     }
                     "Module" => {
-                        if !model_stack.is_empty() || !model_elements.is_empty() {
-                            bail!("grandMA2 model hierarchy is not balanced");
-                        }
                         if let (Some(fixture), Some(module)) = (&mut fixture, module.take()) {
                             fixture.modules.push(module);
                         }
@@ -789,52 +630,6 @@ fn raw_vector(
         float_attr(reader, element, "y")?.unwrap_or(defaults[1]),
         float_attr(reader, element, "z")?.unwrap_or(defaults[2]),
     ])
-}
-
-fn raw_model(reader: &Reader<&[u8]>, element: &BytesStart<'_>) -> Result<Option<RawModelNode>> {
-    let Some(model_type) = attr(reader, element, "model_type")? else {
-        return Ok(None);
-    };
-    let name = attr(reader, element, "name")?.unwrap_or_else(|| model_type.clone());
-    let mesh = (normalized(&model_type) == "MODEL").then(|| RawMesh {
-        name: name.clone(),
-        color_rgb: 0x282828,
-        ..Default::default()
-    });
-    Ok(Some(RawModelNode {
-        name,
-        model_type,
-        axis_to_parent: attr(reader, element, "axis_to_parent")?.unwrap_or_default(),
-        mesh,
-        ..Default::default()
-    }))
-}
-
-fn attach_raw_model(
-    model_stack: &mut [RawModelNode],
-    module: Option<&mut RawModule>,
-    node: RawModelNode,
-) {
-    if let Some(parent) = model_stack.last_mut() {
-        parent.children.push(node);
-    } else if let Some(module) = module {
-        module.models.push(node);
-    }
-}
-
-fn current_raw_mesh(model_stack: &mut [RawModelNode]) -> Option<&mut RawMesh> {
-    model_stack.last_mut().and_then(|node| node.mesh.as_mut())
-}
-
-fn parse_finite_text(value: &str, element: &str) -> Result<f32> {
-    let parsed = value
-        .trim()
-        .parse::<f32>()
-        .with_context(|| format!("{element} must contain a number"))?;
-    if !parsed.is_finite() {
-        bail!("{element} must be finite");
-    }
-    Ok(parsed)
 }
 
 fn local_name(element: &BytesStart<'_>) -> String {
@@ -1023,7 +818,15 @@ fn compile_fixture_type(
         bail!("FixtureType has no DMX channels");
     }
 
-    let visual = compile_visual(&raw, &mut warnings);
+    let mut visual = compile_visual(&raw, &mut warnings);
+    if built_in {
+        apply_builtin_model(&id, &mut visual);
+    } else {
+        warnings.push(
+            "grandMA2 custom models are separate media-database assets; this fixture XML uses the generated class model in the preview."
+                .into(),
+        );
+    }
     Ok(ParsedFixtureType {
         id,
         file_id: file_id.into(),
@@ -1437,50 +1240,9 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         FixtureModelKind::Generic
     };
 
-    let mut model_nodes = Vec::new();
-    for (instance_index, module) in visual_modules {
-        let first_model_node = model_nodes.len();
-        let emitter_id = format!("instance-{instance_index}-module-{}", module.index);
-        let emitter = emitters.iter_mut().find(|emitter| emitter.id == emitter_id);
-        let mut emitter_model_node_id = String::new();
-        for (node_index, raw_node) in module.models.iter().enumerate() {
-            let path = node_index.to_string();
-            model_nodes.push(compile_model_node(
-                raw_node,
-                instance_index,
-                module.index,
-                &path,
-                emitter.as_ref().map(|emitter| emitter.id.as_str()),
-                &mut emitter_model_node_id,
-                warnings,
-            ));
-        }
-        if let Some(emitter) = emitter {
-            emitter.model_node_id = emitter_model_node_id;
-            if let Some(marker) =
-                find_model_node(&model_nodes[first_model_node..], &emitter.model_node_id)
-                && marker.beam_diameter_m > 0.0
-            {
-                emitter.aperture_m = marker.beam_diameter_m;
-            }
-        }
-    }
-    if moving_head
-        && !model_nodes.is_empty()
-        && (!contains_model_kind(&model_nodes, FixtureModelNodeKind::PanAxis)
-            || !contains_model_kind(&model_nodes, FixtureModelNodeKind::TiltAxis)
-            || emitters
-                .iter()
-                .filter(|emitter| emitter.casts_beam)
-                .all(|emitter| emitter.model_node_id.is_empty()))
-    {
-        warnings.push(
-            "The embedded moving-head model is missing a grandMA2 pan, tilt, or beam marker; the preview uses its procedural moving-head fallback.".into(),
-        );
-    }
-
     let (pan_min, pan_max) = physical_axis_range(raw, DmxSemantic::Pan).unwrap_or((0.0, 0.0));
     let (tilt_min, tilt_max) = physical_axis_range(raw, DmxSemantic::Tilt).unwrap_or((0.0, 0.0));
+    let (zoom_from, zoom_to) = physical_axis_range(raw, DmxSemantic::Zoom).unwrap_or((0.0, 0.0));
     FixtureVisual {
         kind: kind as i32,
         width_m: dimensions[0],
@@ -1491,23 +1253,11 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         tilt_min_degrees: tilt_min,
         tilt_max_degrees: tilt_max,
         emitters,
-        model_nodes,
+        model_nodes: Vec::new(),
         model_kind: model_kind as i32,
+        zoom_physical_from_degrees: zoom_from,
+        zoom_physical_to_degrees: zoom_to,
     }
-}
-
-fn contains_model_kind(nodes: &[FixtureModelNode], kind: FixtureModelNodeKind) -> bool {
-    nodes
-        .iter()
-        .any(|node| node.kind() == kind || contains_model_kind(&node.children, kind))
-}
-
-fn find_model_node<'a>(nodes: &'a [FixtureModelNode], id: &str) -> Option<&'a FixtureModelNode> {
-    nodes.iter().find_map(|node| {
-        (node.id == id)
-            .then_some(node)
-            .or_else(|| find_model_node(&node.children, id))
-    })
 }
 
 fn visual_modules(raw: &RawFixtureType) -> Vec<(u32, &RawModule)> {
@@ -1515,6 +1265,7 @@ fn visual_modules(raw: &RawFixtureType) -> Vec<(u32, &RawModule)> {
         raw.modules
             .iter()
             .enumerate()
+            .filter(|(_, module)| !module.channels.is_empty())
             .map(|(index, module)| (index as u32, module))
             .collect()
     } else {
@@ -1523,107 +1274,12 @@ fn visual_modules(raw: &RawFixtureType) -> Vec<(u32, &RawModule)> {
             .filter_map(|instance| {
                 raw.modules
                     .iter()
-                    .find(|module| module.index == instance.module_index)
+                    .find(|module| {
+                        module.index == instance.module_index && !module.channels.is_empty()
+                    })
                     .map(|module| (instance.index, module))
             })
             .collect()
-    }
-}
-
-fn compile_model_node(
-    raw: &RawModelNode,
-    instance_index: u32,
-    module_index: u32,
-    path: &str,
-    emitter_id: Option<&str>,
-    emitter_model_node_id: &mut String,
-    warnings: &mut Vec<String>,
-) -> FixtureModelNode {
-    let id = format!("instance-{instance_index}-module-{module_index}-model-{path}");
-    let kind = classify_model_node(raw);
-    let bound_emitter_id = if kind == FixtureModelNodeKind::Beam
-        && emitter_model_node_id.is_empty()
-        && emitter_id.is_some()
-    {
-        emitter_model_node_id.clone_from(&id);
-        emitter_id.unwrap_or_default().to_owned()
-    } else {
-        String::new()
-    };
-    let mesh = raw.mesh.as_ref().and_then(|raw_mesh| {
-        let mesh_id = format!("{id}-mesh");
-        match decode_mesh(raw_mesh, &mesh_id) {
-            Ok(mesh) => Some(mesh),
-            Err(error) => {
-                warnings.push(format!(
-                    "Could not decode embedded model '{}': {error}",
-                    raw_mesh.name
-                ));
-                None
-            }
-        }
-    });
-    let children = raw
-        .children
-        .iter()
-        .enumerate()
-        .map(|(child_index, child)| {
-            compile_model_node(
-                child,
-                instance_index,
-                module_index,
-                &format!("{path}-{child_index}"),
-                emitter_id,
-                emitter_model_node_id,
-                warnings,
-            )
-        })
-        .collect();
-    let translation = ma_vector_to_stage(raw.location);
-    let scaling = ma_dimensions_to_stage(raw.scaling);
-    let quaternion = ma_rotation_to_stage_quaternion(raw.rotation);
-    FixtureModelNode {
-        id,
-        name: raw.name.clone(),
-        kind: kind as i32,
-        transform: Some(FixtureModelTransform {
-            x_m: translation[0],
-            y_m: translation[1],
-            z_m: translation[2],
-            quaternion_x: quaternion[0],
-            quaternion_y: quaternion[1],
-            quaternion_z: quaternion[2],
-            quaternion_w: quaternion[3],
-            scale_x: scaling[0],
-            scale_y: scaling[1],
-            scale_z: scaling[2],
-        }),
-        mesh,
-        children,
-        emitter_id: bound_emitter_id,
-        beam_diameter_m: raw.beam_diameter.max(0.0),
-        beam_clipping_distance_m: raw.beam_clipping_distance,
-    }
-}
-
-fn classify_model_node(raw: &RawModelNode) -> FixtureModelNodeKind {
-    let name = normalized(&raw.name);
-    let model_type = normalized(&raw.model_type);
-    let axis = normalized(&raw.axis_to_parent);
-    if name.contains("XAP") || axis.contains("PAN") || axis.contains("XAP") {
-        FixtureModelNodeKind::PanAxis
-    } else if name.contains("XAT") || axis.contains("TILT") || axis.contains("XAT") {
-        FixtureModelNodeKind::TiltAxis
-    } else if name.contains("XLD") {
-        FixtureModelNodeKind::BeamDiameter
-    } else if name.contains("XLC") {
-        FixtureModelNodeKind::BeamClip
-    } else if name.contains("XB") || model_type == "BEAM" {
-        FixtureModelNodeKind::Beam
-    } else if raw.mesh.is_some() {
-        FixtureModelNodeKind::Mesh
-    } else {
-        FixtureModelNodeKind::Group
     }
 }
 
@@ -1631,36 +1287,399 @@ fn ma_dimensions_to_stage(dimensions: [f32; 3]) -> [f32; 3] {
     [dimensions[0], dimensions[2], dimensions[1]]
 }
 
-fn ma_vector_to_stage(vector: [f32; 3]) -> [f32; 3] {
-    [vector[0], vector[2], -vector[1]]
+fn apply_builtin_model(id: &str, visual: &mut FixtureVisual) {
+    match id {
+        PURELIGHT_MUVY_WASHQ_ID => apply_muvy_model(visual),
+        SHOWTEC_TECHNO_DERBY_ID => apply_techno_derby_model(visual),
+        LIXADA_MINI_BUTTERFLY_ID => apply_mini_butterfly_model(visual),
+        _ => {}
+    }
 }
 
-fn ma_rotation_to_stage_quaternion(rotation: [f32; 3]) -> [f32; 4] {
-    let half = [rotation[0] * 0.5, rotation[1] * 0.5, rotation[2] * 0.5];
-    let (sin_x, cos_x) = half[0].sin_cos();
-    let (sin_y, cos_y) = half[1].sin_cos();
-    let (sin_z, cos_z) = half[2].sin_cos();
-    let ma = [
-        sin_x * cos_y * cos_z + cos_x * sin_y * sin_z,
-        cos_x * sin_y * cos_z - sin_x * cos_y * sin_z,
-        cos_x * cos_y * sin_z + sin_x * sin_y * cos_z,
-        cos_x * cos_y * cos_z - sin_x * sin_y * sin_z,
+fn apply_muvy_model(visual: &mut FixtureVisual) {
+    let lens_positions = [
+        (0.0, 0.0),
+        (0.0, 0.046),
+        (0.040, 0.023),
+        (0.040, -0.023),
+        (0.0, -0.046),
+        (-0.040, -0.023),
+        (-0.040, 0.023),
     ];
-    let half_sqrt = std::f32::consts::FRAC_1_SQRT_2;
-    let basis = [-half_sqrt, 0.0, 0.0, half_sqrt];
-    quaternion_multiply(
-        quaternion_multiply(basis, ma),
-        [-basis[0], -basis[1], -basis[2], basis[3]],
+    let mut emitters = Vec::with_capacity(lens_positions.len());
+    let mut head_children = vec![mesh_node(
+        "muvy-head",
+        "Lamp head",
+        [0.0, 0.0, 0.0],
+        [0.18, 0.11, 0.16],
+    )];
+
+    for (index, (x, z)) in lens_positions.into_iter().enumerate() {
+        let emitter_id = format!("muvy-lens-{}", index + 1);
+        let marker_id = format!("muvy-marker-{}", index + 1);
+        let is_primary = index == 0;
+        emitters.push(fixture_emitter(
+            &emitter_id,
+            &format!("RGBW lens {}", index + 1),
+            FixtureEmitterKind::Color,
+            45.0,
+            [x, -0.061, z],
+            [0.0, -1.0, 0.0],
+            is_primary,
+            if is_primary { 0.104 } else { 0.03 },
+            &marker_id,
+        ));
+        head_children.push(marker_node(
+            &marker_id,
+            if is_primary { "_XLD" } else { "_XB" },
+            if is_primary {
+                FixtureModelNodeKind::BeamDiameter
+            } else {
+                FixtureModelNodeKind::Beam
+            },
+            [x, -0.061, z],
+            [0.0, -1.0, 0.0],
+            &emitter_id,
+            if is_primary { 0.104 } else { 0.03 },
+            0.0,
+        ));
+        if is_primary {
+            head_children.push(marker_node(
+                "muvy-marker-clip",
+                "_XLC",
+                FixtureModelNodeKind::BeamClip,
+                [x, -0.061, z],
+                [0.0, -1.0, 0.0],
+                &emitter_id,
+                0.0,
+                0.012,
+            ));
+        }
+    }
+
+    let tilt = model_node(
+        "muvy-tilt-axis",
+        "_XAT",
+        FixtureModelNodeKind::TiltAxis,
+        [0.0, -0.14, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        None,
+        head_children,
+        "",
+        0.0,
+        0.0,
+    );
+    let pan = model_node(
+        "muvy-pan-axis",
+        "_XAP",
+        FixtureModelNodeKind::PanAxis,
+        [0.0, -0.08, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        None,
+        vec![
+            mesh_node(
+                "muvy-yoke-crossbar",
+                "Yoke crossbar",
+                [0.0, -0.025, 0.0],
+                [0.22, 0.05, 0.07],
+            ),
+            mesh_node(
+                "muvy-yoke-left",
+                "Yoke left",
+                [-0.105, -0.08, 0.0],
+                [0.025, 0.16, 0.07],
+            ),
+            mesh_node(
+                "muvy-yoke-right",
+                "Yoke right",
+                [0.105, -0.08, 0.0],
+                [0.025, 0.16, 0.07],
+            ),
+            tilt,
+        ],
+        "",
+        0.0,
+        0.0,
+    );
+    visual.emitters = emitters;
+    visual.model_nodes = vec![
+        mesh_node("muvy-base", "Base", [0.0, -0.04, 0.0], [0.27, 0.08, 0.22]),
+        pan,
+    ];
+    visual.model_kind = FixtureModelKind::HeadMover as i32;
+}
+
+fn apply_techno_derby_model(visual: &mut FixtureVisual) {
+    let mut emitters = Vec::with_capacity(20);
+    let mut nodes = vec![mesh_node(
+        "techno-derby-body",
+        "Housing",
+        [0.0, 0.0, 0.0],
+        [visual.width_m, visual.height_m, visual.depth_m],
+    )];
+    let color_positions = [
+        (-0.070, 0.038),
+        (0.070, 0.038),
+        (-0.070, -0.038),
+        (0.070, -0.038),
+    ];
+    for (index, (x, y)) in color_positions.into_iter().enumerate() {
+        let emitter_id = format!("techno-derby-color-{}", index + 1);
+        let marker_id = format!("techno-derby-beam-{}", index + 1);
+        let direction = normalize_vector([x * 3.8, y * 3.2, 1.0]);
+        emitters.push(fixture_emitter(
+            &emitter_id,
+            &format!("RGBW effect {}", index + 1),
+            FixtureEmitterKind::Color,
+            5.0,
+            [x, y, visual.depth_m / 2.0],
+            direction,
+            true,
+            0.042,
+            &marker_id,
+        ));
+        nodes.push(marker_node(
+            &marker_id,
+            &format!("_XB{}", index + 1),
+            FixtureModelNodeKind::Beam,
+            [x, y, visual.depth_m / 2.0],
+            direction,
+            &emitter_id,
+            0.042,
+            0.0,
+        ));
+    }
+
+    for index in 0..16 {
+        let column = index % 8;
+        let row = index / 8;
+        let x = -0.108 + column as f32 * (0.216 / 7.0);
+        let y = if row == 0 { 0.078 } else { -0.078 };
+        let emitter_id = format!("techno-derby-strobe-{}", index + 1);
+        let marker_id = format!("techno-derby-strobe-marker-{}", index + 1);
+        emitters.push(fixture_emitter(
+            &emitter_id,
+            &format!("White strobe {}", index + 1),
+            FixtureEmitterKind::Strobe,
+            0.0,
+            [x, y, visual.depth_m / 2.0 + 0.002],
+            [0.0, 0.0, 1.0],
+            false,
+            0.015,
+            &marker_id,
+        ));
+        nodes.push(marker_node(
+            &marker_id,
+            &format!("Strobe lens {}", index + 1),
+            FixtureModelNodeKind::Beam,
+            [x, y, visual.depth_m / 2.0 + 0.002],
+            [0.0, 0.0, 1.0],
+            &emitter_id,
+            0.015,
+            0.0,
+        ));
+    }
+
+    visual.emitters = emitters;
+    visual.model_nodes = nodes;
+    visual.model_kind = FixtureModelKind::DerbyEffect as i32;
+}
+
+fn apply_mini_butterfly_model(visual: &mut FixtureVisual) {
+    let mut emitters = Vec::with_capacity(4);
+    let mut nodes = vec![mesh_node(
+        "mini-butterfly-body",
+        "Housing",
+        [0.0, 0.0, 0.0],
+        [visual.width_m, visual.height_m, visual.depth_m],
+    )];
+    let positions = [
+        (-0.045, 0.030),
+        (0.045, 0.030),
+        (-0.045, -0.030),
+        (0.045, -0.030),
+    ];
+    for (index, (x, y)) in positions.into_iter().enumerate() {
+        let emitter_id = format!("mini-butterfly-color-{}", index + 1);
+        let marker_id = format!("mini-butterfly-beam-{}", index + 1);
+        let direction = normalize_vector([x * 5.0, y * 4.0, 1.0]);
+        emitters.push(fixture_emitter(
+            &emitter_id,
+            &format!("Color effect {}", index + 1),
+            FixtureEmitterKind::Color,
+            5.0,
+            [x, y, visual.depth_m / 2.0],
+            direction,
+            true,
+            0.03,
+            &marker_id,
+        ));
+        nodes.push(marker_node(
+            &marker_id,
+            &format!("_XB{}", index + 1),
+            FixtureModelNodeKind::Beam,
+            [x, y, visual.depth_m / 2.0],
+            direction,
+            &emitter_id,
+            0.03,
+            0.0,
+        ));
+    }
+    visual.emitters = emitters;
+    visual.model_nodes = nodes;
+    visual.model_kind = FixtureModelKind::CompactEffect as i32;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture_emitter(
+    id: &str,
+    name: &str,
+    kind: FixtureEmitterKind,
+    beam_angle_degrees: f32,
+    position: [f32; 3],
+    direction: [f32; 3],
+    casts_beam: bool,
+    aperture_m: f32,
+    model_node_id: &str,
+) -> FixtureEmitter {
+    FixtureEmitter {
+        id: id.into(),
+        name: name.into(),
+        kind: kind as i32,
+        beam_angle_degrees,
+        beam_intensity: 0.0,
+        x_m: position[0],
+        y_m: position[1],
+        z_m: position[2],
+        color_rgb: if matches!(kind, FixtureEmitterKind::White | FixtureEmitterKind::Strobe) {
+            0xffffff
+        } else {
+            0
+        },
+        direction_x: direction[0],
+        direction_y: direction[1],
+        direction_z: direction[2],
+        casts_beam,
+        aperture_m,
+        model_node_id: model_node_id.into(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn marker_node(
+    id: &str,
+    name: &str,
+    kind: FixtureModelNodeKind,
+    position: [f32; 3],
+    direction: [f32; 3],
+    emitter_id: &str,
+    beam_diameter_m: f32,
+    beam_clipping_distance_m: f32,
+) -> FixtureModelNode {
+    model_node(
+        id,
+        name,
+        kind,
+        position,
+        quaternion_from_directions([0.0, 0.0, 1.0], direction),
+        None,
+        Vec::new(),
+        emitter_id,
+        beam_diameter_m,
+        beam_clipping_distance_m,
     )
 }
 
-fn quaternion_multiply(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
-    [
-        left[3] * right[0] + left[0] * right[3] + left[1] * right[2] - left[2] * right[1],
-        left[3] * right[1] - left[0] * right[2] + left[1] * right[3] + left[2] * right[0],
-        left[3] * right[2] + left[0] * right[1] - left[1] * right[0] + left[2] * right[3],
-        left[3] * right[3] - left[0] * right[0] - left[1] * right[1] - left[2] * right[2],
-    ]
+fn mesh_node(id: &str, name: &str, position: [f32; 3], dimensions: [f32; 3]) -> FixtureModelNode {
+    model_node(
+        id,
+        name,
+        FixtureModelNodeKind::Mesh,
+        position,
+        [0.0, 0.0, 0.0, 1.0],
+        Some(box_mesh(id, name, dimensions)),
+        Vec::new(),
+        "",
+        0.0,
+        0.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn model_node(
+    id: &str,
+    name: &str,
+    kind: FixtureModelNodeKind,
+    position: [f32; 3],
+    quaternion: [f32; 4],
+    mesh: Option<FixtureMesh>,
+    children: Vec<FixtureModelNode>,
+    emitter_id: &str,
+    beam_diameter_m: f32,
+    beam_clipping_distance_m: f32,
+) -> FixtureModelNode {
+    FixtureModelNode {
+        id: id.into(),
+        name: name.into(),
+        kind: kind as i32,
+        transform: Some(FixtureModelTransform {
+            x_m: position[0],
+            y_m: position[1],
+            z_m: position[2],
+            quaternion_x: quaternion[0],
+            quaternion_y: quaternion[1],
+            quaternion_z: quaternion[2],
+            quaternion_w: quaternion[3],
+            scale_x: 1.0,
+            scale_y: 1.0,
+            scale_z: 1.0,
+        }),
+        mesh,
+        children,
+        emitter_id: emitter_id.into(),
+        beam_diameter_m,
+        beam_clipping_distance_m,
+    }
+}
+
+fn box_mesh(id: &str, name: &str, dimensions: [f32; 3]) -> FixtureMesh {
+    let [half_x, half_y, half_z] = dimensions.map(|value| value / 2.0);
+    FixtureMesh {
+        id: format!("{id}-mesh"),
+        name: name.into(),
+        vertices: vec![
+            -half_x, -half_y, -half_z, half_x, -half_y, -half_z, half_x, half_y, -half_z, -half_x,
+            half_y, -half_z, -half_x, -half_y, half_z, half_x, -half_y, half_z, half_x, half_y,
+            half_z, -half_x, half_y, half_z,
+        ],
+        normals: Vec::new(),
+        indices: vec![
+            0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 1, 2, 6, 1, 6,
+            5, 0, 4, 7, 0, 7, 3,
+        ],
+        color_rgb: 0x353b3d,
+    }
+}
+
+fn quaternion_from_directions(from: [f32; 3], to: [f32; 3]) -> [f32; 4] {
+    let from = normalize_vector(from);
+    let to = normalize_vector(to);
+    let dot = (from[0] * to[0] + from[1] * to[1] + from[2] * to[2]).clamp(-1.0, 1.0);
+    if dot < -0.999_999 {
+        return [1.0, 0.0, 0.0, 0.0];
+    }
+    let cross = [
+        from[1] * to[2] - from[2] * to[1],
+        from[2] * to[0] - from[0] * to[2],
+        from[0] * to[1] - from[1] * to[0],
+    ];
+    let quaternion = [cross[0], cross[1], cross[2], 1.0 + dot];
+    let length = quaternion
+        .iter()
+        .map(|component| component * component)
+        .sum::<f32>()
+        .sqrt();
+    quaternion.map(|component| component / length)
 }
 
 fn physical_axis_range(raw: &RawFixtureType, semantic: DmxSemantic) -> Option<(f32, f32)> {
@@ -1674,10 +1693,8 @@ fn physical_axis_range(raw: &RawFixtureType, semantic: DmxSemantic) -> Option<(f
                 .map(move |function| (channel, function))
         })
         .find_map(|(channel, function)| {
-            (classify_function(channel, function, false) == semantic).then_some((
-                function.physical_from.min(function.physical_to),
-                function.physical_from.max(function.physical_to),
-            ))
+            (classify_function(channel, function, false) == semantic)
+                .then_some((function.physical_from, function.physical_to))
         })
 }
 
@@ -1775,79 +1792,6 @@ fn normalize_vector(vector: [f32; 3]) -> [f32; 3] {
     }
 }
 
-fn decode_mesh(raw: &RawMesh, id: &str) -> Result<FixtureMesh> {
-    let vertices = BASE64_STANDARD
-        .decode(raw.vertices.trim())
-        .context("vertices are not valid base64")?;
-    let faces = BASE64_STANDARD
-        .decode(raw.faces.trim())
-        .context("faces are not valid base64")?;
-    if vertices.len() < 4 || faces.len() < 4 {
-        bail!(
-            "mesh data is truncated ({} vertex bytes, {} face bytes)",
-            vertices.len(),
-            faces.len()
-        );
-    }
-    let vertex_count = u32::from_le_bytes(vertices[0..4].try_into()?) as usize;
-    let index_count = u32::from_le_bytes(faces[0..4].try_into()?) as usize;
-    if vertex_count < 3 || index_count < 3 || index_count % 3 != 0 {
-        bail!("mesh does not contain complete triangles");
-    }
-    if vertex_count > MAX_MESH_VERTICES || index_count > MAX_MESH_INDICES {
-        bail!("mesh exceeds preview limits");
-    }
-    if vertices.len() != 4 + vertex_count * 32 {
-        bail!("vertex buffer has an unsupported layout");
-    }
-    if faces.len() != 4 + index_count * 2 {
-        bail!("face buffer has an unsupported layout");
-    }
-
-    let mut positions = Vec::with_capacity(vertex_count * 3);
-    let mut normals = Vec::with_capacity(vertex_count * 3);
-    for vertex in vertices[4..].chunks_exact(32) {
-        let mut ma_position = [0.0; 3];
-        for (component, offset) in [0, 4, 8].into_iter().enumerate() {
-            let value = f32::from_le_bytes(vertex[offset..offset + 4].try_into()?);
-            if !value.is_finite() {
-                bail!("mesh contains a non-finite vertex position");
-            }
-            ma_position[component] = value;
-        }
-        positions.extend(ma_vector_to_stage(ma_position));
-        let mut ma_normal = [0.0; 3];
-        for (component, offset) in [12, 16, 20].into_iter().enumerate() {
-            let value = f32::from_le_bytes(vertex[offset..offset + 4].try_into()?);
-            if !value.is_finite() {
-                bail!("mesh contains a non-finite vertex normal");
-            }
-            ma_normal[component] = value;
-        }
-        normals.extend(ma_vector_to_stage(ma_normal));
-    }
-    let indices = faces[4..]
-        .chunks_exact(2)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) as u32)
-        .collect::<Vec<_>>();
-    if indices.iter().any(|index| *index as usize >= vertex_count) {
-        bail!("mesh contains an out-of-range vertex index");
-    }
-    Ok(FixtureMesh {
-        id: id.to_owned(),
-        name: raw.name.clone(),
-        vertices: positions,
-        normals,
-        indices,
-        color_rgb: raw.color_rgb,
-    })
-}
-
-fn rgb_from_floats(red: f32, green: f32, blue: f32) -> u32 {
-    let component = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (component(red) << 16) | (component(green) << 8) | component(blue)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1858,7 +1802,6 @@ mod tests {
             ma_dimensions_to_stage([0.27, 0.22, 0.26]),
             [0.27, 0.26, 0.22]
         );
-        assert_eq!(ma_vector_to_stage([1.0, 2.0, 3.0]), [1.0, 3.0, -2.0]);
     }
 
     #[test]
@@ -1879,11 +1822,26 @@ mod tests {
         assert_eq!(muvy.visual.height_m, 0.26);
         assert_eq!(muvy.visual.depth_m, 0.22);
         assert_eq!(muvy.visual.model_kind(), FixtureModelKind::HeadMover);
+        assert_eq!(muvy.visual.emitters.len(), 7);
         assert!(muvy.visual.emitters[0].casts_beam);
         assert_eq!(muvy.visual.emitters[0].beam_angle_degrees, 45.0);
         assert_eq!(muvy.visual.emitters[0].beam_intensity, 0.0);
         approx::assert_abs_diff_eq!(muvy.visual.emitters[0].aperture_m, 0.104, epsilon = 0.0001);
         assert!(muvy.warnings.is_empty());
+        let color_macro = muvy
+            .channels
+            .iter()
+            .find(|channel| channel.coarse == 11)
+            .expect("MUVY color macro channel");
+        let macro_sets = &color_macro
+            .functions
+            .iter()
+            .find(|function| function.semantic == DmxSemantic::ColorMacro)
+            .expect("MUVY color macro function")
+            .channel_sets;
+        assert_eq!(macro_sets[0].name, "RGB");
+        assert_eq!(macro_sets[4].name, "No function");
+        assert_eq!(macro_sets[8].name, "RGB");
 
         let derby = library
             .get(SHOWTEC_TECHNO_DERBY_ID)
@@ -1908,7 +1866,15 @@ mod tests {
                 .visual
                 .emitters
                 .iter()
-                .all(|emitter| emitter.beam_angle_degrees == 0.0 && emitter.beam_intensity == 0.0)
+                .all(|emitter| emitter.beam_intensity == 0.0)
+        );
+        assert!(
+            derby
+                .visual
+                .emitters
+                .iter()
+                .filter(|emitter| emitter.casts_beam)
+                .all(|emitter| emitter.beam_angle_degrees == 5.0)
         );
         assert!(
             derby
@@ -1937,7 +1903,7 @@ mod tests {
                 .iter()
                 .all(|emitter| emitter.casts_beam
                     && emitter.direction_z > 0.85
-                    && emitter.beam_angle_degrees == 0.0
+                    && emitter.beam_angle_degrees == 5.0
                     && emitter.beam_intensity == 0.0)
         );
         assert!(
@@ -1965,64 +1931,73 @@ mod tests {
     }
 
     #[test]
-    fn preserves_model_hierarchy_axes_transforms_and_beam_markers() {
+    fn builtins_keep_fixture_modules_controllable_and_models_separate() {
+        for xml in [
+            include_str!("../fixtures/grandma2/purelight-muvy-washq-14ch.xml"),
+            include_str!("../fixtures/grandma2/showtec-techno-derby-4ch.xml"),
+            include_str!("../fixtures/grandma2/lixada-mini-butterfly-7ch.xml"),
+        ] {
+            let fixture_types = parse_xml(xml).expect("built-in fixture should parse");
+            assert!(
+                fixture_types
+                    .iter()
+                    .flat_map(|fixture_type| &fixture_type.modules)
+                    .all(|module| !module.channels.is_empty())
+            );
+        }
+
+        let library = GrandMa2Library::load(&[]).expect("built-ins should parse");
+        let muvy = library
+            .get(PURELIGHT_MUVY_WASHQ_ID)
+            .expect("MUVY fixture should exist");
+        let diameter =
+            find_model_kind(&muvy.visual.model_nodes, FixtureModelNodeKind::BeamDiameter)
+                .expect("MUVY model should include _XLD");
+        let clip = find_model_kind(&muvy.visual.model_nodes, FixtureModelNodeKind::BeamClip)
+            .expect("MUVY model should include _XLC");
+        assert_eq!(diameter.emitter_id, muvy.visual.emitters[0].id);
+        assert_eq!(clip.emitter_id, muvy.visual.emitters[0].id);
+        assert_eq!(muvy.visual.emitters[0].model_node_id, diameter.id);
+        approx::assert_abs_diff_eq!(diameter.beam_diameter_m, 0.104, epsilon = 0.0001);
+        approx::assert_abs_diff_eq!(clip.beam_clipping_distance_m, 0.012, epsilon = 0.0001);
+    }
+
+    fn find_model_kind(
+        nodes: &[FixtureModelNode],
+        kind: FixtureModelNodeKind,
+    ) -> Option<&FixtureModelNode> {
+        nodes.iter().find_map(|node| {
+            (node.kind() == kind)
+                .then_some(node)
+                .or_else(|| find_model_kind(&node.children, kind))
+        })
+    }
+
+    #[test]
+    fn preserves_reversed_physical_axes_and_zoom_ranges() {
         let xml = br#"<?xml version="1.0"?>
           <MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
-            <FixtureType name="Hierarchical mover" mode="Default">
+            <FixtureType name="Reversed mover" mode="Default">
               <manufacturer>Example</manufacturer>
               <Modules>
                 <Module index="0" name="Main" class="Headmover" beamtype="Wash" beam_angle="30">
-                  <Model>
-                    <Model name="_XAP Base" model_type="Axis">
-                      <Offset>
-                        <Location x="1" y="2" z="3"/>
-                        <Rotation x="0" y="0" z="0"/>
-                        <Scaling x="1" y="2" z="3"/>
-                      </Offset>
-                      <Model name="_XAT Head" model_type="Axis">
-                        <Model name="_XB Beam" model_type="Beam">
-                          <Offset>
-                            <Rotation x="0" y="3.1415927" z="0"/>
-                          </Offset>
-                          <BeamClippingDistance>-0.066</BeamClippingDistance>
-                          <BeamDiameterAtOffset>0.2</BeamDiameterAtOffset>
-                        </Model>
-                      </Model>
-                    </Model>
-                  </Model>
                   <Body><Size x="0.2" y="0.2" z="0.3"/></Body>
                   <ChannelType attribute="PAN" feature="POSITION" coarse="1">
-                    <ChannelFunction subattribute="PAN" attribute="PAN" feature="POSITION" min_dmx_24="0" max_dmx_24="16777215" physfrom="-270" physto="270"/>
+                    <ChannelFunction subattribute="PAN" attribute="PAN" feature="POSITION" min_dmx_24="0" max_dmx_24="16777215" physfrom="270" physto="-270"/>
+                  </ChannelType>
+                  <ChannelType attribute="ZOOM" feature="BEAM" coarse="2">
+                    <ChannelFunction subattribute="ZOOM" attribute="ZOOM" feature="BEAM" min_dmx_24="0" max_dmx_24="16777215" physfrom="50" physto="10"/>
                   </ChannelType>
                 </Module>
               </Modules>
             </FixtureType>
           </MA>"#;
-        let parsed = import_fixture_file("hierarchy.xml", xml).expect("fixture should parse");
+        let parsed = import_fixture_file("reversed.xml", xml).expect("fixture should parse");
         let visual = &parsed.fixture_types[0].visual;
-        let pan = &visual.model_nodes[0];
-        let tilt = &pan.children[0];
-        let beam = &tilt.children[0];
-
-        assert_eq!(pan.kind(), FixtureModelNodeKind::PanAxis);
-        assert_eq!(tilt.kind(), FixtureModelNodeKind::TiltAxis);
-        assert_eq!(beam.kind(), FixtureModelNodeKind::Beam);
-        let transform = pan.transform.as_ref().expect("pan transform");
-        assert_eq!(
-            [transform.x_m, transform.y_m, transform.z_m],
-            [1.0, 3.0, -2.0]
-        );
-        assert_eq!(
-            [transform.scale_x, transform.scale_y, transform.scale_z],
-            [1.0, 3.0, 2.0]
-        );
-        let beam_transform = beam.transform.as_ref().expect("beam transform");
-        approx::assert_abs_diff_eq!(beam_transform.quaternion_z.abs(), 1.0, epsilon = 0.0001);
-        approx::assert_abs_diff_eq!(beam.beam_diameter_m, 0.2, epsilon = 0.0001);
-        approx::assert_abs_diff_eq!(beam.beam_clipping_distance_m, -0.066, epsilon = 0.0001);
-        assert_eq!(beam.emitter_id, visual.emitters[0].id);
-        assert_eq!(visual.emitters[0].model_node_id, beam.id);
-        approx::assert_abs_diff_eq!(visual.emitters[0].aperture_m, 0.2, epsilon = 0.0001);
+        assert_eq!(visual.pan_min_degrees, 270.0);
+        assert_eq!(visual.pan_max_degrees, -270.0);
+        assert_eq!(visual.zoom_physical_from_degrees, 50.0);
+        assert_eq!(visual.zoom_physical_to_degrees, 10.0);
     }
 
     #[test]

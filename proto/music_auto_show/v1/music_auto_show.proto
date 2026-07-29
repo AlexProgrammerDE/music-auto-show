@@ -586,6 +586,8 @@ message FixtureVisual {
   repeated FixtureEmitter emitters = 9;
   repeated FixtureModelNode model_nodes = 10;
   FixtureModelKind model_kind = 11;
+  float zoom_physical_from_degrees = 12;
+  float zoom_physical_to_degrees = 13;
 }
 
 message FixtureEmitter {
@@ -651,6 +653,20 @@ message FixtureConfig {
   float movement_pan_max = 8;
   float movement_tilt_min = 9;
   float movement_tilt_max = 10;
+  FixtureStagePlacement stage_placement = 11;
+}
+
+message FixtureStagePlacement {
+  float x_m = 1;
+  float y_m = 2;
+  float z_m = 3;
+  float rotation_x_degrees = 4;
+  float rotation_y_degrees = 5;
+  float rotation_z_degrees = 6;
+  bool focus_target_enabled = 7;
+  float focus_target_x_m = 8;
+  float focus_target_y_m = 9;
+  float focus_target_z_m = 10;
 }
 
 message FixtureState {

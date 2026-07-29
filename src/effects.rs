@@ -468,6 +468,7 @@ impl EffectsEngine {
         self.update_rotation(config, audio, beat, delta_seconds);
         let strobe = self.strobe_value(config, audio, beat);
         let pattern = self.strobe_effect_value(config, audio);
+        let pattern_speed = dmx(effects(config).strobe_effect_speed);
         let effect_rotation = self.preview_rotation(config);
         for fixture in &config.fixtures {
             let Some(fixture_type) = find_fixture_type(config, fixture) else {
@@ -478,6 +479,7 @@ impl EffectsEngine {
                     || channel.has_semantic(DmxSemantic::EffectSpeed)
             });
             let is_effect = fixture_type.visual.kind() == FixtureVisualKind::Effect;
+            let has_pattern = fixture_type.has_semantic(DmxSemantic::EffectPattern);
             let rotation = has_effect.then(|| {
                 self.rotation_value_for_channel(
                     config,
@@ -496,7 +498,8 @@ impl EffectsEngine {
                     state.color_macro = color_macro;
                     state.strobe = strobe;
                     state.effect = rotation.unwrap_or_default();
-                    state.effect_pattern = pattern;
+                    state.effect_speed = if has_pattern { pattern_speed } else { 0 };
+                    state.effect_pattern = if has_pattern { pattern } else { 0 };
                     state.effect_rotation = effect_rotation;
                 }
             } else if let (Some(rotation), Some(state)) = (rotation, self.states.get_mut(&key)) {
@@ -1615,7 +1618,7 @@ fn channel_value(
         return function.normalized_value(value as f32 / 255.0);
     }
     if channel.has_semantic(DmxSemantic::EffectPattern) {
-        return effect_pattern_value(state.effect_pattern, channel);
+        return effect_pattern_value(state.effect_pattern, state.effect_speed, channel);
     }
     safe_idle_value(channel)
 }
@@ -1766,7 +1769,7 @@ fn rotation_channel_value(value: u32, channel: &MappedChannel) -> u32 {
     )
 }
 
-fn effect_pattern_value(pattern: u32, channel: &MappedChannel) -> u32 {
+fn effect_pattern_value(pattern: u32, speed: u32, channel: &MappedChannel) -> u32 {
     if pattern == 0 {
         return safe_idle_value(channel);
     }
@@ -1787,7 +1790,10 @@ fn effect_pattern_value(pattern: u32, channel: &MappedChannel) -> u32 {
         );
     }
     let index = pattern.saturating_sub(1) as usize % sets.len();
-    (sets[index].from_dmx + sets[index].to_dmx) / 2
+    sets[index].from_dmx
+        + (sets[index].to_dmx.saturating_sub(sets[index].from_dmx) as f32 * speed.min(255) as f32
+            / 255.0)
+            .round() as u32
 }
 
 fn zero_light(state: &mut FixtureState) {
@@ -1804,6 +1810,7 @@ fn zero_light(state: &mut FixtureState) {
     state.strobe = 0;
     state.color_macro = 0;
     state.effect = 0;
+    state.effect_speed = 0;
     state.effect_pattern = 0;
     state.effect_rotation = 0.0;
 }
@@ -1837,6 +1844,7 @@ mod tests {
             movement_pan_max: 1.0,
             movement_tilt_min: 0.0,
             movement_tilt_max: 1.0,
+            stage_placement: None,
         }
     }
 
@@ -1902,6 +1910,45 @@ mod tests {
             channel_value(&FixtureState::default(), channel, fixture_type),
             0
         );
+    }
+
+    #[test]
+    fn techno_derby_pattern_uses_the_configured_slow_to_fast_position() {
+        let mut config = default_show_config(true);
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.strobe_effect_mode = StrobeEffectMode::Effect1 as i32;
+        settings.strobe_effect_speed = 0.75;
+        let config = validated(config);
+        let fixture_type = config
+            .grandma2()
+            .get(SHOWTEC_TECHNO_DERBY_ID)
+            .expect("Techno Derby fixture type");
+        let channel = fixture_type
+            .channels
+            .iter()
+            .find(|channel| channel.has_semantic(DmxSemantic::EffectPattern))
+            .expect("Techno Derby pattern channel");
+
+        assert_eq!(effect_pattern_value(1, 0, channel), 10);
+        assert_eq!(effect_pattern_value(1, 128, channel), 15);
+        assert_eq!(effect_pattern_value(1, 255, channel), 19);
+        assert_eq!(effect_pattern_value(18, 255, channel), 255);
+
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        engine.process_effect_fixtures(
+            &config,
+            &AudioAnalysis::default(),
+            false,
+            false,
+            REFERENCE_FRAME_SECONDS,
+        );
+        let state = engine
+            .states
+            .get("techno-derby")
+            .expect("Techno Derby state");
+        assert_eq!(state.effect_speed, dmx(0.75));
+        assert_eq!(channel_value(state, channel, fixture_type), 17);
     }
 
     #[test]
@@ -1976,6 +2023,7 @@ mod tests {
                     movement_pan_max: 240.0 / 255.0,
                     movement_tilt_min: 32.0 / 255.0,
                     movement_tilt_max: 224.0 / 255.0,
+                    stage_placement: None,
                 }];
                 let settings = config.effects.as_mut().expect("effects configuration");
                 settings.mode = visualization as i32;

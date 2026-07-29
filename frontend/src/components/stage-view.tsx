@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useId, useMemo, useRef, useState } from "react"
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
@@ -17,6 +17,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  type Object3D,
   PerspectiveCamera,
   PlaneGeometry,
   Quaternion,
@@ -42,6 +43,7 @@ import {
   type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
+  beamAngleFromZoom,
   beamTargetFromDirection,
   fixtureBrightness,
   fixtureColor,
@@ -56,7 +58,11 @@ type EmitterVisual = {
   readonly lens: Mesh<BufferGeometry, MeshStandardMaterial>
   readonly lenses: readonly Mesh<BufferGeometry, MeshStandardMaterial>[]
   readonly beam?: Mesh<BufferGeometry, MeshBasicMaterial>
+  readonly beamOrigin: Object3D
+  readonly beamClippingDistanceMeters: number
+  readonly directionFrame: Object3D
   readonly localDirection: Vector3
+  readonly apertureMeters: number
 }
 
 type FixtureLabelVisual = {
@@ -92,18 +98,19 @@ type StageRuntime = {
   readonly floorMaterial: MeshStandardMaterial
   readonly trussMaterial: MeshStandardMaterial
   readonly grid: GridHelper
+  reducedMotion: boolean
 }
 
 const UP = new Vector3(0, 1, 0)
 const TILT_AXIS = new Vector3(1, 0, 0)
 const OPTICAL_FORWARD = new Vector3(0, 0, 1)
-const MODEL_OPTICAL_FORWARD = new Vector3(0, 1, 0)
 const OFF_COLOR = new Color(0.055, 0.065, 0.07)
 const FIXTURE_SCALE = 2.4
 const FIXTURE_LABEL_FONT = '600 32px "Public Sans Variable", "Public Sans", sans-serif'
 const FIXTURE_LABEL_HEIGHT = 52
 const FIXTURE_LABEL_MAX_TEXT_WIDTH = 400
 const FIXTURE_LABEL_WORLD_HEIGHT = 0.3
+const DEGREES_TO_RADIANS = Math.PI / 180
 
 function stageTheme() {
   const dark = document.documentElement.classList.contains("dark")
@@ -278,6 +285,7 @@ function setBeamTransform(
 }
 
 function disposeScene(runtime: StageRuntime) {
+  runtime.controls.stopListenToKeyEvents()
   runtime.controls.dispose()
   runtime.scene.traverse((object) => {
     if (object instanceof Mesh) {
@@ -308,6 +316,16 @@ function fixtureDimensions(fixtureType: GrandMa2FixtureType) {
   }
 }
 
+function applyMountRotation(root: Group, fixture: FixtureConfig) {
+  const placement = fixture.stagePlacement
+  if (!placement) return
+  root.rotation.set(
+    placement.rotationXDegrees * DEGREES_TO_RADIANS,
+    placement.rotationYDegrees * DEGREES_TO_RADIANS,
+    placement.rotationZDegrees * DEGREES_TO_RADIANS,
+  )
+}
+
 function createHousingMaterial(color?: number) {
   return new MeshStandardMaterial({
     color: color && color > 0 ? color : 0x70797c,
@@ -319,6 +337,13 @@ function createHousingMaterial(color?: number) {
 type ModelHierarchyVisual = {
   readonly materials: readonly MeshStandardMaterial[]
   readonly nodesById: ReadonlyMap<string, Group>
+  readonly markersByEmitter: ReadonlyMap<
+    string,
+    ReadonlyMap<
+      FixtureModelNodeKind,
+      { readonly metadata: FixtureModelNode; readonly group: Group }
+    >
+  >
   readonly panPivot?: Group
   readonly tiltPivot?: Group
 }
@@ -333,6 +358,10 @@ function createModelHierarchy(
 ): ModelHierarchyVisual {
   const materials: MeshStandardMaterial[] = []
   const nodesById = new Map<string, Group>()
+  const markersByEmitter = new Map<
+    string,
+    Map<FixtureModelNodeKind, { readonly metadata: FixtureModelNode; readonly group: Group }>
+  >()
   let panPivot: Group | undefined
   let tiltPivot: Group | undefined
 
@@ -356,6 +385,11 @@ function createModelHierarchy(
     }
     parent.add(group)
     nodesById.set(metadata.id, group)
+    if (metadata.emitterId) {
+      const markers = markersByEmitter.get(metadata.emitterId) ?? new Map()
+      markers.set(metadata.kind, { metadata, group })
+      markersByEmitter.set(metadata.emitterId, markers)
+    }
     if (!panPivot && metadata.kind === FixtureModelNodeKind.PAN_AXIS) panPivot = group
     if (!tiltPivot && metadata.kind === FixtureModelNodeKind.TILT_AXIS) tiltPivot = group
 
@@ -380,18 +414,29 @@ function createModelHierarchy(
   }
 
   nodes.forEach((node) => createNode(node, root))
-  return { materials, nodesById, panPivot, tiltPivot }
+  return { materials, nodesById, markersByEmitter, panPivot, tiltPivot }
 }
 
 function createEmitterVisual(
   metadata: FixtureEmitter,
   fallbackParent: Group,
-  nodesById: ReadonlyMap<string, Group>,
+  hierarchy: ModelHierarchyVisual | undefined,
   scene: Scene,
   lensRadiusOverride?: number,
 ) {
-  const modelParent = metadata.modelNodeId ? nodesById.get(metadata.modelNodeId) : undefined
-  const parent = modelParent ?? fallbackParent
+  const markers = hierarchy?.markersByEmitter.get(metadata.id)
+  const beamMarker = markers?.get(FixtureModelNodeKind.BEAM)
+  const diameterMarker = markers?.get(FixtureModelNodeKind.BEAM_DIAMETER)
+  const clipMarker = markers?.get(FixtureModelNodeKind.BEAM_CLIP)
+  const modelParent = metadata.modelNodeId
+    ? hierarchy?.nodesById.get(metadata.modelNodeId)
+    : undefined
+  const opticalMarker = beamMarker ?? diameterMarker
+  const parent = opticalMarker?.group ?? modelParent ?? fallbackParent
+  const apertureMeters =
+    diameterMarker && diameterMarker.metadata.beamDiameterM > 0
+      ? diameterMarker.metadata.beamDiameterM
+      : metadata.apertureM
   const lensMaterial = new MeshStandardMaterial({
     color: OFF_COLOR,
     emissive: OFF_COLOR,
@@ -399,9 +444,9 @@ function createEmitterVisual(
     roughness: 0.18,
   })
   const lensRadius =
-    lensRadiusOverride ?? Math.max(0.018, Math.min(0.075, metadata.apertureM * FIXTURE_SCALE * 0.5))
+    lensRadiusOverride ?? Math.max(0.018, Math.min(0.075, apertureMeters * FIXTURE_SCALE * 0.5))
   const lens = new Mesh(new SphereGeometry(lensRadius, 18, 12), lensMaterial)
-  if (!modelParent) {
+  if (!opticalMarker && !modelParent) {
     lens.position.set(
       metadata.xM * FIXTURE_SCALE,
       metadata.yM * FIXTURE_SCALE,
@@ -424,8 +469,9 @@ function createEmitterVisual(
     beam.visible = false
     scene.add(beam)
   }
-  const localDirection = modelParent
-    ? MODEL_OPTICAL_FORWARD.clone()
+  const directionFrame = opticalMarker?.group.parent ?? fallbackParent
+  const localDirection = opticalMarker
+    ? OPTICAL_FORWARD.clone().applyQuaternion(opticalMarker.group.quaternion)
     : new Vector3(metadata.directionX, metadata.directionY, metadata.directionZ)
   if (localDirection.lengthSq() <= Number.EPSILON) localDirection.copy(OPTICAL_FORWARD)
   return {
@@ -433,7 +479,11 @@ function createEmitterVisual(
     lens,
     lenses: [lens],
     beam,
+    beamOrigin: clipMarker?.group ?? lens,
+    beamClippingDistanceMeters: clipMarker?.metadata.beamClippingDistanceM ?? 0,
+    directionFrame,
     localDirection: localDirection.normalize(),
+    apertureMeters,
   } satisfies EmitterVisual
 }
 
@@ -446,6 +496,7 @@ function createMovingHead(
   const dimensions = fixtureDimensions(fixtureType)
   const root = new Group()
   root.position.copy(mount)
+  applyMountRotation(root, fixture)
   scene.add(root)
 
   const label = createFixtureLabel(fixture.name)
@@ -461,7 +512,7 @@ function createMovingHead(
     const hierarchy = createModelHierarchy(modelNodes, root)
     const emitterGroup = hierarchy.tiltPivot ?? root
     const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
-      createEmitterVisual(metadata, emitterGroup, hierarchy.nodesById, scene),
+      createEmitterVisual(metadata, emitterGroup, hierarchy, scene),
     )
     return {
       fixture,
@@ -542,20 +593,9 @@ function createMovingHead(
     $typeName: "music_auto_show.v1.FixtureEmitter" as const,
   }
   const sourceLensRadius = Math.max(0.018, headRadius * 0.13)
-  const emitter = createEmitterVisual(metadata, emitterGroup, new Map(), scene, sourceLensRadius)
-  const lensRingRadius = headRadius * 0.55
-  const ringLenses = Array.from({ length: 6 }, (_, lensIndex) => {
-    const angle = (lensIndex / 6) * Math.PI * 2
-    const lens = new Mesh(new SphereGeometry(sourceLensRadius, 14, 10), emitter.lens.material)
-    lens.position.set(
-      Math.cos(angle) * lensRingRadius,
-      Math.sin(angle) * lensRingRadius,
-      metadata.zM * FIXTURE_SCALE,
-    )
-    emitterGroup.add(lens)
-    return lens
-  })
-  const emitters: readonly EmitterVisual[] = [{ ...emitter, lenses: [emitter.lens, ...ringLenses] }]
+  const emitters: readonly EmitterVisual[] = [
+    createEmitterVisual(metadata, emitterGroup, undefined, scene, sourceLensRadius),
+  ]
   return {
     fixture,
     fixtureType,
@@ -581,29 +621,40 @@ function createFixedFixture(
   const dimensions = fixtureDimensions(fixtureType)
   const root = new Group()
   root.position.copy(mount)
+  applyMountRotation(root, fixture)
   scene.add(root)
 
   const label = createFixtureLabel(fixture.name)
   if (label) root.add(label.sprite)
 
+  const aimGroup = new Group()
+  root.add(aimGroup)
+  const placement = fixture.stagePlacement
+  if (placement?.focusTargetEnabled) {
+    root.updateWorldMatrix(true, false)
+    const worldMountRotation = new Quaternion()
+    root.getWorldQuaternion(worldMountRotation)
+    const localDirection = new Vector3(
+      placement.focusTargetXM - mount.x,
+      placement.focusTargetYM - mount.y,
+      placement.focusTargetZM - mount.z,
+    )
+      .normalize()
+      .applyQuaternion(worldMountRotation.invert())
+    if (localDirection.lengthSq() > Number.EPSILON) {
+      aimGroup.quaternion.setFromUnitVectors(OPTICAL_FORWARD, localDirection)
+    }
+  }
+
   const modelNodes = fixtureType.visual?.modelNodes ?? []
+  let hierarchy: ModelHierarchyVisual | undefined
   let emitterGroup: Group
-  let nodesById: ReadonlyMap<string, Group>
   let housingMaterials: readonly MeshStandardMaterial[]
   if (modelNodes.length > 0) {
-    const hierarchy = createModelHierarchy(modelNodes, root)
-    emitterGroup = root
-    nodesById = hierarchy.nodesById
+    hierarchy = createModelHierarchy(modelNodes, aimGroup)
+    emitterGroup = aimGroup
     housingMaterials = hierarchy.materials
   } else {
-    const aimGroup = new Group()
-    aimGroup.position.y = -dimensions.height * 0.5
-    const opticalOrigin = mount.clone().add(aimGroup.position)
-    const stageTarget = new Vector3(mount.x, 0, 4.2)
-    const mountedDirection = stageTarget.sub(opticalOrigin).normalize()
-    aimGroup.quaternion.setFromUnitVectors(OPTICAL_FORWARD, mountedDirection)
-    root.add(aimGroup)
-
     const materials: MeshStandardMaterial[] = []
     const bodyMaterial = createHousingMaterial()
     const modelKind = fixtureType.visual?.modelKind ?? FixtureModelKind.GENERIC
@@ -650,12 +701,11 @@ function createFixedFixture(
     materials.push(bodyMaterial)
     emitterGroup = new Group()
     aimGroup.add(emitterGroup)
-    nodesById = new Map()
     housingMaterials = materials
   }
 
   const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
-    createEmitterVisual(metadata, emitterGroup, nodesById, scene),
+    createEmitterVisual(metadata, emitterGroup, hierarchy, scene),
   )
   return {
     fixture,
@@ -696,6 +746,8 @@ function createStageRuntime(
   controls.minDistance = 2.5
   controls.maxDistance = 18
   controls.maxPolarAngle = Math.PI * 0.96
+  controls.keyPanSpeed = 14
+  controls.keyRotateSpeed = 1.5
   controls.update()
   scene.add(new HemisphereLight(0xffffff, 0x1b2224, 1.7))
   const keyLight = new DirectionalLight(0xffffff, 1.4)
@@ -726,11 +778,11 @@ function createStageRuntime(
 
   const typeById = new Map(fixtureTypes.map((fixtureType) => [fixtureType.id, fixtureType]))
   const fixtureVisuals = new Map<string, FixtureVisual>()
-  fixtures.forEach((fixture, index) => {
+  fixtures.forEach((fixture) => {
     const fixtureType = typeById.get(fixture.fixtureTypeId)
     if (!fixtureType?.visual) return
-    const x = fixtures.length === 1 ? 0 : -3 + (index / (fixtures.length - 1)) * 6
-    const mount = new Vector3(x, 3.35, 0)
+    const placement = fixture.stagePlacement
+    const mount = new Vector3(placement?.xM ?? 0, placement?.yM ?? 0, placement?.zM ?? 0)
     const visual =
       fixtureType.visual.kind === FixtureVisualKind.MOVING_HEAD
         ? createMovingHead(fixture, fixtureType, mount, scene)
@@ -747,6 +799,7 @@ function createStageRuntime(
     floorMaterial,
     trussMaterial,
     grid,
+    reducedMotion: false,
   }
   applyTheme(runtime)
   return runtime
@@ -766,13 +819,18 @@ function updateFixtureVisuals(
 ) {
   const stateById = new Map(states.map((state) => [state.fixtureId, state]))
   const axisRotation = new Quaternion()
+  const directionRotation = new Quaternion()
   runtime.fixtures.forEach((visual, fixtureId) => {
     const state = stateById.get(fixtureId)
     const color = state ? fixtureColor(state) : { red: 0, green: 0, blue: 0 }
     const brightness = state ? fixtureBrightness(state) : 0
     const threeColor = new Color(color.red / 255, color.green / 255, color.blue / 255)
     const strobeRate = state ? 2 + (state.strobe / 255) * 23 : 0
-    const strobePulse = !state || state.strobe === 0 || (elapsedSeconds * strobeRate) % 1 < 0.48
+    const strobePulse =
+      runtime.reducedMotion ||
+      !state ||
+      state.strobe === 0 ||
+      (elapsedSeconds * strobeRate) % 1 < 0.48
 
     if (state && visual.panPivot && visual.tiltPivot && visual.fixtureType.visual) {
       const metadata = visual.fixtureType.visual
@@ -807,7 +865,9 @@ function updateFixtureVisuals(
       }
     }
     if (state) {
-      visual.rotationPhase = wrappedPhaseStep(visual.rotationPhase, state.effectRotation)
+      visual.rotationPhase = runtime.reducedMotion
+        ? 0
+        : wrappedPhaseStep(visual.rotationPhase, state.effectRotation)
     }
     visual.root.updateWorldMatrix(true, true)
 
@@ -825,6 +885,8 @@ function updateFixtureVisuals(
               strobeEmitterIndex,
               strobeEmitterCount,
               elapsedSeconds,
+              state.effectSpeed / 255,
+              runtime.reducedMotion,
             )
           : 0
       if (strobeEmitter) strobeEmitterIndex += 1
@@ -858,20 +920,29 @@ function updateFixtureVisuals(
       if (!state || !emitter.beam.visible || !visual.fixtureType.visual) return
 
       const origin = new Vector3()
-      emitter.lens.getWorldPosition(origin)
+      emitter.beamOrigin.getWorldPosition(origin)
       const rotatedDirection =
-        visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT && !emitter.metadata.modelNodeId
+        visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT
           ? rotatedEffectDirection(emitter.localDirection, visual.rotationPhase)
           : emitter.localDirection
-      const localDirection = new Vector3(rotatedDirection.x, rotatedDirection.y, rotatedDirection.z)
-      const worldDirection = emitter.lens.localToWorld(localDirection).sub(origin).normalize()
+      emitter.directionFrame.getWorldQuaternion(directionRotation)
+      const worldDirection = new Vector3(rotatedDirection.x, rotatedDirection.y, rotatedDirection.z)
+        .applyQuaternion(directionRotation)
+        .normalize()
+      origin.addScaledVector(worldDirection, emitter.beamClippingDistanceMeters * FIXTURE_SCALE)
       const target: StagePoint = beamTargetFromDirection(origin, worldDirection)
+      const beamAngleDegrees = beamAngleFromZoom(
+        emitter.metadata.beamAngleDegrees,
+        state.zoom,
+        visual.fixtureType.visual.zoomPhysicalFromDegrees,
+        visual.fixtureType.visual.zoomPhysicalToDegrees,
+      )
       setBeamTransform(
         emitter.beam,
         origin,
         target,
-        emitter.metadata.beamAngleDegrees,
-        emitter.metadata.apertureM * FIXTURE_SCALE,
+        beamAngleDegrees,
+        emitter.apertureMeters * FIXTURE_SCALE,
         visual.fixtureType.visual.kind,
       )
     })
@@ -890,6 +961,7 @@ export function StageView({
   readonly states: readonly FixtureState[]
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const controlsDescriptionId = useId()
   const latestStatesRef = useRef(states)
   const [webglUnavailable, setWebglUnavailable] = useState(false)
   const orderedFixtures = useMemo(
@@ -916,6 +988,32 @@ export function StageView({
       setWebglUnavailable(true)
       return
     }
+
+    runtime.controls.listenToKeyEvents(canvas)
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Equal" || event.code === "NumpadAdd") {
+        event.preventDefault()
+        runtime.controls.dollyIn(1.12)
+        runtime.controls.update()
+      } else if (event.code === "Minus" || event.code === "NumpadSubtract") {
+        event.preventDefault()
+        runtime.controls.dollyOut(1.12)
+        runtime.controls.update()
+      } else if (event.code === "Home") {
+        event.preventDefault()
+        runtime.controls.reset()
+      }
+    }
+    canvas.addEventListener("keydown", handleKeyDown)
+
+    const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)")
+    const applyMotionPreference = () => {
+      runtime.reducedMotion = reducedMotionQuery.matches
+      runtime.controls.enableDamping = !runtime.reducedMotion
+      runtime.controls.update()
+    }
+    applyMotionPreference()
+    reducedMotionQuery.addEventListener("change", applyMotionPreference)
 
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
@@ -951,6 +1049,8 @@ export function StageView({
       themeObserver.disconnect()
       canvas.removeEventListener("webglcontextlost", handleContextLost)
       canvas.removeEventListener("webglcontextrestored", handleContextRestored)
+      canvas.removeEventListener("keydown", handleKeyDown)
+      reducedMotionQuery.removeEventListener("change", applyMotionPreference)
       disposeScene(runtime)
     }
   }, [orderedFixtures, fixtureTypes])
@@ -959,14 +1059,20 @@ export function StageView({
     <div className="relative h-80 overflow-hidden bg-background">
       <canvas
         ref={canvasRef}
-        className="block size-full cursor-grab touch-none active:cursor-grabbing"
+        className="block size-full cursor-grab touch-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset active:cursor-grabbing"
         aria-label="Interactive live 3D stage preview driven by grandMA2 body, emitter, beam, pan, and tilt metadata"
+        aria-describedby={controlsDescriptionId}
+        tabIndex={0}
       >
         Live 3D stage preview
       </canvas>
       {orderedFixtures.length > 0 && !webglUnavailable ? (
-        <p className="pointer-events-none absolute bottom-2 left-2 bg-background/80 px-2 py-1 text-[10px] text-muted-foreground">
-          Drag to orbit · Scroll or pinch to zoom · Right-drag or two-finger drag to pan
+        <p
+          id={controlsDescriptionId}
+          className="pointer-events-none absolute bottom-2 left-2 bg-background/80 px-2 py-1 text-[10px] text-muted-foreground"
+        >
+          Drag to orbit · Scroll or pinch to zoom · Arrow keys pan · Shift + arrow keys orbit · +/−
+          zoom · Home resets
         </p>
       ) : null}
       {orderedFixtures.length === 0 ? (

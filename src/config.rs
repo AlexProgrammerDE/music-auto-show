@@ -16,7 +16,8 @@ use crate::{
     },
     proto::v1::{
         AudioConfig, AudioInputMode, DmxConfig, EffectFixtureMode, EffectsConfig, FixtureConfig,
-        MovementMode, RotationMode, ShowConfig, StrobeEffectMode, VisualizationMode,
+        FixtureStagePlacement, MovementMode, RotationMode, ShowConfig, StrobeEffectMode,
+        VisualizationMode,
     },
 };
 
@@ -404,11 +405,15 @@ fn validate_imported_files(config: &ShowConfig) -> AnyResult<()> {
 
 fn validate_fixture_patch(config: &mut ShowConfig, library: &GrandMa2Library) -> AnyResult<()> {
     let universe_size = config.dmx.as_ref().map_or(512, |dmx| dmx.universe_size);
+    let fixture_count = config.fixtures.len();
     let mut fixture_ids = HashSet::new();
     let mut fixture_names = HashSet::new();
     let mut occupied_channels = HashMap::<u32, String>::new();
 
     for (index, fixture) in config.fixtures.iter_mut().enumerate() {
+        if fixture.stage_placement.is_none() {
+            fixture.stage_placement = Some(default_stage_placement(index, fixture_count));
+        }
         if fixture.id.is_empty() {
             fixture.id = stable_fixture_id(&fixture.name, fixture.start_channel, index);
         }
@@ -449,6 +454,13 @@ fn validate_fixture_patch(config: &mut ShowConfig, library: &GrandMa2Library) ->
             fixture.movement_tilt_min,
             fixture.movement_tilt_max,
         )?;
+        let stage_placement = fixture.stage_placement.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "fixture '{}' is missing its normalized stage placement",
+                fixture.name
+            )
+        })?;
+        validate_stage_placement(&fixture.name, stage_placement)?;
 
         let last_channel = fixture
             .start_channel
@@ -477,6 +489,58 @@ fn validate_fixture_patch(config: &mut ShowConfig, library: &GrandMa2Library) ->
                 .entry(absolute)
                 .or_insert_with(|| fixture.name.clone());
         }
+    }
+    Ok(())
+}
+
+fn default_stage_placement(index: usize, fixture_count: usize) -> FixtureStagePlacement {
+    let x_m = if fixture_count <= 1 {
+        0.0
+    } else {
+        -3.0 + index as f32 / (fixture_count - 1) as f32 * 6.0
+    };
+    FixtureStagePlacement {
+        x_m,
+        y_m: 3.35,
+        z_m: 0.0,
+        rotation_x_degrees: 0.0,
+        rotation_y_degrees: 0.0,
+        rotation_z_degrees: 0.0,
+        focus_target_enabled: true,
+        focus_target_x_m: x_m,
+        focus_target_y_m: 0.0,
+        focus_target_z_m: 4.2,
+    }
+}
+
+fn validate_stage_placement(name: &str, placement: &FixtureStagePlacement) -> AnyResult<()> {
+    for (axis, value, minimum, maximum) in [
+        ("stage X", placement.x_m, -100.0, 100.0),
+        ("stage Y", placement.y_m, -10.0, 100.0),
+        ("stage Z", placement.z_m, -100.0, 100.0),
+        (
+            "mount rotation X",
+            placement.rotation_x_degrees,
+            -360.0,
+            360.0,
+        ),
+        (
+            "mount rotation Y",
+            placement.rotation_y_degrees,
+            -360.0,
+            360.0,
+        ),
+        (
+            "mount rotation Z",
+            placement.rotation_z_degrees,
+            -360.0,
+            360.0,
+        ),
+        ("focus target X", placement.focus_target_x_m, -100.0, 100.0),
+        ("focus target Y", placement.focus_target_y_m, -10.0, 100.0),
+        ("focus target Z", placement.focus_target_z_m, -100.0, 100.0),
+    ] {
+        validate_range(&format!("fixture '{name}' {axis}"), value, minimum, maximum)?;
     }
     Ok(())
 }
@@ -588,6 +652,7 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
                 movement_pan_max: 1.0,
                 movement_tilt_min: 0.0,
                 movement_tilt_max: 1.0,
+                stage_placement: Some(default_stage_placement(0, 3)),
             },
             FixtureConfig {
                 id: "muvy-washq".into(),
@@ -600,6 +665,7 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
                 movement_pan_max: 1.0,
                 movement_tilt_min: 0.0,
                 movement_tilt_max: 1.0,
+                stage_placement: Some(default_stage_placement(1, 3)),
             },
             FixtureConfig {
                 id: "mini-butterfly".into(),
@@ -612,6 +678,7 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
                 movement_pan_max: 1.0,
                 movement_tilt_min: 0.0,
                 movement_tilt_max: 1.0,
+                stage_placement: Some(default_stage_placement(2, 3)),
             },
         ],
         allow_dmx_overlaps: false,
@@ -635,6 +702,38 @@ mod tests {
                 .iter()
                 .all(|fixture| config.grandma2().get(&fixture.fixture_type_id).is_some())
         );
+    }
+
+    #[test]
+    fn migrates_missing_stage_placements_to_explicit_coordinates() {
+        let mut config = default_show_config(true);
+        for fixture in &mut config.fixtures {
+            fixture.stage_placement = None;
+        }
+
+        let validated = ValidatedShowConfig::new(config, true)
+            .expect("legacy fixture positions should migrate");
+        let placements = validated
+            .fixtures
+            .iter()
+            .map(|fixture| {
+                fixture
+                    .stage_placement
+                    .as_ref()
+                    .expect("migration should assign a placement")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(placements.len(), 3);
+        assert_eq!(placements[0].x_m, -3.0);
+        assert_eq!(placements[1].x_m, 0.0);
+        assert_eq!(placements[2].x_m, 3.0);
+        assert!(placements.iter().all(|placement| {
+            placement.focus_target_enabled
+                && placement.y_m == 3.35
+                && placement.focus_target_y_m == 0.0
+                && placement.focus_target_z_m == 4.2
+        }));
     }
 
     #[test]

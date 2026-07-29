@@ -39,6 +39,28 @@ export function physicalAxisValue(coarse: number, fine: number, minimum: number,
   return minimum + (maximum - minimum) * normalized
 }
 
+export function beamAngleFromZoom(
+  fallbackAngleDegrees: number,
+  zoom: number,
+  physicalFromDegrees: number,
+  physicalToDegrees: number,
+) {
+  if (
+    !Number.isFinite(physicalFromDegrees) ||
+    !Number.isFinite(physicalToDegrees) ||
+    physicalFromDegrees <= 0 ||
+    physicalToDegrees <= 0 ||
+    Math.abs(physicalFromDegrees - physicalToDegrees) <= Number.EPSILON
+  ) {
+    return fallbackAngleDegrees
+  }
+  const normalizedZoom = Math.max(0, Math.min(255, zoom)) / 255
+  return Math.max(
+    1,
+    Math.min(170, physicalFromDegrees + (physicalToDegrees - physicalFromDegrees) * normalizedZoom),
+  )
+}
+
 export function rotatedEffectDirection(direction: StagePoint, phase: number): StagePoint {
   const magnitude = Math.hypot(direction.x, direction.y, direction.z)
   if (magnitude <= Number.EPSILON) return { x: 0, y: 0, z: 1 }
@@ -59,15 +81,21 @@ export function strobePatternLevel(
   emitterIndex: number,
   emitterCount: number,
   elapsedSeconds: number,
+  speed: number,
+  reducedMotion = false,
 ) {
   const count = Math.max(0, Math.floor(emitterCount))
   if (count === 0 || pattern <= 0 || emitterIndex < 0 || emitterIndex >= count) return 0
   const selectedPattern = Math.max(1, Math.min(18, Math.round(pattern)))
-  if (selectedPattern === 18) return 1
+  if (selectedPattern === 18) {
+    if (reducedMotion) return 0.6
+    const rate = 1 + Math.max(0, Math.min(1, speed)) * 15
+    return (Math.max(0, elapsedSeconds) * rate) % 1 < 0.48 ? 1 : 0
+  }
 
   const normalizedIndex = Math.floor(emitterIndex)
-  const speed = 4 + ((selectedPattern - 1) % 5) * 1.5
-  const step = Math.floor(Math.max(0, elapsedSeconds) * speed)
+  const rate = 1 + Math.max(0, Math.min(1, speed)) * 15
+  const step = reducedMotion ? 0 : Math.floor(Math.max(0, elapsedSeconds) * rate)
   if (selectedPattern <= 8) {
     const width = 1 + ((selectedPattern - 1) % 4)
     const direction = selectedPattern <= 4 ? 1 : -1
@@ -81,7 +109,8 @@ export function strobePatternLevel(
 
   const waveCount = 1 + ((selectedPattern - 13) % 3)
   const phase =
-    (normalizedIndex / count) * Math.PI * 2 * waveCount + elapsedSeconds * speed * Math.PI * 2
+    (normalizedIndex / count) * Math.PI * 2 * waveCount +
+    (reducedMotion ? 0 : elapsedSeconds * rate * Math.PI * 2)
   const threshold = selectedPattern >= 16 ? -0.35 : 0.25
   return Math.sin(phase) > threshold ? 1 : 0
 }

@@ -48,6 +48,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   FixtureConfigSchema,
+  FixtureStagePlacementSchema,
   ShowConfigSchema,
   type FixtureConfig,
   type FixtureState,
@@ -245,6 +246,9 @@ function FixturesPage() {
   )
 
   const createFixture = () => {
+    const placementIndex = config.fixtures.length
+    const placementX = -3 + (placementIndex % 5) * 1.5
+    const placementZ = Math.floor(placementIndex / 5)
     const nextStartChannel = Math.min(
       512,
       Math.max(
@@ -267,6 +271,15 @@ function FixturesPage() {
         movementPanMax: 1,
         movementTiltMin: 0,
         movementTiltMax: 1,
+        stagePlacement: create(FixtureStagePlacementSchema, {
+          xM: placementX,
+          yM: 3.35,
+          zM: placementZ,
+          focusTargetEnabled: true,
+          focusTargetXM: placementX,
+          focusTargetYM: 0,
+          focusTargetZM: 4.2,
+        }),
       }),
     )
   }
@@ -277,8 +290,7 @@ function FixturesPage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">Fixtures</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Patch grandMA2 fixture types. Channel functions and 3D metadata come directly from each
-            XML file.
+            Patch grandMA2 fixture types and place each fixture in the physical stage layout.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -384,7 +396,7 @@ function FixturesPage() {
             <CredenzaTitle>Import grandMA2 fixture</CredenzaTitle>
             <CredenzaDescription>
               Select an unencrypted grandMA2 XML fixture file. The server validates its channels,
-              physical ranges, body dimensions, emitters, and embedded model before saving it.
+              physical ranges, and module dimensions before saving it.
             </CredenzaDescription>
           </CredenzaHeader>
           <CredenzaBody>
@@ -399,7 +411,8 @@ function FixturesPage() {
                 />
                 <FieldDescription>
                   Maximum file size is 2 MB. grandMA2 XMLP files are encrypted and are not
-                  supported.
+                  supported. MA 3D models are separate media-database assets, so imported fixtures
+                  use the generated model for their module class.
                 </FieldDescription>
               </Field>
             </FieldGroup>
