@@ -21,13 +21,13 @@ After:  Rust capture, BeatNet+, effects, DMX, tonic-web + Vite SPA
 | Beat tracking | Native [BeatNet+](https://github.com/mjhydri/BeatNet-Plus) feature extraction and inference with causal tempo, phase, beat, downbeat, and bar decoding |
 | Visualizations | Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash |
 | Movement | Subtle, standard, dramatic, wall wash, sweep, random, circle, figure eight, ballyhoo, fan, chase, strobe position, and crazy |
-| Fixture behavior | Smoothing, intensity scaling, pan and tilt limits, color mixing, dual-color mapping, fixed channels, capabilities, strobe programs, rotation, and blackout |
-| Fixture library | Purelight Muvy WashQ, generic RGB/RGBW profiles, Showtec Techno Derby, and Lixada DJ Projektor |
+| Fixture behavior | Smoothing, intensity scaling, grandMA2 physical pan and tilt ranges, color functions, channel sets, strobe programs, rotation, and blackout |
+| Fixture library | Bundled grandMA2 XML for the PURElight MUVY WashQ, Showtec Techno Derby, and Lixada LED Mini Butterfly, plus validated XML import |
 | DMX | 512-channel inspection, Open DMX serial output, adapter discovery, status counters, and simulation |
 | Media | Cross-platform now-playing metadata and album-art palette extraction |
 | Recording | Input check while stopped, 30-second capture, metering, WAV preview, clear, and download |
-| Live UI | Waveform, spectrum, five-second spectrogram, meters, BeatNet+ state, stage beams, fixture output, media palette, and I/O status |
-| Configuration | Server-side validation, legacy JSON migration, import, export, reset, active-file persistence, profiles, and fixture channel editing |
+| Live UI | Waveform, spectrum, five-second spectrogram, meters, BeatNet+ state, metadata-driven 3D fixture models and beams, fixture output, media palette, and I/O status |
+| Configuration | Server-side validation, import, export, reset, active-file persistence, grandMA2 fixture files, and fixture patching |
 
 ## BeatNet+ boundary
 
@@ -63,8 +63,8 @@ Tailwind utilities and the preset's CSS variables own application styling. Canva
 
 Oxfmt and Oxlint skip the upstream UI directory, generated protobuf code, and generated TanStack route tree. ESLint is intentionally absent.
 
-## Configuration migration
+## Fixture and configuration boundary
 
-`src/config.rs` fills settings introduced by the Rust version and maps older values such as `fallback_mode`, `audio_gain`, and `figure_8`. Import runs this migration on the server before validation and persistence.
+`src/grandma2.rs` treats grandMA2 XML as the canonical fixture representation. It compiles channel functions into bounded real-time mappings and exposes physical dimensions, emitters, axis ranges, and supported mesh buffers to the browser. Fixture instances in `config.json` only store patch and show-specific settings.
 
-The active configuration defaults to `config.json`. Use the Settings page to load an existing file, then export the normalized Rust schema if a portable migrated copy is needed.
+The configuration parser is strict. The removed profile and channel-override schema is not migrated or accepted. Use the Fixtures page to import grandMA2 XML and the Settings page to import or export the current JSON schema.

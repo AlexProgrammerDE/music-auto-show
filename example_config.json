@@ -7,14 +7,14 @@
     "simulate": true
   },
   "audio": {
-    "mode": "auto",
-    "device_id": "",
+    "mode": 1,
     "simulate": true,
     "gain": 1.0,
-    "beatnet_model_path": "models/beatnet-plus.pt"
+    "beatnet_model_path": "models/beatnet-plus.pt",
+    "device_id": ""
   },
   "effects": {
-    "mode": "rainbow_wave",
+    "mode": 5,
     "intensity": 0.8,
     "force_max_brightness": false,
     "color_speed": 1.0,
@@ -23,39 +23,51 @@
     "strobe_on_drop": false,
     "movement_enabled": true,
     "movement_speed": 0.5,
-    "movement_mode": "wall_wash",
-    "effect_fixture_mode": "balanced",
-    "rotation_mode": "manual_slow",
+    "movement_mode": 4,
+    "effect_fixture_mode": 1,
+    "rotation_mode": 2,
     "strobe_effect_enabled": true,
-    "strobe_effect_mode": "auto",
+    "strobe_effect_mode": 2,
     "strobe_effect_speed": 0.5
   },
+  "imported_fixture_files": [],
   "fixtures": [
     {
-      "id": "wash-left",
-      "name": "Wash left",
-      "profile_name": "Generic Dimmer+RGBW",
+      "id": "techno-derby",
+      "name": "Techno Derby",
+      "fixture_type_id": "builtin:showtec-techno-derby-4ch:0",
       "start_channel": 1,
       "position": 0,
       "intensity_scale": 1.0,
-      "pan_min": 0,
-      "pan_max": 255,
-      "tilt_min": 0,
-      "tilt_max": 255,
-      "channels": []
+      "movement_pan_min": 0.0,
+      "movement_pan_max": 1.0,
+      "movement_tilt_min": 0.0,
+      "movement_tilt_max": 1.0
     },
     {
-      "id": "wash-right",
-      "name": "Wash right",
-      "profile_name": "Generic Dimmer+RGBW",
-      "start_channel": 6,
+      "id": "muvy-washq",
+      "name": "MUVY WashQ",
+      "fixture_type_id": "builtin:purelight-muvy-washq-14ch:0",
+      "start_channel": 5,
       "position": 1,
       "intensity_scale": 1.0,
-      "pan_min": 0,
-      "pan_max": 255,
-      "tilt_min": 0,
-      "tilt_max": 255,
-      "channels": []
+      "movement_pan_min": 0.0,
+      "movement_pan_max": 1.0,
+      "movement_tilt_min": 0.0,
+      "movement_tilt_max": 1.0
+    },
+    {
+      "id": "mini-butterfly",
+      "name": "Mini Butterfly",
+      "fixture_type_id": "builtin:lixada-mini-butterfly-7ch:0",
+      "start_channel": 19,
+      "position": 2,
+      "intensity_scale": 1.0,
+      "movement_pan_min": 0.0,
+      "movement_pan_max": 1.0,
+      "movement_tilt_min": 0.0,
+      "movement_tilt_max": 1.0
     }
-  ]
+  ],
+  "allow_dmx_overlaps": false
 }

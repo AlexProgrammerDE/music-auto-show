@@ -56,7 +56,8 @@ cargo test --all-targets
 - `src/beatnet.rs` owns BeatNet+ features, inference, and causal decoding.
 - `src/effects.rs` owns visualization modes, movement modes, fixture mapping, smoothing, and universe output.
 - `src/dmx.rs` owns Open DMX and simulated output.
-- `src/config.rs` owns defaults, built-in profiles, JSON persistence, and legacy migration.
+- `src/grandma2.rs` owns grandMA2 XML parsing, bundled fixture types, feature metadata, and visual geometry.
+- `src/config.rs` owns defaults, strict JSON persistence, and fixture patch validation.
 - `src/app.rs` owns the runtime lifecycle and snapshot stream.
 - `src/api.rs` implements the tonic service.
 - `frontend/src/lib/show-api.ts` is the Effect service boundary around Connect.

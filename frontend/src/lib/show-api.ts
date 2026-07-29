@@ -6,7 +6,7 @@ import type {
   AudioDevice,
   BluetoothReceiverStatus,
   CommandResult,
-  FixtureProfile,
+  GrandMa2FixtureType,
   Recording,
   RecordingStatus,
   ShowConfig,
@@ -43,7 +43,17 @@ type ShowApiShape = {
   readonly forgetBluetoothReceiverDevice: (
     deviceId: string,
   ) => Effect.Effect<BluetoothReceiverStatus, RpcFailure>
-  readonly listFixtureProfiles: Effect.Effect<readonly FixtureProfile[], RpcFailure>
+  readonly listGrandMa2FixtureTypes: Effect.Effect<readonly GrandMa2FixtureType[], RpcFailure>
+  readonly importGrandMa2Fixture: (
+    filename: string,
+    xml: Uint8Array,
+  ) => Effect.Effect<
+    {
+      readonly config: ShowConfig
+      readonly fixtureTypes: readonly GrandMa2FixtureType[]
+    },
+    RpcFailure
+  >
   readonly controlShow: (command: ShowCommand) => Effect.Effect<CommandResult, RpcFailure>
   readonly setBlackout: (enabled: boolean) => Effect.Effect<CommandResult, RpcFailure>
   readonly startRecording: Effect.Effect<RecordingStatus, RpcFailure>
@@ -160,10 +170,21 @@ const liveApi: ShowApiShape = {
         ),
       catch: (cause) => rpcFailure("ForgetBluetoothReceiverDevice", cause),
     }),
-  listFixtureProfiles: Effect.tryPromise({
-    try: async (signal) => (await client.listFixtureProfiles({}, { signal })).profiles,
-    catch: (cause) => rpcFailure("ListFixtureProfiles", cause),
+  listGrandMa2FixtureTypes: Effect.tryPromise({
+    try: async (signal) => (await client.listGrandMa2FixtureTypes({}, { signal })).fixtureTypes,
+    catch: (cause) => rpcFailure("ListGrandMa2FixtureTypes", cause),
   }),
+  importGrandMa2Fixture: (filename, xml) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        const response = await client.importGrandMa2Fixture({ filename, xml }, { signal })
+        return {
+          config: requireMessage("ImportGrandMa2Fixture", response.config),
+          fixtureTypes: response.fixtureTypes,
+        }
+      },
+      catch: (cause) => rpcFailure("ImportGrandMa2Fixture", cause),
+    }),
   controlShow: (command) =>
     Effect.tryPromise({
       try: async (signal) =>

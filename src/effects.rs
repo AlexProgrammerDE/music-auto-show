@@ -8,10 +8,11 @@ use rand::{Rng, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 
 use crate::{
     config::ValidatedShowConfig,
+    grandma2::{DmxSemantic, MappedChannel, MappedFunction, ParsedFixtureType},
     proto::v1::{
-        AudioAnalysis, ChannelCapability, ChannelConfig, EffectFixtureMode, EffectsConfig,
-        FixtureConfig, FixtureProfile, FixtureState, MovementMode, RgbColor, RotationMode,
-        StrobeEffectMode, VisualizationMode,
+        AudioAnalysis, EffectFixtureMode, EffectsConfig, FixtureConfig, FixtureState,
+        FixtureVisualKind, MovementMode, RgbColor, RotationMode, StrobeEffectMode,
+        VisualizationMode,
     },
 };
 
@@ -469,16 +470,21 @@ impl EffectsEngine {
         let pattern = self.strobe_effect_value(config, audio);
         let effect_rotation = self.preview_rotation(config);
         for fixture in &config.fixtures {
-            let profile = find_profile(config, fixture);
-            let channels = effective_channels(fixture, profile);
-            let has_effect = channels
-                .iter()
-                .any(|channel| channel.channel_type == "effect");
-            let is_effect = profile.is_some_and(|profile| profile.fixture_type == "effect");
+            let Some(fixture_type) = find_fixture_type(config, fixture) else {
+                continue;
+            };
+            let has_effect = fixture_type.channels.iter().any(|channel| {
+                channel.has_semantic(DmxSemantic::Rotation)
+                    || channel.has_semantic(DmxSemantic::EffectSpeed)
+            });
+            let is_effect = fixture_type.visual.kind() == FixtureVisualKind::Effect;
             let rotation = has_effect.then(|| {
                 self.rotation_value_for_channel(
                     config,
-                    channels.iter().find(|ch| ch.channel_type == "effect"),
+                    fixture_type.channels.iter().find(|channel| {
+                        channel.has_semantic(DmxSemantic::Rotation)
+                            || channel.has_semantic(DmxSemantic::EffectSpeed)
+                    }),
                 )
             });
             let key = fixture_key(fixture);
@@ -487,14 +493,7 @@ impl EffectsEngine {
                     rgb_to_color_macro(state.red, state.green, state.blue, audio.energy)
                 });
                 if let Some(state) = self.states.get_mut(&key) {
-                    if profile.is_some_and(|profile| profile.color_mixing == "dual_color_channels")
-                    {
-                        if let Some(profile) = profile {
-                            apply_dual_color_mapping(state, profile, self.current_hue);
-                        }
-                    } else {
-                        state.color_macro = color_macro;
-                    }
+                    state.color_macro = color_macro;
                     state.strobe = strobe;
                     state.effect = rotation.unwrap_or_default();
                     state.effect_pattern = pattern;
@@ -579,29 +578,10 @@ impl EffectsEngine {
 
     fn rotation_value_for_channel(
         &self,
-        config: &ValidatedShowConfig,
-        channel: Option<&ChannelConfig>,
+        _config: &ValidatedShowConfig,
+        _channel: Option<&MappedChannel>,
     ) -> u32 {
-        let Some(channel) = channel else {
-            return self.smoothed_rotation.clamp(0.0, 255.0) as u32;
-        };
-        let mode = config.rotation_mode();
-        let auto_mode = matches!(
-            mode,
-            RotationMode::AutoSlow
-                | RotationMode::AutoMedium
-                | RotationMode::AutoFast
-                | RotationMode::AutoMusic
-        );
-        let position = 0.5 + 0.5 * (self.rotation_phase * TAU).sin();
-        if auto_mode && let Some(range) = capability_range(channel, |capability| capability.is_auto)
-        {
-            scale_range(self.rotation_phase, range)
-        } else if let Some(range) = capability_range(channel, |capability| capability.is_manual) {
-            scale_range(position, range)
-        } else {
-            scale_range(position, usable_range(channel))
-        }
+        self.smoothed_rotation.clamp(0.0, 255.0) as u32
     }
 
     fn preview_rotation(&self, config: &ValidatedShowConfig) -> f32 {
@@ -656,13 +636,12 @@ impl EffectsEngine {
             return 0;
         }
         let mode = config.strobe_effect_mode();
-        let speed = settings.strobe_effect_speed;
         match mode {
             StrobeEffectMode::Off | StrobeEffectMode::Unspecified => 0,
-            StrobeEffectMode::Effect18Strobe => 180 + (speed * 75.0) as u32,
+            StrobeEffectMode::Effect18Strobe => 18,
             StrobeEffectMode::Auto => {
                 if self.is_drop {
-                    return 180 + (speed * 75.0) as u32;
+                    return 18;
                 }
                 let (start, end) = if audio.energy < 0.4 {
                     (1_u64, 6_u64)
@@ -672,12 +651,9 @@ impl EffectsEngine {
                     (13, 17)
                 };
                 let effect = start + audio.estimated_bar % (end - start + 1);
-                10 + (effect as u32 - 1) * 10 + ((speed * 0.5 + audio.bass * 0.5) * 9.0) as u32
+                effect as u32
             }
-            specific => {
-                let effect = specific as u32 - StrobeEffectMode::Effect1 as u32 + 1;
-                10 + (effect - 1) * 10 + (speed * 9.0) as u32
-            }
+            specific => specific as u32 - StrobeEffectMode::Effect1 as u32 + 1,
         }
     }
 
@@ -788,10 +764,14 @@ impl EffectsEngine {
         delta_seconds: f32,
     ) {
         let key = fixture_key(fixture);
-        let pan_range = fixture.pan_max.saturating_sub(fixture.pan_min) as f32;
-        let tilt_range = fixture.tilt_max.saturating_sub(fixture.tilt_min) as f32;
-        let pan_center = (fixture.pan_max + fixture.pan_min) as f32 / 2.0;
-        let tilt_center = (fixture.tilt_max + fixture.tilt_min) as f32 / 2.0;
+        let pan_min = fixture.movement_pan_min * 255.0;
+        let pan_max = fixture.movement_pan_max * 255.0;
+        let tilt_min = fixture.movement_tilt_min * 255.0;
+        let tilt_max = fixture.movement_tilt_max * 255.0;
+        let pan_range = pan_max - pan_min;
+        let tilt_range = tilt_max - tilt_min;
+        let pan_center = (pan_max + pan_min) / 2.0;
+        let tilt_center = (tilt_max + tilt_min) / 2.0;
         let energy = audio.energy;
         let bass = audio.bass;
         let phase_offset = fixture.position as f32;
@@ -882,10 +862,8 @@ impl EffectsEngine {
                 }
                 if beat && bass > 0.6 && has_tilt {
                     let current = self.target_tilt.get(&key).copied().unwrap_or(tilt_center);
-                    self.target_tilt.insert(
-                        key,
-                        (current + tilt_range / 2.0 * 0.1 * bass).min(fixture.tilt_max as f32),
-                    );
+                    self.target_tilt
+                        .insert(key, (current + tilt_range / 2.0 * 0.1 * bass).min(tilt_max));
                 }
             }
             MovementMode::Sweep => {
@@ -1163,15 +1141,14 @@ impl EffectsEngine {
                 if has_pan {
                     self.target_pan.insert(
                         key.clone(),
-                        (fixture.pan_min as f32 + (pan_factor + 1.0) / 2.0 * pan_range)
-                            .clamp(fixture.pan_min as f32, fixture.pan_max as f32),
+                        (pan_min + (pan_factor + 1.0) / 2.0 * pan_range).clamp(pan_min, pan_max),
                     );
                 }
                 if has_tilt {
                     self.target_tilt.insert(
                         key,
-                        (fixture.tilt_min as f32 + (tilt_factor + 1.0) / 2.0 * tilt_range)
-                            .clamp(fixture.tilt_min as f32, fixture.tilt_max as f32),
+                        (tilt_min + (tilt_factor + 1.0) / 2.0 * tilt_range)
+                            .clamp(tilt_min, tilt_max),
                     );
                 }
                 self.beats_since_move = 0;
@@ -1231,14 +1208,11 @@ impl EffectsEngine {
         let settings = effects(config);
         for fixture in &config.fixtures {
             let max_dimmer = dmx(fixture.intensity_scale * settings.intensity);
-            let profile = find_profile(config, fixture);
-            let channels = effective_channels(fixture, profile);
-            let has_dimmer = channels.iter().any(|channel| {
-                channel.enabled && channel.fixed_value.is_none() && is_dimmer(&channel.channel_type)
-            });
-            let has_color = channels.iter().any(|channel| {
-                channel.enabled && channel.fixed_value.is_none() && is_color(&channel.channel_type)
-            });
+            let Some(fixture_type) = find_fixture_type(config, fixture) else {
+                continue;
+            };
+            let has_dimmer = fixture_type.has_semantic(DmxSemantic::Dimmer);
+            let has_color = fixture_type.has_direct_color();
             if let Some(state) = self.states.get_mut(&fixture_key(fixture)) {
                 let color_max = max_color(state);
                 if max_dimmer == 0 {
@@ -1309,23 +1283,26 @@ impl EffectsEngine {
             let Some(state) = self.smoothed.get(&fixture_key(fixture)) else {
                 continue;
             };
-            let profile = find_profile(config, fixture);
-            for channel in effective_channels(fixture, profile)
-                .iter()
-                .filter(|channel| channel.enabled)
-            {
+            let Some(fixture_type) = find_fixture_type(config, fixture) else {
+                continue;
+            };
+            for channel in &fixture_type.channels {
                 let dmx_channel = fixture
                     .start_channel
-                    .saturating_add(channel.offset)
+                    .saturating_add(channel.coarse)
                     .saturating_sub(1);
                 if dmx_channel == 0 || dmx_channel as usize > universe_size {
                     continue;
                 }
-                let value = channel
-                    .fixed_value
-                    .unwrap_or_else(|| channel_value(state, channel));
                 universe[dmx_channel as usize - 1] =
-                    value.clamp(channel.min_value, channel.max_value).min(255) as u8;
+                    channel_value(state, channel, fixture_type).min(255) as u8;
+                if let Some(fine) = channel.fine {
+                    let fine_channel = fixture.start_channel.saturating_add(fine).saturating_sub(1);
+                    if fine_channel > 0 && fine_channel as usize <= universe_size {
+                        universe[fine_channel as usize - 1] =
+                            channel_fine_value(state, channel).min(255) as u8;
+                    }
+                }
             }
         }
         universe
@@ -1380,39 +1357,23 @@ fn default_state(fixture: &FixtureConfig) -> FixtureState {
     }
 }
 
-fn find_profile<'a>(
+fn find_fixture_type<'a>(
     config: &'a ValidatedShowConfig,
     fixture: &FixtureConfig,
-) -> Option<&'a FixtureProfile> {
-    config
-        .profiles
-        .iter()
-        .find(|profile| profile.name == fixture.profile_name)
-}
-
-fn effective_channels<'a>(
-    fixture: &'a FixtureConfig,
-    profile: Option<&'a FixtureProfile>,
-) -> &'a [ChannelConfig] {
-    if fixture.channels.is_empty() {
-        profile.map_or(&[], |profile| profile.channels.as_slice())
-    } else {
-        &fixture.channels
-    }
+) -> Option<&'a ParsedFixtureType> {
+    config.grandma2().get(&fixture.fixture_type_id)
 }
 
 fn controllable_movement_axes(
     config: &ValidatedShowConfig,
     fixture: &FixtureConfig,
 ) -> (bool, bool) {
-    let channels = effective_channels(fixture, find_profile(config, fixture));
-    let has_pan = channels.iter().any(|channel| {
-        channel.enabled && channel.fixed_value.is_none() && channel.channel_type == "position_pan"
-    });
-    let has_tilt = channels.iter().any(|channel| {
-        channel.enabled && channel.fixed_value.is_none() && channel.channel_type == "position_tilt"
-    });
-    (has_pan, has_tilt)
+    find_fixture_type(config, fixture).map_or((false, false), |fixture_type| {
+        (
+            fixture_type.has_semantic(DmxSemantic::Pan),
+            fixture_type.has_semantic(DmxSemantic::Tilt),
+        )
+    })
 }
 
 fn dmx(value: f32) -> u32 {
@@ -1493,28 +1454,6 @@ fn rgb_to_hsv(red: f32, green: f32, blue: f32) -> (f32, f32, f32) {
     (hue, saturation, max)
 }
 
-fn apply_dual_color_mapping(state: &mut FixtureState, profile: &FixtureProfile, hue: f32) {
-    if profile.dual_color_map.len() < 3 {
-        return;
-    }
-    let brightness = state.red.max(state.green).max(state.blue).max(1) as f32 / 255.0;
-    let values: Vec<u32> = profile
-        .dual_color_map
-        .iter()
-        .map(|mapping| {
-            let contribution = [mapping.primary_hue, mapping.secondary_hue]
-                .into_iter()
-                .flatten()
-                .map(|candidate| (1.0 - hue_distance(hue, candidate) * 6.0).max(0.0))
-                .fold(0.0_f32, f32::max);
-            dmx(contribution * brightness)
-        })
-        .collect();
-    state.red = values[0];
-    state.green = values[1];
-    state.blue = values[2];
-}
-
 fn hue_distance(first: f32, second: f32) -> f32 {
     let difference = (first - second).abs();
     difference.min(1.0 - difference)
@@ -1575,54 +1514,6 @@ fn rgb_to_color_macro(red: u32, green: u32, blue: u32, energy: f32) -> u32 {
     }
 }
 
-fn capability_range(
-    channel: &ChannelConfig,
-    predicate: impl Fn(&ChannelCapability) -> bool,
-) -> Option<(u32, u32)> {
-    let mut matching = channel
-        .capabilities
-        .iter()
-        .filter(|capability| capability.usable && predicate(capability));
-    let first = matching.next()?;
-    let mut minimum = first.min_value;
-    let mut maximum = first.max_value;
-    for capability in matching {
-        minimum = minimum.min(capability.min_value);
-        maximum = maximum.max(capability.max_value);
-    }
-    Some((minimum, maximum))
-}
-
-fn usable_range(channel: &ChannelConfig) -> (u32, u32) {
-    capability_range(channel, |_| true).unwrap_or((channel.min_value, channel.max_value))
-}
-
-fn scale_range(value: f32, (minimum, maximum): (u32, u32)) -> u32 {
-    (minimum as f32 + clamp01(value) * maximum.saturating_sub(minimum) as f32) as u32
-}
-
-fn is_dimmer(channel_type: &str) -> bool {
-    matches!(
-        channel_type,
-        "intensity" | "intensity_dimmer" | "intensity_master_dimmer"
-    )
-}
-
-fn is_color(channel_type: &str) -> bool {
-    matches!(
-        channel_type,
-        "intensity_red"
-            | "intensity_green"
-            | "intensity_blue"
-            | "intensity_white"
-            | "intensity_amber"
-            | "intensity_uv"
-            | "intensity_cyan"
-            | "intensity_magenta"
-            | "intensity_yellow"
-    )
-}
-
 fn max_color(state: &FixtureState) -> u32 {
     [
         state.red,
@@ -1657,81 +1548,247 @@ fn scale_colors(state: &mut FixtureState, target: u32) {
     state.yellow = (state.yellow as f32 * scale).min(255.0) as u32;
 }
 
-fn channel_value(state: &FixtureState, channel: &ChannelConfig) -> u32 {
-    match channel.channel_type.as_str() {
-        "intensity" | "intensity_dimmer" => state.dimmer,
-        "intensity_master_dimmer" => master_dimmer(state, channel),
-        "intensity_red" => state.red,
-        "intensity_green" => state.green,
-        "intensity_blue" => state.blue,
-        "intensity_white" => state.white,
-        "intensity_amber" => state.amber,
-        "intensity_uv" => state.uv,
-        "intensity_cyan" => state.cyan,
-        "intensity_magenta" => state.magenta,
-        "intensity_yellow" => state.yellow,
-        "position_pan" => state.pan,
-        "position_pan_fine" => state.pan_fine,
-        "position_tilt" => state.tilt,
-        "position_tilt_fine" => state.tilt_fine,
-        "speed_pan_tilt_fast_slow" => state.pan_tilt_speed,
-        "speed_pan_tilt_slow_fast" => 255 - state.pan_tilt_speed.min(255),
-        "shutter_strobe" | "shutter_strobe_slow_fast" | "shutter_strobe_fast_slow" => state.strobe,
-        "color_macro" | "color_wheel" => state.color_macro,
-        "effect" => state.effect,
-        "effect_speed" => state.effect_speed,
-        "effect_pattern" | "effect_pattern_speed" => state.effect_pattern,
-        "gobo_wheel" | "gobo_index" => state.gobo,
-        "prism" | "prism_rotation" => state.prism,
-        "beam_zoom_small_big" | "beam_zoom_big_small" => state.zoom,
-        "beam_focus_near_far" | "beam_focus_far_near" => state.focus,
-        "shutter_iris_min_to_max" | "shutter_iris_max_to_min" => state.iris,
-        "nothing" | "fixed" | "maintenance" => channel.default_value,
-        unsupported => {
-            debug_assert!(
-                false,
-                "unsupported channel type reached effects: {unsupported}"
-            );
-            channel.default_value
+fn channel_value(
+    state: &FixtureState,
+    channel: &MappedChannel,
+    fixture_type: &ParsedFixtureType,
+) -> u32 {
+    if channel.has_semantic(DmxSemantic::Dimmer) {
+        return dimmer_channel_value(state, channel);
+    }
+    if channel.has_semantic(DmxSemantic::Strobe) {
+        return if state.strobe == 0 {
+            safe_idle_value(channel)
+        } else {
+            semantic_function(channel, DmxSemantic::Strobe)
+                .map_or(channel.default_value, |function| {
+                    function.normalized_value(state.strobe as f32 / 255.0)
+                })
+        };
+    }
+    if channel.has_semantic(DmxSemantic::CustomColor) {
+        return custom_color_value(state, channel);
+    }
+
+    for (semantic, value) in [
+        (DmxSemantic::Red, state.red),
+        (DmxSemantic::Green, state.green),
+        (DmxSemantic::Blue, state.blue),
+        (DmxSemantic::White, state.white),
+        (DmxSemantic::Amber, state.amber),
+        (DmxSemantic::Uv, state.uv),
+        (DmxSemantic::Cyan, state.cyan),
+        (DmxSemantic::Magenta, state.magenta),
+        (DmxSemantic::Yellow, state.yellow),
+        (DmxSemantic::Pan, state.pan),
+        (DmxSemantic::Tilt, state.tilt),
+        (DmxSemantic::PositionSpeed, state.pan_tilt_speed),
+        (DmxSemantic::Gobo, state.gobo),
+        (DmxSemantic::Prism, state.prism),
+        (DmxSemantic::Zoom, state.zoom),
+        (DmxSemantic::Focus, state.focus),
+        (DmxSemantic::Iris, state.iris),
+    ] {
+        if let Some(function) = semantic_function(channel, semantic) {
+            return function.normalized_value(value as f32 / 255.0);
         }
+    }
+
+    if channel.has_semantic(DmxSemantic::ColorMacro) {
+        return if fixture_type.has_direct_color() {
+            safe_idle_value(channel)
+        } else {
+            color_macro_value(state, channel)
+        };
+    }
+    if channel.has_semantic(DmxSemantic::ColorMacroSpeed) {
+        return safe_idle_value(channel);
+    }
+    if channel.has_semantic(DmxSemantic::Rotation) {
+        return rotation_channel_value(state.effect, channel);
+    }
+    if let Some(function) = semantic_function(channel, DmxSemantic::EffectSpeed) {
+        let value = if state.effect_speed > 0 {
+            state.effect_speed
+        } else {
+            state.effect
+        };
+        return function.normalized_value(value as f32 / 255.0);
+    }
+    if channel.has_semantic(DmxSemantic::EffectPattern) {
+        return effect_pattern_value(state.effect_pattern, channel);
+    }
+    safe_idle_value(channel)
+}
+
+fn channel_fine_value(state: &FixtureState, channel: &MappedChannel) -> u32 {
+    if channel.has_semantic(DmxSemantic::Pan) {
+        state.pan_fine
+    } else if channel.has_semantic(DmxSemantic::Tilt) {
+        state.tilt_fine
+    } else {
+        0
     }
 }
 
-fn master_dimmer(state: &FixtureState, channel: &ChannelConfig) -> u32 {
-    if channel.capabilities.is_empty() {
-        return state.dimmer;
-    }
-    let named = |needle: &str| {
-        channel
-            .capabilities
-            .iter()
-            .find(|capability| capability.name.to_lowercase().contains(needle))
-    };
+fn semantic_function(channel: &MappedChannel, semantic: DmxSemantic) -> Option<&MappedFunction> {
+    channel
+        .functions
+        .iter()
+        .find(|function| function.semantic == semantic)
+}
+
+fn safe_idle_value(channel: &MappedChannel) -> u32 {
+    channel
+        .functions
+        .iter()
+        .find(|function| function.semantic == DmxSemantic::NoFeature)
+        .map_or(channel.default_value, |function| function.from_dmx)
+}
+
+fn dimmer_channel_value(state: &FixtureState, channel: &MappedChannel) -> u32 {
     if state.dimmer < 5 {
-        return named("off")
-            .or_else(|| named("no function"))
-            .map_or(0, |capability| capability.min_value);
+        return safe_idle_value(channel);
     }
     if state.strobe > 0
-        && let Some(capability) = named("strobe")
+        && let Some(function) = semantic_function(channel, DmxSemantic::Strobe)
     {
-        return capability.min_value
-            + (state.strobe as f32 / 255.0
-                * capability.max_value.saturating_sub(capability.min_value) as f32)
-                as u32;
+        return function.normalized_value(state.strobe as f32 / 255.0);
     }
     if state.dimmer >= 250
-        && let Some(capability) = named("open")
+        && let Some(function) = semantic_function(channel, DmxSemantic::Shutter)
     {
-        return capability.min_value;
+        return function.from_dmx;
     }
-    if let Some(capability) = named("dimmer") {
-        return capability.min_value
-            + ((state.dimmer.saturating_sub(5)) as f32 / 244.0
-                * capability.max_value.saturating_sub(capability.min_value) as f32)
-                as u32;
+    semantic_function(channel, DmxSemantic::Dimmer).map_or(channel.default_value, |function| {
+        function.normalized_value(state.dimmer as f32 / 255.0)
+    })
+}
+
+fn custom_color_value(state: &FixtureState, channel: &MappedChannel) -> u32 {
+    let red = state.red as f32 / 255.0;
+    let green = state.green as f32 / 255.0;
+    let blue = state.blue as f32 / 255.0;
+    let (hue, saturation, rgb_value) = rgb_to_hsv(red, green, blue);
+    let white_value = state.white as f32 / 255.0;
+    let contribution = channel
+        .color_hues
+        .iter()
+        .map(|candidate| {
+            if *candidate < 0.0 {
+                (1.0 - saturation) * rgb_value.max(white_value)
+            } else {
+                (1.0 - hue_distance(hue, *candidate) * 6.0).max(0.0) * rgb_value
+            }
+        })
+        .fold(0.0_f32, f32::max);
+    semantic_function(channel, DmxSemantic::CustomColor).map_or(channel.default_value, |function| {
+        function.normalized_value(contribution)
+    })
+}
+
+fn color_macro_value(state: &FixtureState, channel: &MappedChannel) -> u32 {
+    if state.dimmer < 5 || max_color(state) < 5 {
+        return safe_idle_value(channel);
     }
-    state.dimmer
+    let target = [
+        state.red as f32 / 255.0,
+        state.green as f32 / 255.0,
+        state.blue as f32 / 255.0,
+        state.white as f32 / 255.0,
+    ];
+    channel
+        .functions
+        .iter()
+        .filter(|function| function.semantic == DmxSemantic::ColorMacro)
+        .flat_map(|function| &function.channel_sets)
+        .filter_map(|set| {
+            let candidate = named_color(&set.name)?;
+            let score = target
+                .iter()
+                .zip(candidate)
+                .map(|(actual, expected)| (actual - expected).powi(2))
+                .sum::<f32>();
+            Some((score, (set.from_dmx + set.to_dmx) / 2))
+        })
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+        .map_or_else(|| safe_idle_value(channel), |(_, value)| value)
+}
+
+fn named_color(name: &str) -> Option<[f32; 4]> {
+    let name = name.to_ascii_lowercase();
+    if ["off", "manual", "change", "macro", "speed"]
+        .iter()
+        .any(|token| name.contains(token))
+    {
+        return None;
+    }
+    let compact = name.replace([' ', '+', '/', '-'], "");
+    let shorthand = !compact.is_empty()
+        && compact.len() <= 4
+        && compact.chars().all(|character| "rgbw".contains(character));
+    let has =
+        |full: &str, short: char| name.contains(full) || (shorthand && compact.contains(short));
+    let red = has("red", 'r');
+    let green = has("green", 'g');
+    let blue = has("blue", 'b');
+    let white = has("white", 'w');
+    (red || green || blue || white).then_some([
+        red as u8 as f32,
+        green as u8 as f32,
+        blue as u8 as f32,
+        white as u8 as f32,
+    ])
+}
+
+fn rotation_channel_value(value: u32, channel: &MappedChannel) -> u32 {
+    let automatic = value >= 128;
+    let preferred = channel.functions.iter().find(|function| {
+        if function.semantic != DmxSemantic::Rotation {
+            return false;
+        }
+        let name = format!("{} {}", function.name, function.subattribute).to_ascii_lowercase();
+        if automatic {
+            name.contains("auto") || name.contains("rot")
+        } else {
+            name.contains("manual") || !name.contains("auto")
+        }
+    });
+    preferred.map_or_else(
+        || safe_idle_value(channel),
+        |function| {
+            let normalized = if automatic {
+                value.saturating_sub(128) as f32 / 127.0
+            } else {
+                value.min(127) as f32 / 127.0
+            };
+            function.normalized_value(normalized)
+        },
+    )
+}
+
+fn effect_pattern_value(pattern: u32, channel: &MappedChannel) -> u32 {
+    if pattern == 0 {
+        return safe_idle_value(channel);
+    }
+    let sets = channel
+        .functions
+        .iter()
+        .filter(|function| function.semantic == DmxSemantic::EffectPattern)
+        .flat_map(|function| &function.channel_sets)
+        .filter(|set| {
+            let name = set.name.to_ascii_lowercase();
+            !name.contains("sound") && !name.contains("off")
+        })
+        .collect::<Vec<_>>();
+    if sets.is_empty() {
+        return semantic_function(channel, DmxSemantic::EffectPattern).map_or_else(
+            || safe_idle_value(channel),
+            |function| function.normalized_value(pattern.min(255) as f32 / 255.0),
+        );
+    }
+    let index = pattern.saturating_sub(1) as usize % sets.len();
+    (sets[index].from_dmx + sets[index].to_dmx) / 2
 }
 
 fn zero_light(state: &mut FixtureState) {
@@ -1755,43 +1812,32 @@ fn zero_light(state: &mut FixtureState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::default_show_config;
+    use crate::{
+        config::default_show_config,
+        grandma2::{LIXADA_MINI_BUTTERFLY_ID, PURELIGHT_MUVY_WASHQ_ID, SHOWTEC_TECHNO_DERBY_ID},
+    };
 
     fn validated(config: crate::proto::v1::ShowConfig) -> ValidatedShowConfig {
         ValidatedShowConfig::new(config, true).expect("test configuration should validate")
-    }
-
-    fn test_channel(offset: u32, channel_type: &str) -> ChannelConfig {
-        ChannelConfig {
-            offset,
-            name: channel_type.into(),
-            channel_type: channel_type.into(),
-            default_value: 0,
-            min_value: 0,
-            max_value: 255,
-            enabled: true,
-            ..Default::default()
-        }
     }
 
     fn test_fixture(
         id: &str,
         start_channel: u32,
         position: u32,
-        channels: Vec<ChannelConfig>,
+        fixture_type_id: &str,
     ) -> FixtureConfig {
         FixtureConfig {
             id: id.into(),
             name: id.into(),
+            fixture_type_id: fixture_type_id.into(),
             start_channel,
             position,
             intensity_scale: 1.0,
-            pan_min: 0,
-            pan_max: 255,
-            tilt_min: 0,
-            tilt_max: 255,
-            channels,
-            ..Default::default()
+            movement_pan_min: 0.0,
+            movement_pan_max: 1.0,
+            movement_tilt_min: 0.0,
+            movement_tilt_max: 1.0,
         }
     }
 
@@ -1838,6 +1884,25 @@ mod tests {
     fn color_macro_never_selects_the_off_range() {
         assert!(rgb_to_color_macro(0, 0, 0, 0.0) > 5);
         assert_eq!(rgb_to_color_macro(255, 0, 0, 0.5), 103);
+    }
+
+    #[test]
+    fn color_macro_fixture_uses_its_idle_range_when_dark() {
+        let config = validated(default_show_config(true));
+        let fixture_type = config
+            .grandma2()
+            .get(SHOWTEC_TECHNO_DERBY_ID)
+            .expect("Techno Derby fixture type");
+        let channel = fixture_type
+            .channels
+            .iter()
+            .find(|channel| channel.has_semantic(DmxSemantic::ColorMacro))
+            .expect("Techno Derby color macro");
+
+        assert_eq!(
+            channel_value(&FixtureState::default(), channel, fixture_type),
+            0
+        );
     }
 
     #[test]
@@ -1897,22 +1962,21 @@ mod tests {
     }
 
     #[test]
-    fn every_legacy_visualization_and_movement_mode_produces_bounded_output() {
+    fn every_visualization_and_movement_mode_produces_bounded_output() {
         for visualization in VISUALIZATION_MODES {
             for movement in MOVEMENT_MODES {
                 let mut config = default_show_config(true);
                 config.fixtures = vec![FixtureConfig {
                     id: "moving-head".into(),
                     name: "Moving head".into(),
-                    profile_name: "Purelight Muvy WashQ 14ch".into(),
+                    fixture_type_id: PURELIGHT_MUVY_WASHQ_ID.into(),
                     start_channel: 1,
                     position: 0,
                     intensity_scale: 0.85,
-                    pan_min: 16,
-                    pan_max: 240,
-                    tilt_min: 32,
-                    tilt_max: 224,
-                    channels: Vec::new(),
+                    movement_pan_min: 16.0 / 255.0,
+                    movement_pan_max: 240.0 / 255.0,
+                    movement_tilt_min: 32.0 / 255.0,
+                    movement_tilt_max: 224.0 / 255.0,
                 }];
                 let settings = config.effects.as_mut().expect("effects configuration");
                 settings.mode = visualization as i32;
@@ -1955,32 +2019,24 @@ mod tests {
     }
 
     #[test]
-    fn fixed_channel_values_still_respect_fixture_ranges() {
+    fn grand_ma2_combined_dimmer_strobe_and_reset_channel_map_safely() {
         let mut config = default_show_config(true);
-        config.fixtures[0].channels = vec![ChannelConfig {
-            offset: 1,
-            name: "Fixed".into(),
-            channel_type: "fixed".into(),
-            fixed_value: Some(220),
-            min_value: 10,
-            max_value: 100,
-            enabled: true,
-            ..Default::default()
-        }];
-        let audio = AudioAnalysis {
-            energy: 0.8,
-            tempo: 120.0,
-            ..Default::default()
-        };
+        config.fixtures = vec![test_fixture("muvy", 1, 0, PURELIGHT_MUVY_WASHQ_ID)];
         let config = validated(config);
-        let output = EffectsEngine::default().process(
-            &config,
-            &audio,
-            &[],
-            false,
-            Duration::from_millis(25),
-        );
-        assert_eq!(output.universe[0], 100);
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        let state = engine.smoothed.get_mut("muvy").expect("smoothed state");
+        state.dimmer = 255;
+        state.strobe = 0;
+        assert_eq!(engine.map_universe(&config, 512)[5], 240);
+        assert_eq!(engine.map_universe(&config, 512)[13], 0);
+
+        engine
+            .smoothed
+            .get_mut("muvy")
+            .expect("smoothed state")
+            .strobe = 128;
+        assert!((186..=188).contains(&engine.map_universe(&config, 512)[5]));
     }
 
     #[test]
@@ -2016,29 +2072,10 @@ mod tests {
     #[test]
     fn chase_uses_only_controllable_movers_in_show_order() {
         let mut config = default_show_config(true);
-        let mut fixed_pan = test_channel(1, "position_pan");
-        fixed_pan.fixed_value = Some(0);
         config.fixtures = vec![
-            test_fixture("static-light", 1, 0, vec![test_channel(1, "intensity_red")]),
-            test_fixture("fixed-mover", 2, 20, vec![fixed_pan]),
-            test_fixture(
-                "later-mover",
-                3,
-                30,
-                vec![
-                    test_channel(1, "position_pan"),
-                    test_channel(2, "position_tilt"),
-                ],
-            ),
-            test_fixture(
-                "earlier-mover",
-                5,
-                10,
-                vec![
-                    test_channel(1, "position_pan"),
-                    test_channel(2, "position_tilt"),
-                ],
-            ),
+            test_fixture("static-light", 1, 0, SHOWTEC_TECHNO_DERBY_ID),
+            test_fixture("later-mover", 5, 30, PURELIGHT_MUVY_WASHQ_ID),
+            test_fixture("earlier-mover", 19, 10, PURELIGHT_MUVY_WASHQ_ID),
         ];
         let settings = config.effects.as_mut().expect("effects configuration");
         settings.movement_mode = MovementMode::Chase as i32;
@@ -2062,8 +2099,6 @@ mod tests {
         assert_eq!(engine.wall_corner_index["__chase_index__"], 1);
         approx::assert_abs_diff_eq!(engine.target_pan["earlier-mover"], 108.375);
         approx::assert_abs_diff_eq!(engine.target_pan["later-mover"], 191.25);
-        assert_eq!(engine.target_pan["fixed-mover"], 128.0);
-
         engine.process(
             &config,
             &AudioAnalysis {
@@ -2086,27 +2121,9 @@ mod tests {
     fn single_mover_chase_does_not_pause_for_static_fixtures() {
         let mut config = default_show_config(true);
         config.fixtures = vec![
-            test_fixture(
-                "static-before",
-                1,
-                0,
-                vec![test_channel(1, "intensity_red")],
-            ),
-            test_fixture(
-                "only-mover",
-                2,
-                1,
-                vec![
-                    test_channel(1, "position_pan"),
-                    test_channel(2, "position_tilt"),
-                ],
-            ),
-            test_fixture(
-                "static-after",
-                4,
-                2,
-                vec![test_channel(1, "intensity_blue")],
-            ),
+            test_fixture("static-before", 1, 0, SHOWTEC_TECHNO_DERBY_ID),
+            test_fixture("only-mover", 5, 1, PURELIGHT_MUVY_WASHQ_ID),
+            test_fixture("static-after", 19, 2, LIXADA_MINI_BUTTERFLY_ID),
         ];
         let settings = config.effects.as_mut().expect("effects configuration");
         settings.movement_mode = MovementMode::Chase as i32;
@@ -2137,25 +2154,9 @@ mod tests {
     fn fan_spreads_only_movement_capable_fixtures() {
         let mut config = default_show_config(true);
         config.fixtures = vec![
-            test_fixture("static-light", 1, 0, vec![test_channel(1, "intensity_red")]),
-            test_fixture(
-                "right-mover",
-                2,
-                30,
-                vec![
-                    test_channel(1, "position_pan"),
-                    test_channel(2, "position_tilt"),
-                ],
-            ),
-            test_fixture(
-                "left-mover",
-                4,
-                10,
-                vec![
-                    test_channel(1, "position_pan"),
-                    test_channel(2, "position_tilt"),
-                ],
-            ),
+            test_fixture("static-light", 1, 0, SHOWTEC_TECHNO_DERBY_ID),
+            test_fixture("right-mover", 5, 30, PURELIGHT_MUVY_WASHQ_ID),
+            test_fixture("left-mover", 19, 10, PURELIGHT_MUVY_WASHQ_ID),
         ];
         let settings = config.effects.as_mut().expect("effects configuration");
         settings.movement_mode = MovementMode::Fan as i32;

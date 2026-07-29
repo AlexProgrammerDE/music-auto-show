@@ -36,7 +36,7 @@ import { RunState, ShowCommand } from "@/gen/music_auto_show/v1/music_auto_show_
 import { formatDuration, formatPercent } from "@/lib/format"
 import {
   configQueryOptions,
-  fixtureProfilesQueryOptions,
+  grandMa2FixtureTypesQueryOptions,
   showQueryKeys,
   snapshotQueryOptions,
 } from "@/lib/queries"
@@ -53,7 +53,7 @@ export const Route = createFileRoute("/")({
     await Promise.all([
       context.queryClient.ensureQueryData(snapshotQueryOptions),
       context.queryClient.ensureQueryData(configQueryOptions),
-      context.queryClient.ensureQueryData(fixtureProfilesQueryOptions),
+      context.queryClient.ensureQueryData(grandMa2FixtureTypesQueryOptions),
     ])
   },
   pendingComponent: PageSkeleton,
@@ -83,7 +83,7 @@ function Level({ label, value, color }: { label: string; value: number; color: s
 function LiveDashboard() {
   const { data: snapshot } = useSuspenseQuery(snapshotQueryOptions)
   const { data: config } = useSuspenseQuery(configQueryOptions)
-  const { data: profiles } = useSuspenseQuery(fixtureProfilesQueryOptions)
+  const { data: fixtureTypes } = useSuspenseQuery(grandMa2FixtureTypesQueryOptions)
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
   const running = snapshot.runState === RunState.RUNNING
   const transitioning =
@@ -156,8 +156,13 @@ function LiveDashboard() {
     onError: (error) => toast.error(error.message),
   })
 
-  const fixtures = useMemo(
-    () => snapshot.fixtureStates.filter((fixture) => fixture.fixtureId !== ""),
+  const fixtureStates = useMemo(
+    () =>
+      new Map(
+        snapshot.fixtureStates
+          .filter((fixture) => fixture.fixtureId !== "")
+          .map((fixture) => [fixture.fixtureId, fixture]),
+      ),
     [snapshot.fixtureStates],
   )
 
@@ -260,7 +265,7 @@ function LiveDashboard() {
         >
           <StageView
             fixtures={config.fixtures}
-            profiles={profiles}
+            fixtureTypes={fixtureTypes}
             states={snapshot.fixtureStates}
           />
         </Suspense>
@@ -454,9 +459,9 @@ function LiveDashboard() {
 
       <SectionPanel
         title="Stage output"
-        description={`${fixtures.length} configured fixture${fixtures.length === 1 ? "" : "s"}`}
+        description={`${config.fixtures.length} configured fixture${config.fixtures.length === 1 ? "" : "s"}`}
       >
-        {fixtures.length === 0 ? (
+        {config.fixtures.length === 0 ? (
           <Empty className="min-h-48 rounded-none">
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -475,35 +480,39 @@ function LiveDashboard() {
           </Empty>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-            {fixtures.map((fixture) => (
-              <div
-                key={fixture.fixtureId}
-                className="flex items-center gap-3 border-r border-b p-3 last:border-r-0"
-              >
-                <span className="grid size-10 shrink-0 grid-cols-3 items-end gap-0.5 border bg-muted p-1">
-                  <Progress
-                    value={(fixture.red / 255) * 100}
-                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-2 [&_[data-slot=progress-track]]:h-full"
-                  />
-                  <Progress
-                    value={(fixture.green / 255) * 100}
-                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-3 [&_[data-slot=progress-track]]:h-full"
-                  />
-                  <Progress
-                    value={(fixture.blue / 255) * 100}
-                    className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-4 [&_[data-slot=progress-track]]:h-full"
-                  />
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate font-heading text-xs font-semibold">
-                    {fixture.fixtureName}
-                  </p>
-                  <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
-                    RGB {fixture.red} · {fixture.green} · {fixture.blue}
-                  </p>
+            {config.fixtures.map((fixture) => {
+              const state = fixtureStates.get(fixture.id)
+              const red = state?.red ?? 0
+              const green = state?.green ?? 0
+              const blue = state?.blue ?? 0
+              return (
+                <div
+                  key={fixture.id}
+                  className="flex items-center gap-3 border-r border-b p-3 last:border-r-0"
+                >
+                  <span className="grid size-10 shrink-0 grid-cols-3 items-end gap-0.5 border bg-muted p-1">
+                    <Progress
+                      value={(red / 255) * 100}
+                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-2 [&_[data-slot=progress-track]]:h-full"
+                    />
+                    <Progress
+                      value={(green / 255) * 100}
+                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-3 [&_[data-slot=progress-track]]:h-full"
+                    />
+                    <Progress
+                      value={(blue / 255) * 100}
+                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-4 [&_[data-slot=progress-track]]:h-full"
+                    />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-heading text-xs font-semibold">{fixture.name}</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                      RGB {red} · {green} · {blue}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </SectionPanel>

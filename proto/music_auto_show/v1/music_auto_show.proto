@@ -16,7 +16,8 @@ service MusicAutoShowService {
   rpc ConnectBluetoothReceiverDevice(ConnectBluetoothReceiverDeviceRequest) returns (ConnectBluetoothReceiverDeviceResponse);
   rpc DisconnectBluetoothReceiverDevice(DisconnectBluetoothReceiverDeviceRequest) returns (DisconnectBluetoothReceiverDeviceResponse);
   rpc ForgetBluetoothReceiverDevice(ForgetBluetoothReceiverDeviceRequest) returns (ForgetBluetoothReceiverDeviceResponse);
-  rpc ListFixtureProfiles(ListFixtureProfilesRequest) returns (ListFixtureProfilesResponse);
+  rpc ListGrandMa2FixtureTypes(ListGrandMa2FixtureTypesRequest) returns (ListGrandMa2FixtureTypesResponse);
+  rpc ImportGrandMa2Fixture(ImportGrandMa2FixtureRequest) returns (ImportGrandMa2FixtureResponse);
   rpc ControlShow(ControlShowRequest) returns (ControlShowResponse);
   rpc SetBlackout(SetBlackoutRequest) returns (SetBlackoutResponse);
   rpc StartRecording(StartRecordingRequest) returns (StartRecordingResponse);
@@ -118,10 +119,20 @@ message ForgetBluetoothReceiverDeviceResponse {
   BluetoothReceiverStatus status = 1;
 }
 
-message ListFixtureProfilesRequest {}
+message ListGrandMa2FixtureTypesRequest {}
 
-message ListFixtureProfilesResponse {
-  repeated FixtureProfile profiles = 1;
+message ListGrandMa2FixtureTypesResponse {
+  repeated GrandMa2FixtureType fixture_types = 1;
+}
+
+message ImportGrandMa2FixtureRequest {
+  string filename = 1;
+  bytes xml = 2;
+}
+
+message ImportGrandMa2FixtureResponse {
+  ShowConfig config = 1;
+  repeated GrandMa2FixtureType fixture_types = 2;
 }
 
 message ControlShowRequest {
@@ -368,7 +379,7 @@ message ShowConfig {
   DmxConfig dmx = 2;
   AudioConfig audio = 3;
   EffectsConfig effects = 4;
-  repeated FixtureProfile profiles = 5;
+  repeated GrandMa2FixtureFile imported_fixture_files = 5;
   repeated FixtureConfig fixtures = 6;
   bool allow_dmx_overlaps = 7;
 }
@@ -481,59 +492,114 @@ enum StrobeEffectMode {
   STROBE_EFFECT_MODE_EFFECT_18_STROBE = 20;
 }
 
-message ChannelCapability {
-  uint32 min_value = 1;
-  uint32 max_value = 2;
+message GrandMa2FixtureFile {
+  string id = 1;
+  string filename = 2;
+  string xml = 3;
+}
+
+message GrandMa2FixtureType {
+  string id = 1;
+  string file_id = 2;
   string name = 3;
-  string description = 4;
-  bool usable = 5;
-  bool is_off = 6;
-  bool is_manual = 7;
-  bool is_auto = 8;
+  string manufacturer = 4;
+  string mode = 5;
+  uint32 channel_count = 6;
+  bool built_in = 7;
+  repeated string warnings = 8;
+  repeated GrandMa2Channel channels = 9;
+  FixtureVisual visual = 10;
+  string revision = 11;
 }
 
-message ChannelConfig {
-  uint32 offset = 1;
-  string name = 2;
-  string channel_type = 3;
-  uint32 default_value = 4;
-  optional uint32 fixed_value = 5;
-  uint32 min_value = 6;
-  uint32 max_value = 7;
-  repeated ChannelCapability capabilities = 8;
-  bool enabled = 9;
+message GrandMa2Channel {
+  uint32 coarse = 1;
+  optional uint32 fine = 2;
+  string name = 3;
+  string attribute = 4;
+  string feature = 5;
+  uint32 default_value = 6;
+  repeated GrandMa2ChannelFunction functions = 7;
 }
 
-message DualColorMapping {
-  optional float primary_hue = 1;
-  optional float secondary_hue = 2;
-}
-
-message FixtureProfile {
+message GrandMa2ChannelFunction {
   string name = 1;
-  string manufacturer = 2;
-  string model = 3;
-  string fixture_type = 4;
-  uint32 channel_count = 5;
-  repeated ChannelConfig channels = 6;
-  string color_mixing = 7;
-  repeated DualColorMapping dual_color_map = 8;
-  uint32 pan_max_degrees = 9;
-  uint32 tilt_max_degrees = 10;
+  string attribute = 2;
+  string feature = 3;
+  string subattribute = 4;
+  uint32 from_dmx = 5;
+  uint32 to_dmx = 6;
+  float physical_from = 7;
+  float physical_to = 8;
+  repeated GrandMa2ChannelSet channel_sets = 9;
+}
+
+message GrandMa2ChannelSet {
+  string name = 1;
+  uint32 from_dmx = 2;
+  uint32 to_dmx = 3;
+}
+
+enum FixtureVisualKind {
+  FIXTURE_VISUAL_KIND_UNSPECIFIED = 0;
+  FIXTURE_VISUAL_KIND_MOVING_HEAD = 1;
+  FIXTURE_VISUAL_KIND_PAR = 2;
+  FIXTURE_VISUAL_KIND_EFFECT = 3;
+  FIXTURE_VISUAL_KIND_OTHER = 4;
+}
+
+enum FixtureEmitterKind {
+  FIXTURE_EMITTER_KIND_UNSPECIFIED = 0;
+  FIXTURE_EMITTER_KIND_COLOR = 1;
+  FIXTURE_EMITTER_KIND_WHITE = 2;
+  FIXTURE_EMITTER_KIND_STROBE = 3;
+}
+
+message FixtureVisual {
+  FixtureVisualKind kind = 1;
+  float width_m = 2;
+  float height_m = 3;
+  float depth_m = 4;
+  float pan_min_degrees = 5;
+  float pan_max_degrees = 6;
+  float tilt_min_degrees = 7;
+  float tilt_max_degrees = 8;
+  repeated FixtureEmitter emitters = 9;
+  repeated FixtureMesh meshes = 10;
+}
+
+message FixtureEmitter {
+  string id = 1;
+  string name = 2;
+  FixtureEmitterKind kind = 3;
+  float beam_angle_degrees = 4;
+  float beam_intensity = 5;
+  float x_m = 6;
+  float y_m = 7;
+  float z_m = 8;
+  uint32 color_rgb = 9;
+}
+
+message FixtureMesh {
+  string id = 1;
+  string name = 2;
+  repeated float vertices = 3;
+  repeated float normals = 4;
+  repeated uint32 indices = 5;
+  uint32 color_rgb = 6;
 }
 
 message FixtureConfig {
   string id = 1;
   string name = 2;
-  string profile_name = 3;
+  string fixture_type_id = 3;
   uint32 start_channel = 4;
   uint32 position = 5;
   float intensity_scale = 6;
-  uint32 pan_min = 7;
-  uint32 pan_max = 8;
-  uint32 tilt_min = 9;
-  uint32 tilt_max = 10;
-  repeated ChannelConfig channels = 11;
+  float movement_pan_min = 7;
+  float movement_pan_max = 8;
+  float movement_tilt_min = 9;
+  float movement_tilt_max = 10;
 }
 
 message FixtureState {

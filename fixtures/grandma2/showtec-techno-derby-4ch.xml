@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.9.0/MA.xsd"
+    major_vers="3" minor_vers="9" stream_vers="0">
+  <Info datetime="2026-07-29T00:00:00" showfile="music-auto-show"/>
+  <FixtureType index="0" name="Techno Derby" mode="Default">
+    <InfoItems>
+      <Info type="Revision" date="2026-07-29T00:00:00">Corrected from the Showtec 43156 manufacturer manual.</Info>
+    </InfoItems>
+    <short_name>Techno Derby</short_name>
+    <manufacturer>Showtec</manufacturer>
+    <short_manufacturer>Showtec</short_manufacturer>
+    <Modules index="0">
+      <Module index="0" name="Housing" class="Conventional" beamtype="None">
+        <Body><Size x="0.265" y="0.190" z="0.190"/></Body>
+        <ChannelType index="0" attribute="COLORMIXER" feature="COLORMIX" preset="COLOR" coarse="1" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="393215" subattribute="NOFEATURE" subattribute_user_name="Off" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Off" from_dmx="0" to_dmx="5"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="15073279" subattribute="COLORMIXCOLOR" subattribute_user_name="Color" attribute="COLORMIXER" feature="COLORMIX">
+            <ChannelSet index="0" name="Red" from_dmx="6" to_dmx="20"/>
+            <ChannelSet index="1" name="Green" from_dmx="21" to_dmx="35"/>
+            <ChannelSet index="2" name="Blue" from_dmx="36" to_dmx="50"/>
+            <ChannelSet index="3" name="White" from_dmx="51" to_dmx="65"/>
+            <ChannelSet index="4" name="Red Green" from_dmx="66" to_dmx="80"/>
+            <ChannelSet index="5" name="Red Blue" from_dmx="81" to_dmx="95"/>
+            <ChannelSet index="6" name="Red White" from_dmx="96" to_dmx="110"/>
+            <ChannelSet index="7" name="Green Blue" from_dmx="111" to_dmx="125"/>
+            <ChannelSet index="8" name="Green White" from_dmx="126" to_dmx="140"/>
+            <ChannelSet index="9" name="Blue White" from_dmx="141" to_dmx="155"/>
+            <ChannelSet index="10" name="Red Green Blue" from_dmx="156" to_dmx="170"/>
+            <ChannelSet index="11" name="Red Green White" from_dmx="171" to_dmx="185"/>
+            <ChannelSet index="12" name="Green Blue White" from_dmx="186" to_dmx="200"/>
+            <ChannelSet index="13" name="Red Green Blue White" from_dmx="201" to_dmx="215"/>
+          </ChannelFunction>
+          <ChannelFunction index="2" min_dmx_24="14155776" max_dmx_24="16777215" subattribute="COLORMIXMACRORATE" subattribute_user_name="Color change" attribute="COLORMIXMACRORATE" feature="COLORMIX">
+            <ChannelSet index="0" name="Color change slow" from_dmx="216" to_dmx="229"/>
+            <ChannelSet index="1" name="Color change fast" from_dmx="230" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="1" attribute="SHUTTER" feature="SHUTTER" preset="BEAM" coarse="2" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="393215" subattribute="NOFEATURE" subattribute_user_name="Strobe off" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Strobe off" from_dmx="0" to_dmx="5"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="16777215" physfrom="0.1" physto="25" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
+            <ChannelSet index="0" name="Slow strobe" from_dmx="6" to_dmx="6"/>
+            <ChannelSet index="1" name="Fast strobe" from_dmx="255" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="2" attribute="GOBO1_POS" feature="GOBO1" preset="GOBO" coarse="3" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="65535" subattribute="NOFEATURE" subattribute_user_name="Stopped" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Stopped" from_dmx="0" to_dmx="0"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="65536" max_dmx_24="8388607" physfrom="0" physto="360" subattribute="GOBO1_POS" subattribute_user_name="Manual rotation position" attribute="GOBO1_POS" feature="GOBO1">
+            <ChannelSet index="0" name="Manual start" from_dmx="1" to_dmx="1"/>
+            <ChannelSet index="1" name="Manual end" from_dmx="127" to_dmx="127"/>
+          </ChannelFunction>
+          <ChannelFunction index="2" min_dmx_24="8388608" max_dmx_24="16777215" physfrom="0.1" physto="10" subattribute="GOBO1_POSROT" subattribute_user_name="Automatic rotation" attribute="GOBO1_POS" feature="GOBO1">
+            <ChannelSet index="0" name="Auto slow" from_dmx="128" to_dmx="128"/>
+            <ChannelSet index="1" name="Auto fast" from_dmx="255" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="3" attribute="EFFECTMACROS" feature="EFFECTMACROS" preset="BEAM" coarse="4" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="655359" subattribute="NOFEATURE" subattribute_user_name="Off" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Off" from_dmx="0" to_dmx="9"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="655360" max_dmx_24="16777215" subattribute="EFFECTMACROSELECT" subattribute_user_name="Effect pattern" attribute="EFFECTMACROS" feature="EFFECTMACROS">
+            <ChannelSet index="1" name="Pattern 1" from_dmx="10" to_dmx="19"/>
+            <ChannelSet index="2" name="Pattern 2" from_dmx="20" to_dmx="29"/>
+            <ChannelSet index="3" name="Pattern 3" from_dmx="30" to_dmx="39"/>
+            <ChannelSet index="4" name="Pattern 4" from_dmx="40" to_dmx="49"/>
+            <ChannelSet index="5" name="Pattern 5" from_dmx="50" to_dmx="59"/>
+            <ChannelSet index="6" name="Pattern 6" from_dmx="60" to_dmx="69"/>
+            <ChannelSet index="7" name="Pattern 7" from_dmx="70" to_dmx="79"/>
+            <ChannelSet index="8" name="Pattern 8" from_dmx="80" to_dmx="89"/>
+            <ChannelSet index="9" name="Pattern 9" from_dmx="90" to_dmx="99"/>
+            <ChannelSet index="10" name="Pattern 10" from_dmx="100" to_dmx="109"/>
+            <ChannelSet index="11" name="Pattern 11" from_dmx="110" to_dmx="119"/>
+            <ChannelSet index="12" name="Pattern 12" from_dmx="120" to_dmx="129"/>
+            <ChannelSet index="13" name="Pattern 13" from_dmx="130" to_dmx="139"/>
+            <ChannelSet index="14" name="Pattern 14" from_dmx="140" to_dmx="149"/>
+            <ChannelSet index="15" name="Pattern 15" from_dmx="150" to_dmx="159"/>
+            <ChannelSet index="16" name="Pattern 16" from_dmx="160" to_dmx="169"/>
+            <ChannelSet index="17" name="Pattern 17" from_dmx="170" to_dmx="179"/>
+            <ChannelSet index="18" name="Pattern 18 and continuous strobe" from_dmx="180" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+      </Module>
+      <Module index="1" name="RGBW beam 1" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
+      <Module index="2" name="RGBW beam 2" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
+      <Module index="3" name="RGBW beam 3" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
+      <Module index="4" name="RGBW beam 4" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
+      <Module index="5" name="White strobe 1" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="6" name="White strobe 2" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="7" name="White strobe 3" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="8" name="White strobe 4" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="9" name="White strobe 5" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="10" name="White strobe 6" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="11" name="White strobe 7" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="12" name="White strobe 8" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="13" name="White strobe 9" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="14" name="White strobe 10" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="15" name="White strobe 11" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="16" name="White strobe 12" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="17" name="White strobe 13" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="18" name="White strobe 14" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="19" name="White strobe 15" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="20" name="White strobe 16" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+    </Modules>
+    <Instances index="1">
+      <Instance index="0" module_index="0"/>
+      <Instance index="1" module_index="1"/>
+      <Instance index="2" module_index="2"/>
+      <Instance index="3" module_index="3"/>
+      <Instance index="4" module_index="4"/>
+      <Instance index="5" module_index="5"/>
+      <Instance index="6" module_index="6"/>
+      <Instance index="7" module_index="7"/>
+      <Instance index="8" module_index="8"/>
+      <Instance index="9" module_index="9"/>
+      <Instance index="10" module_index="10"/>
+      <Instance index="11" module_index="11"/>
+      <Instance index="12" module_index="12"/>
+      <Instance index="13" module_index="13"/>
+      <Instance index="14" module_index="14"/>
+      <Instance index="15" module_index="15"/>
+      <Instance index="16" module_index="16"/>
+      <Instance index="17" module_index="17"/>
+      <Instance index="18" module_index="18"/>
+      <Instance index="19" module_index="19"/>
+      <Instance index="20" module_index="20"/>
+    </Instances>
+    <Wheels index="2"/>
+    <VirtualFunctionBlocks index="3"/>
+    <AutoPresets index="4"/>
+    <FixtureMacroCollect index="5"/>
+    <RdmNotifications index="6"/>
+  </FixtureType>
+</MA>

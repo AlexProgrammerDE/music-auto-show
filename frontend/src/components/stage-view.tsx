@@ -1,12 +1,14 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
   BoxGeometry,
+  BufferGeometry,
   Color,
   ConeGeometry,
   DirectionalLight,
   DoubleSide,
+  Float32BufferAttribute,
   GridHelper,
   Group,
   HemisphereLight,
@@ -19,32 +21,45 @@ import {
   Scene,
   SphereGeometry,
   SRGBColorSpace,
-  TorusGeometry,
   Vector3,
   WebGLRenderer,
 } from "three"
 
-import type {
-  FixtureConfig,
-  FixtureProfile,
-  FixtureState,
+import {
+  FixtureEmitterKind,
+  FixtureVisualKind,
+  type FixtureConfig,
+  type FixtureEmitter,
+  type FixtureState,
+  type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
   effectBeamTarget,
+  fixedBeamTarget,
   fixtureBrightness,
   fixtureColor,
   movingBeamTarget,
+  physicalAxisValue,
   type StagePoint,
 } from "@/lib/stage-view-model"
 
+type EmitterVisual = {
+  readonly metadata: FixtureEmitter
+  readonly lens: Mesh<SphereGeometry, MeshStandardMaterial>
+  readonly beam: Mesh<ConeGeometry, MeshBasicMaterial>
+}
+
 type FixtureVisual = {
   readonly fixture: FixtureConfig
-  readonly profile: FixtureProfile | undefined
-  readonly position: Vector3
-  readonly housingMaterial: MeshStandardMaterial
-  readonly lensMaterial: MeshStandardMaterial
-  readonly beams: readonly Mesh<ConeGeometry, MeshBasicMaterial>[]
-  readonly strobeRing: Mesh<TorusGeometry, MeshBasicMaterial>
+  readonly fixtureType: GrandMa2FixtureType
+  readonly root: Group
+  readonly mount: Vector3
+  readonly panPivot?: Group
+  readonly tiltPivot?: Group
+  readonly emitterGroup: Group
+  readonly housingMaterials: readonly MeshStandardMaterial[]
+  readonly emitters: readonly EmitterVisual[]
+  rotationPhase: number
 }
 
 type StageRuntime = {
@@ -58,7 +73,8 @@ type StageRuntime = {
 }
 
 const UP = new Vector3(0, 1, 0)
-const OFF_COLOR = new Color(0.08, 0.09, 0.09)
+const OFF_COLOR = new Color(0.055, 0.065, 0.07)
+const FIXTURE_SCALE = 2.4
 
 function stageTheme() {
   const dark = document.documentElement.classList.contains("dark")
@@ -73,7 +89,9 @@ function applyTheme(runtime: StageRuntime) {
   runtime.scene.background = new Color(theme.background)
   runtime.floorMaterial.color.setHex(theme.floor)
   runtime.trussMaterial.color.setHex(theme.structure)
-  runtime.fixtures.forEach((fixture) => fixture.housingMaterial.color.setHex(theme.structure))
+  runtime.fixtures.forEach((fixture) => {
+    fixture.housingMaterials.forEach((material) => material.color.setHex(theme.structure))
+  })
   const materials = Array.isArray(runtime.grid.material)
     ? runtime.grid.material
     : [runtime.grid.material]
@@ -88,11 +106,11 @@ function setBeamTransform(
   target: StagePoint,
 ) {
   const targetVector = new Vector3(target.x, target.y, target.z)
-  const length = origin.distanceTo(targetVector)
+  const length = Math.max(0.05, origin.distanceTo(targetVector))
   const towardSource = origin.clone().sub(targetVector).normalize()
   beam.position.lerpVectors(origin, targetVector, 0.5)
   beam.quaternion.setFromUnitVectors(UP, towardSource)
-  beam.scale.set(0.52, length, 0.52)
+  beam.scale.set(1, length, 1)
 }
 
 function disposeScene(runtime: StageRuntime) {
@@ -110,10 +128,193 @@ function disposeScene(runtime: StageRuntime) {
   runtime.renderer.dispose()
 }
 
+function fixtureDimensions(fixtureType: GrandMa2FixtureType) {
+  const visual = fixtureType.visual
+  return {
+    width: Math.max(0.12, visual?.widthM ?? 0.24) * FIXTURE_SCALE,
+    height: Math.max(0.1, visual?.heightM ?? 0.18) * FIXTURE_SCALE,
+    depth: Math.max(0.1, visual?.depthM ?? 0.2) * FIXTURE_SCALE,
+  }
+}
+
+function createHousingMaterial(color?: number) {
+  return new MeshStandardMaterial({
+    color: color && color > 0 ? color : 0x70797c,
+    roughness: 0.48,
+    metalness: 0.62,
+  })
+}
+
+function createEmbeddedMeshes(fixtureType: GrandMa2FixtureType, root: Group) {
+  const materials: MeshStandardMaterial[] = []
+  for (const metadata of fixtureType.visual?.meshes ?? []) {
+    if (metadata.vertices.length < 9 || metadata.indices.length < 3) continue
+    const geometry = new BufferGeometry()
+    geometry.setAttribute("position", new Float32BufferAttribute(metadata.vertices, 3))
+    if (metadata.normals.length === metadata.vertices.length) {
+      geometry.setAttribute("normal", new Float32BufferAttribute(metadata.normals, 3))
+    } else {
+      geometry.computeVertexNormals()
+    }
+    geometry.setIndex(metadata.indices)
+    geometry.computeBoundingSphere()
+    const material = createHousingMaterial(metadata.colorRgb)
+    const mesh = new Mesh(geometry, material)
+    mesh.scale.setScalar(FIXTURE_SCALE)
+    root.add(mesh)
+    materials.push(material)
+  }
+  return materials
+}
+
+function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Scene) {
+  const lensMaterial = new MeshStandardMaterial({
+    color: OFF_COLOR,
+    emissive: OFF_COLOR,
+    emissiveIntensity: 0,
+    roughness: 0.18,
+  })
+  const lens = new Mesh(new SphereGeometry(0.045, 18, 12), lensMaterial)
+  lens.position.set(
+    metadata.xM * FIXTURE_SCALE,
+    metadata.yM * FIXTURE_SCALE,
+    metadata.zM * FIXTURE_SCALE,
+  )
+  parent.add(lens)
+
+  const halfAngle = (Math.max(1, Math.min(170, metadata.beamAngleDegrees)) * Math.PI) / 360
+  const beamMaterial = new MeshBasicMaterial({
+    color: OFF_COLOR,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: DoubleSide,
+    blending: AdditiveBlending,
+  })
+  const beam = new Mesh(new ConeGeometry(Math.tan(halfAngle), 1, 24, 1, true), beamMaterial)
+  beam.visible = false
+  scene.add(beam)
+  return { metadata, lens, beam } satisfies EmitterVisual
+}
+
+function createMovingHead(
+  fixture: FixtureConfig,
+  fixtureType: GrandMa2FixtureType,
+  mount: Vector3,
+  scene: Scene,
+) {
+  const dimensions = fixtureDimensions(fixtureType)
+  const root = new Group()
+  root.position.copy(mount)
+  scene.add(root)
+
+  const housingMaterials = createEmbeddedMeshes(fixtureType, root)
+  const bodyMaterial = createHousingMaterial()
+  housingMaterials.push(bodyMaterial)
+
+  const baseHeight = dimensions.height * 0.24
+  const base = new Mesh(
+    new BoxGeometry(dimensions.width, baseHeight, dimensions.depth),
+    bodyMaterial,
+  )
+  base.position.y = -baseHeight / 2
+  root.add(base)
+
+  const panPivot = new Group()
+  panPivot.position.y = -baseHeight
+  root.add(panPivot)
+
+  const armHeight = dimensions.height * 0.54
+  const armWidth = Math.max(0.045, dimensions.width * 0.12)
+  for (const side of [-1, 1]) {
+    const arm = new Mesh(new BoxGeometry(armWidth, armHeight, armWidth), bodyMaterial)
+    arm.position.set(side * dimensions.width * 0.37, -armHeight / 2, 0)
+    panPivot.add(arm)
+  }
+
+  const tiltPivot = new Group()
+  tiltPivot.position.y = -armHeight * 0.6
+  panPivot.add(tiltPivot)
+  const head = new Mesh(
+    new BoxGeometry(dimensions.width * 0.58, dimensions.height * 0.32, dimensions.depth * 0.68),
+    bodyMaterial,
+  )
+  tiltPivot.add(head)
+
+  const emitterGroup = new Group()
+  tiltPivot.add(emitterGroup)
+  const metadata = fixtureType.visual?.emitters[0] ?? {
+    id: "estimated-emitter",
+    name: "Estimated beam",
+    kind: FixtureEmitterKind.COLOR,
+    beamAngleDegrees: 25,
+    beamIntensity: 1000,
+    xM: 0,
+    yM: 0,
+    zM: 0,
+    colorRgb: 0,
+    $typeName: "music_auto_show.v1.FixtureEmitter" as const,
+  }
+  const emitters = [createEmitterVisual(metadata, emitterGroup, scene)]
+  return {
+    fixture,
+    fixtureType,
+    root,
+    mount,
+    panPivot,
+    tiltPivot,
+    emitterGroup,
+    housingMaterials,
+    emitters,
+    rotationPhase: 0,
+  } satisfies FixtureVisual
+}
+
+function createFixedFixture(
+  fixture: FixtureConfig,
+  fixtureType: GrandMa2FixtureType,
+  mount: Vector3,
+  scene: Scene,
+) {
+  const dimensions = fixtureDimensions(fixtureType)
+  const root = new Group()
+  root.position.copy(mount)
+  scene.add(root)
+
+  const housingMaterials = createEmbeddedMeshes(fixtureType, root)
+  if (housingMaterials.length === 0) {
+    const bodyMaterial = createHousingMaterial()
+    const housing = new Mesh(
+      new BoxGeometry(dimensions.width, dimensions.height, dimensions.depth),
+      bodyMaterial,
+    )
+    housing.position.y = -dimensions.height / 2
+    root.add(housing)
+    housingMaterials.push(bodyMaterial)
+  }
+
+  const emitterGroup = new Group()
+  emitterGroup.position.y = -dimensions.height / 2
+  root.add(emitterGroup)
+  const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
+    createEmitterVisual(metadata, emitterGroup, scene),
+  )
+  return {
+    fixture,
+    fixtureType,
+    root,
+    mount,
+    emitterGroup,
+    housingMaterials,
+    emitters,
+    rotationPhase: 0,
+  } satisfies FixtureVisual
+}
+
 function createStageRuntime(
   canvas: HTMLCanvasElement,
   fixtures: readonly FixtureConfig[],
-  profiles: readonly FixtureProfile[],
+  fixtureTypes: readonly GrandMa2FixtureType[],
 ) {
   const renderer = new WebGLRenderer({
     canvas,
@@ -155,60 +356,18 @@ function createStageRuntime(
   }
   scene.add(truss)
 
-  const profileByName = new Map(profiles.map((profile) => [profile.name, profile]))
+  const typeById = new Map(fixtureTypes.map((fixtureType) => [fixtureType.id, fixtureType]))
   const fixtureVisuals = new Map<string, FixtureVisual>()
   fixtures.forEach((fixture, index) => {
+    const fixtureType = typeById.get(fixture.fixtureTypeId)
+    if (!fixtureType?.visual) return
     const x = fixtures.length === 1 ? 0 : -3 + (index / (fixtures.length - 1)) * 6
-    const position = new Vector3(x, 3.22, 0)
-    const housingMaterial = new MeshStandardMaterial({ roughness: 0.5, metalness: 0.65 })
-    const housing = new Mesh(new BoxGeometry(0.48, 0.24, 0.4), housingMaterial)
-    housing.position.copy(position)
-    scene.add(housing)
-
-    const lensMaterial = new MeshStandardMaterial({
-      color: OFF_COLOR,
-      emissive: OFF_COLOR,
-      emissiveIntensity: 0,
-      roughness: 0.2,
-    })
-    const lens = new Mesh(new SphereGeometry(0.105, 20, 12), lensMaterial)
-    lens.position.copy(position).add(new Vector3(0, -0.15, 0.07))
-    scene.add(lens)
-
-    const profile = profileByName.get(fixture.profileName)
-    const effectFixture = profile?.fixtureType.toLowerCase() === "effect"
-    const beams = Array.from({ length: effectFixture ? 4 : 1 }, () => {
-      const material = new MeshBasicMaterial({
-        color: OFF_COLOR,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        side: DoubleSide,
-        blending: AdditiveBlending,
-      })
-      const beam = new Mesh(new ConeGeometry(1, 1, 20, 1, true), material)
-      beam.visible = false
-      scene.add(beam)
-      return beam
-    })
-    const strobeRing = new Mesh(
-      new TorusGeometry(0.17, 0.018, 8, 28),
-      new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
-    )
-    strobeRing.position.copy(lens.position)
-    strobeRing.rotation.x = Math.PI / 2
-    strobeRing.visible = false
-    scene.add(strobeRing)
-
-    fixtureVisuals.set(fixture.id || fixture.name, {
-      fixture,
-      profile,
-      position: lens.position.clone(),
-      housingMaterial,
-      lensMaterial,
-      beams,
-      strobeRing,
-    })
+    const mount = new Vector3(x, 3.35, 0)
+    const visual =
+      fixtureType.visual.kind === FixtureVisualKind.MOVING_HEAD
+        ? createMovingHead(fixture, fixtureType, mount, scene)
+        : createFixedFixture(fixture, fixtureType, mount, scene)
+    fixtureVisuals.set(fixture.id || fixture.name, visual)
   })
 
   const runtime: StageRuntime = {
@@ -224,36 +383,97 @@ function createStageRuntime(
   return runtime
 }
 
-function updateFixtureVisuals(runtime: StageRuntime, states: readonly FixtureState[]) {
+function wrappedPhaseStep(current: number, target: number) {
+  let delta = target - current
+  if (delta > 0.5) delta -= 1
+  if (delta < -0.5) delta += 1
+  return (current + delta * 0.16 + 1) % 1
+}
+
+function updateFixtureVisuals(
+  runtime: StageRuntime,
+  states: readonly FixtureState[],
+  elapsedSeconds: number,
+) {
   const stateById = new Map(states.map((state) => [state.fixtureId, state]))
   runtime.fixtures.forEach((visual, fixtureId) => {
     const state = stateById.get(fixtureId)
     const color = state ? fixtureColor(state) : { red: 0, green: 0, blue: 0 }
     const brightness = state ? fixtureBrightness(state) : 0
     const threeColor = new Color(color.red / 255, color.green / 255, color.blue / 255)
-    visual.lensMaterial.color.copy(brightness > 0 ? threeColor : OFF_COLOR)
-    visual.lensMaterial.emissive.copy(brightness > 0 ? threeColor : OFF_COLOR)
-    visual.lensMaterial.emissiveIntensity = brightness * 3.2
-    visual.strobeRing.visible = Boolean(state && state.strobe > 0 && brightness > 0.02)
-    visual.strobeRing.material.color.copy(threeColor)
+    const strobeRate = state ? 2 + (state.strobe / 255) * 23 : 0
+    const strobePulse = !state || state.strobe === 0 || (elapsedSeconds * strobeRate) % 1 < 0.48
 
-    const effectFixture = visual.profile?.fixtureType.toLowerCase() === "effect"
-    visual.beams.forEach((beam, beamIndex) => {
-      beam.visible = Boolean(state && brightness > 0.02)
-      beam.material.color.copy(threeColor)
-      beam.material.opacity =
-        Math.min(0.34, 0.07 + brightness * 0.27) * (state && state.strobe > 0 ? 0.72 : 1)
-      if (!state) return
-      const target = effectFixture
-        ? effectBeamTarget(visual.position.x, visual.position.z, state.effectRotation, beamIndex)
-        : movingBeamTarget(
-            visual.position.x,
-            visual.position.z,
-            visual.fixture,
-            visual.profile,
-            state,
-          )
-      setBeamTransform(beam, visual.position, target)
+    if (state && visual.panPivot && visual.tiltPivot && visual.fixtureType.visual) {
+      const metadata = visual.fixtureType.visual
+      visual.panPivot.rotation.y =
+        (physicalAxisValue(
+          state.pan + state.panFine / 255,
+          metadata.panMinDegrees,
+          metadata.panMaxDegrees,
+        ) *
+          Math.PI) /
+        180
+      visual.tiltPivot.rotation.x =
+        (physicalAxisValue(
+          state.tilt + state.tiltFine / 255,
+          metadata.tiltMinDegrees,
+          metadata.tiltMaxDegrees,
+        ) *
+          Math.PI) /
+        180
+    }
+    if (state) {
+      visual.rotationPhase = wrappedPhaseStep(visual.rotationPhase, state.effectRotation)
+    }
+    if (visual.fixtureType.visual?.kind === FixtureVisualKind.EFFECT) {
+      visual.emitterGroup.rotation.y = visual.rotationPhase * Math.PI * 2
+    }
+    visual.root.updateWorldMatrix(true, true)
+
+    visual.emitters.forEach((emitter, emitterIndex) => {
+      const kind = emitter.metadata.kind
+      const strobeEmitter = kind === FixtureEmitterKind.STROBE
+      const emitterColor =
+        strobeEmitter || kind === FixtureEmitterKind.WHITE ? new Color(1, 1, 1) : threeColor
+      const emitterBrightness = strobeEmitter
+        ? state && state.strobe > 0 && strobePulse
+          ? Math.max(brightness, state.strobe / 255)
+          : 0
+        : strobePulse
+          ? brightness
+          : 0
+      const photometricGain = Math.max(
+        0.35,
+        Math.min(1.5, Math.sqrt(Math.max(1, emitter.metadata.beamIntensity) / 1000)),
+      )
+      emitter.lens.material.color.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
+      emitter.lens.material.emissive.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
+      emitter.lens.material.emissiveIntensity = emitterBrightness * 3.5 * photometricGain
+      emitter.beam.visible = Boolean(state && emitterBrightness > 0.02)
+      emitter.beam.material.color.copy(emitterColor)
+      emitter.beam.material.opacity = Math.min(
+        0.34,
+        (0.035 + emitterBrightness * 0.22) * photometricGain,
+      )
+      if (!state || !emitter.beam.visible || !visual.fixtureType.visual) return
+
+      const origin = new Vector3()
+      emitter.lens.getWorldPosition(origin)
+      let target: StagePoint
+      if (visual.fixtureType.visual.kind === FixtureVisualKind.MOVING_HEAD) {
+        target = movingBeamTarget(origin, visual.fixtureType.visual, state)
+      } else if (visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT) {
+        target = effectBeamTarget(
+          origin,
+          visual.rotationPhase,
+          emitterIndex,
+          visual.emitters.length,
+        )
+      } else {
+        target = fixedBeamTarget(origin)
+      }
+      setBeamTransform(emitter.beam, origin, target)
     })
   })
   runtime.renderer.render(runtime.scene, runtime.camera)
@@ -261,15 +481,15 @@ function updateFixtureVisuals(runtime: StageRuntime, states: readonly FixtureSta
 
 export function StageView({
   fixtures,
-  profiles,
+  fixtureTypes,
   states,
 }: {
   readonly fixtures: readonly FixtureConfig[]
-  readonly profiles: readonly FixtureProfile[]
+  readonly fixtureTypes: readonly GrandMa2FixtureType[]
   readonly states: readonly FixtureState[]
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const runtimeRef = useRef<StageRuntime | undefined>(undefined)
+  const latestStatesRef = useRef(states)
   const [webglUnavailable, setWebglUnavailable] = useState(false)
   const orderedFixtures = useMemo(
     () => fixtures.toSorted((left, right) => left.position - right.position),
@@ -279,17 +499,17 @@ export function StageView({
     () => new Map(states.map((state) => [state.fixtureId, state])),
     [states],
   )
-  const renderStates = useEffectEvent((runtime: StageRuntime) => {
-    updateFixtureVisuals(runtime, states)
-  })
+
+  useEffect(() => {
+    latestStatesRef.current = states
+  }, [states])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     let runtime: StageRuntime
     try {
-      runtime = createStageRuntime(canvas, orderedFixtures, profiles)
-      runtimeRef.current = runtime
+      runtime = createStageRuntime(canvas, orderedFixtures, fixtureTypes)
       setWebglUnavailable(false)
     } catch {
       setWebglUnavailable(true)
@@ -304,47 +524,42 @@ export function StageView({
       runtime.renderer.setSize(width, height, false)
       runtime.camera.aspect = width / height
       runtime.camera.updateProjectionMatrix()
-      runtime.renderer.render(runtime.scene, runtime.camera)
     })
     observer.observe(canvas)
 
-    const themeObserver = new MutationObserver(() => {
-      applyTheme(runtime)
-      runtime.renderer.render(runtime.scene, runtime.camera)
-    })
+    const themeObserver = new MutationObserver(() => applyTheme(runtime))
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
     const handleContextLost = (event: Event) => {
       event.preventDefault()
       setWebglUnavailable(true)
     }
-    const handleContextRestored = () => {
-      setWebglUnavailable(false)
-      runtime.renderer.render(runtime.scene, runtime.camera)
-    }
+    const handleContextRestored = () => setWebglUnavailable(false)
     canvas.addEventListener("webglcontextlost", handleContextLost)
     canvas.addEventListener("webglcontextrestored", handleContextRestored)
-    renderStates(runtime)
+
+    let animationFrame = 0
+    const render = (time: number) => {
+      updateFixtureVisuals(runtime, latestStatesRef.current, time / 1000)
+      animationFrame = requestAnimationFrame(render)
+    }
+    animationFrame = requestAnimationFrame(render)
+
     return () => {
+      cancelAnimationFrame(animationFrame)
       observer.disconnect()
       themeObserver.disconnect()
       canvas.removeEventListener("webglcontextlost", handleContextLost)
       canvas.removeEventListener("webglcontextrestored", handleContextRestored)
-      runtimeRef.current = undefined
       disposeScene(runtime)
     }
-  }, [orderedFixtures, profiles])
-
-  useEffect(() => {
-    const runtime = runtimeRef.current
-    if (runtime) renderStates(runtime)
-  }, [states])
+  }, [orderedFixtures, fixtureTypes])
 
   return (
     <div className="relative h-80 overflow-hidden bg-background">
       <canvas
         ref={canvasRef}
         className="block size-full touch-manipulation"
-        aria-label="Live 3D stage preview showing fixture position, movement, color, intensity, strobe state, and effect beams"
+        aria-label="Live 3D stage preview driven by grandMA2 body, emitter, beam, pan, and tilt metadata"
       >
         Live 3D stage preview
       </canvas>

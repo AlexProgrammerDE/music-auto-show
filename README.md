@@ -8,11 +8,11 @@ Music Auto Show turns live system audio into real-time DMX lighting. A Rust serv
 - System audio, Bluetooth receiver, microphone, and deterministic simulation inputs through CPAL
 - Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash visualizations
 - All movement modes from the original app, including sweeps, circles, figure eight, ballyhoo, fan, chase, strobe position, and crazy movement
-- Per-fixture channel mapping, fixed values, channel ranges, movement limits, intensity scaling, and built-in profiles
+- grandMA2 XML fixture definitions for DMX mapping, feature detection, physical movement ranges, and 3D metadata
 - Open DMX USB output with auto-discovery, break and mark-after-break timing, live universe inspection, and simulation
 - Live waveform, spectrum, five-second spectrogram, frequency meters, stage beams, fixture output, media metadata, and album palette visualizations
 - Audio input recording with preview and WAV download
-- JSON configuration import, migration, export, and reset through the Rust API
+- JSON configuration import, export, and reset through the Rust API
 - A Vite SPA built with TanStack Router, Query, Form, Table v9, Effect, shadcn/ui, Tailwind CSS variables, and Credenza
 
 ## Requirements
@@ -77,7 +77,15 @@ On Linux, Automatic and System Audio capture the current PipeWire default sink a
 
 Bluetooth Receiver makes the host act as a Bluetooth speaker and analyzes the audio sent by a paired phone. On Linux, it controls the system BlueZ adapter and captures the A2DP sink exposed by WirePlumber. `bluetoothd` and the PipeWire BlueZ monitor must be running. This is the supported path on Raspberry Pi OS. On Windows, pair the phone in Bluetooth settings, connect it from the app, and keep the desired playback device selected as the default Windows output. The Settings page reports adapter, pairing, profile, and connection status on both platforms.
 
-The configuration file is created with defaults when it does not exist. The Settings page can load an older JSON configuration, migrate it through Rust, save the active file, or export a portable copy.
+The configuration file is created with defaults when it does not exist. The Settings page can replace the active JSON configuration or export a portable copy.
+
+### Fixture files
+
+The fixture library includes clean grandMA2 XML definitions for the PURElight MUVY WashQ 14-channel mode, Showtec Techno Derby, and Lixada LED Mini Butterfly 7-channel mode. These three fixtures are patched by default at channels 1, 5, and 19.
+
+Use **Fixtures → Import grandMA2 XML** to add another fixture type. Imports accept unencrypted `.xml` files up to 2 MB. The server validates the DMX footprint, channel functions, physical ranges, body dimensions, beam emitters, and supported embedded model buffers before saving the XML in the show configuration. XMLP files are encrypted and are not supported.
+
+The XML remains the canonical fixture source. The effects engine maps live values from grandMA2 attributes and channel sets, while the stage preview uses the same file’s dimensions, beam angles, emitter modules, pan and tilt ranges, and embedded mesh data.
 
 ### BeatNet+ checkpoint
 
@@ -158,6 +166,7 @@ Vite SPA <- protobuf and gRPC-Web <- tonic-web and Axum <- bundled SPA assets
 - `src/audio.rs` captures, resamples, analyzes, and records audio.
 - `src/beatnet.rs` implements BeatNet+ feature extraction, inference, and causal decoding.
 - `src/effects.rs` contains the ported visualization, movement, fixture, and universe algorithms.
+- `src/grandma2.rs` parses, validates, and compiles grandMA2 fixture XML for DMX and 3D rendering.
 - `src/dmx.rs` owns Open DMX and simulated output.
 - `src/app.rs` coordinates runtime state and publishes snapshots.
 - `src/api.rs` implements the protobuf service.

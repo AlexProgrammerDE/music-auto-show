@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.9.0/MA.xsd"
+    major_vers="3" minor_vers="9" stream_vers="0">
+  <Info datetime="2026-07-29T00:00:00" showfile="music-auto-show"/>
+  <FixtureType index="0" name="MUVY WashQ" mode="14 channel">
+    <InfoItems>
+      <Info type="Revision" date="2026-07-29T00:00:00">Corrected from the February 2022 manufacturer manual.</Info>
+    </InfoItems>
+    <short_name>MUVY WashQ</short_name>
+    <manufacturer>PURElight</manufacturer>
+    <short_manufacturer>PURElight</short_manufacturer>
+    <Modules index="0">
+      <Module index="0" name="Moving head" class="Headmover" beamtype="Wash" beam_angle="45" beam_intensity="10000">
+        <Body>
+          <Size x="0.27" y="0.22" z="0.26"/>
+        </Body>
+        <ChannelType index="0" attribute="PAN" feature="POSITION" preset="POSITION" coarse="1" fine="2" default="32768">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="-270" physto="270" subattribute="PAN" subattribute_user_name="Pan" attribute="PAN" feature="POSITION">
+            <ChannelSet index="0" name="Minimum" from_dmx="0" to_dmx="0"/>
+            <ChannelSet index="1" name="Center" from_dmx="32768" to_dmx="32768"/>
+            <ChannelSet index="2" name="Maximum" from_dmx="65535" to_dmx="65535"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="1" attribute="TILT" feature="POSITION" preset="POSITION" coarse="3" fine="4" default="32768">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="-135" physto="135" subattribute="TILT" subattribute_user_name="Tilt" attribute="TILT" feature="POSITION">
+            <ChannelSet index="0" name="Minimum" from_dmx="0" to_dmx="0"/>
+            <ChannelSet index="1" name="Center" from_dmx="32768" to_dmx="32768"/>
+            <ChannelSet index="2" name="Maximum" from_dmx="65535" to_dmx="65535"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="2" attribute="POSITIONMSPEED" feature="MSPEED" preset="CONTROL" coarse="5" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="1" physto="0.01" subattribute="POSITIONMSPEEDTRACK" subattribute_user_name="Pan and tilt speed" attribute="POSITIONMSPEED" feature="MSPEED">
+            <ChannelSet index="0" name="Fast" from_dmx="0" to_dmx="0"/>
+            <ChannelSet index="1" name="Slow" from_dmx="255" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="3" attribute="DIM" feature="DIMMER" preset="DIMMER" coarse="6" default="240">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="524287" subattribute="NOFEATURE" subattribute_user_name="Closed" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Closed" from_dmx="0" to_dmx="7"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="524288" max_dmx_24="8847359" physfrom="0" physto="1" subattribute="DIM" subattribute_user_name="Dimmer" attribute="DIM" feature="DIMMER">
+            <ChannelSet index="0" name="Minimum dimmer" from_dmx="8" to_dmx="8"/>
+            <ChannelSet index="1" name="Maximum dimmer" from_dmx="134" to_dmx="134"/>
+          </ChannelFunction>
+          <ChannelFunction index="2" min_dmx_24="8847360" max_dmx_24="15728639" physfrom="0.1" physto="25" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
+            <ChannelSet index="0" name="Slow strobe" from_dmx="135" to_dmx="135"/>
+            <ChannelSet index="1" name="Fast strobe" from_dmx="239" to_dmx="239"/>
+          </ChannelFunction>
+          <ChannelFunction index="3" min_dmx_24="15728640" max_dmx_24="16777215" physfrom="1" physto="1" subattribute="SHUTTER" subattribute_user_name="Open" attribute="SHUTTER" feature="SHUTTER">
+            <ChannelSet index="0" name="Open" from_dmx="240" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="4" attribute="COLORRGB1" feature="COLORRGB" preset="COLOR" coarse="7" default="0" color="ff0000">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0" physto="1" subattribute="COLORRGB1" subattribute_user_name="Red" attribute="COLORRGB1" feature="COLORRGB"/>
+        </ChannelType>
+        <ChannelType index="5" attribute="COLORRGB2" feature="COLORRGB" preset="COLOR" coarse="8" default="0" color="00ff00">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0" physto="1" subattribute="COLORRGB2" subattribute_user_name="Green" attribute="COLORRGB2" feature="COLORRGB"/>
+        </ChannelType>
+        <ChannelType index="6" attribute="COLORRGB3" feature="COLORRGB" preset="COLOR" coarse="9" default="0" color="0000ff">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0" physto="1" subattribute="COLORRGB3" subattribute_user_name="Blue" attribute="COLORRGB3" feature="COLORRGB"/>
+        </ChannelType>
+        <ChannelType index="7" attribute="COLORRGB5" feature="COLORRGB" preset="COLOR" coarse="10" default="0" color="ffffff">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0" physto="1" subattribute="COLORRGB5" subattribute_user_name="White" attribute="COLORRGB5" feature="COLORRGB"/>
+        </ChannelType>
+        <ChannelType index="8" attribute="COLORMIXER" feature="COLORMIX" preset="COLOR" coarse="11" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="589823" subattribute="NOFEATURE" subattribute_user_name="Manual RGBW" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Manual RGBW" from_dmx="0" to_dmx="8"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="589824" max_dmx_24="16777215" subattribute="COLORMIXCOLOR" subattribute_user_name="Color macro" attribute="COLORMIXER" feature="COLORMIX">
+            <ChannelSet index="0" name="RGBW" from_dmx="9" to_dmx="20"/>
+            <ChannelSet index="1" name="Red" from_dmx="21" to_dmx="34"/>
+            <ChannelSet index="2" name="Green" from_dmx="35" to_dmx="49"/>
+            <ChannelSet index="3" name="Blue" from_dmx="50" to_dmx="63"/>
+            <ChannelSet index="4" name="White" from_dmx="64" to_dmx="77"/>
+            <ChannelSet index="5" name="RGB" from_dmx="78" to_dmx="91"/>
+            <ChannelSet index="6" name="Red Blue" from_dmx="92" to_dmx="105"/>
+            <ChannelSet index="7" name="Red Green" from_dmx="106" to_dmx="119"/>
+            <ChannelSet index="8" name="RGBW" from_dmx="120" to_dmx="133"/>
+            <ChannelSet index="9" name="Red Green" from_dmx="134" to_dmx="147"/>
+            <ChannelSet index="10" name="RGB" from_dmx="148" to_dmx="161"/>
+            <ChannelSet index="11" name="RGBW" from_dmx="162" to_dmx="189"/>
+            <ChannelSet index="12" name="Red Blue White" from_dmx="190" to_dmx="201"/>
+            <ChannelSet index="13" name="Warm white" from_dmx="202" to_dmx="217"/>
+            <ChannelSet index="14" name="Cold white" from_dmx="218" to_dmx="232"/>
+            <ChannelSet index="15" name="Color macro" from_dmx="233" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="9" attribute="COLORMIXMACRORATE" feature="COLORMIX" preset="COLOR" coarse="12" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16777215" physfrom="0.1" physto="10" subattribute="COLORMIXMACRORATE" subattribute_user_name="Color macro speed" attribute="COLORMIXMACRORATE" feature="COLORMIX"/>
+        </ChannelType>
+        <ChannelType index="10" attribute="EFFECTMACROS" feature="EFFECTMACROS" preset="BEAM" coarse="13" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="65535" subattribute="NOFEATURE" subattribute_user_name="Manual" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="Manual" from_dmx="0" to_dmx="0"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="65536" max_dmx_24="16777215" subattribute="EFFECTMACROSELECT" subattribute_user_name="Movement and color macro" attribute="EFFECTMACROS" feature="EFFECTMACROS">
+            <ChannelSet index="0" name="Movement and color macros" from_dmx="1" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+        <ChannelType index="11" attribute="FIXTUREGLOBALRESET" feature="RESET" preset="CONTROL" coarse="14" default="0">
+          <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="16383999" subattribute="NOFEATURE" subattribute_user_name="No function" attribute="DUMMY" feature="CONTROL">
+            <ChannelSet index="0" name="No function" from_dmx="0" to_dmx="249"/>
+          </ChannelFunction>
+          <ChannelFunction index="1" min_dmx_24="16384000" max_dmx_24="16777215" subattribute="FIXTUREGLOBALRESET" subattribute_user_name="Reset" attribute="FIXTUREGLOBALRESET" feature="RESET">
+            <ChannelSet index="0" name="Reset" from_dmx="250" to_dmx="255"/>
+          </ChannelFunction>
+        </ChannelType>
+      </Module>
+    </Modules>
+    <Instances index="1">
+      <Instance index="0" module_index="0"/>
+    </Instances>
+    <Wheels index="2"/>
+    <VirtualFunctionBlocks index="3"/>
+    <AutoPresets index="4"/>
+    <FixtureMacroCollect index="5"/>
+    <RdmNotifications index="6"/>
+  </FixtureType>
+</MA>

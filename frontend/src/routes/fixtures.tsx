@@ -1,6 +1,13 @@
 import { clone, create } from "@bufbuild/protobuf"
-import { LightbulbFilamentIcon, PencilSimpleIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react"
-import { useForm } from "@tanstack/react-form"
+import {
+  FileCodeIcon,
+  LightbulbFilamentIcon,
+  PencilSimpleIcon,
+  PlusIcon,
+  TrashIcon,
+  UploadSimpleIcon,
+  WarningIcon,
+} from "@phosphor-icons/react"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table"
@@ -25,24 +32,9 @@ import { SectionPanel } from "@/components/section-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
@@ -55,14 +47,15 @@ import {
 } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
-  ChannelConfigSchema,
   FixtureConfigSchema,
   ShowConfigSchema,
+  type FixtureConfig,
   type FixtureState,
+  type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
   configQueryOptions,
-  fixtureProfilesQueryOptions,
+  grandMa2FixtureTypesQueryOptions,
   showQueryKeys,
   snapshotQueryOptions,
 } from "@/lib/queries"
@@ -72,7 +65,8 @@ import { ShowApi, runShowApi } from "@/lib/show-api"
 type FixtureRow = {
   readonly id: string
   readonly name: string
-  readonly profile: string
+  readonly fixtureType: string
+  readonly mode: string
   readonly address: string
   readonly intensity: number
   readonly state: FixtureState | undefined
@@ -87,7 +81,11 @@ const columns = columnHelper.columns([
     header: "Fixture",
     cell: (context) => <span className="font-heading font-semibold">{context.getValue()}</span>,
   }),
-  columnHelper.accessor("profile", { header: "Profile" }),
+  columnHelper.accessor("fixtureType", { header: "grandMA2 type" }),
+  columnHelper.accessor("mode", {
+    header: "Mode",
+    cell: (context) => <Badge variant="outline">{context.getValue()}</Badge>,
+  }),
   columnHelper.accessor("address", {
     header: "DMX address",
     cell: (context) => <span className="tabular-nums">{context.getValue()}</span>,
@@ -134,7 +132,7 @@ const columns = columnHelper.columns([
           >
             <PencilSimpleIcon aria-hidden="true" />
           </TooltipTrigger>
-          <TooltipContent>Edit Fixture</TooltipContent>
+          <TooltipContent>Edit fixture</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger
@@ -149,7 +147,7 @@ const columns = columnHelper.columns([
           >
             <TrashIcon aria-hidden="true" />
           </TooltipTrigger>
-          <TooltipContent>Remove Fixture</TooltipContent>
+          <TooltipContent>Remove fixture</TooltipContent>
         </Tooltip>
       </div>
     ),
@@ -161,7 +159,7 @@ export const Route = createFileRoute("/fixtures")({
     await Promise.all([
       context.queryClient.ensureQueryData(configQueryOptions),
       context.queryClient.ensureQueryData(snapshotQueryOptions),
-      context.queryClient.ensureQueryData(fixtureProfilesQueryOptions),
+      context.queryClient.ensureQueryData(grandMa2FixtureTypesQueryOptions),
     ])
   },
   pendingComponent: PageSkeleton,
@@ -171,12 +169,19 @@ export const Route = createFileRoute("/fixtures")({
 function FixturesPage() {
   const { data: config } = useSuspenseQuery(configQueryOptions)
   const { data: snapshot } = useSuspenseQuery(snapshotQueryOptions)
-  const { data: profiles } = useSuspenseQuery(fixtureProfilesQueryOptions)
+  const { data: fixtureTypes } = useSuspenseQuery(grandMa2FixtureTypesQueryOptions)
   const dmx = deriveDmxPresentation(snapshot.dmxRuntime)
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [newFixture, setNewFixture] = useState<FixtureConfig>()
   const [editingFixtureId, setEditingFixtureId] = useState<string>()
   const [removingFixtureId, setRemovingFixtureId] = useState<string>()
+  const [importOpen, setImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File>()
+
+  const typeById = useMemo(
+    () => new Map(fixtureTypes.map((fixtureType) => [fixtureType.id, fixtureType])),
+    [fixtureTypes],
+  )
 
   const updateMutation = useMutation({
     mutationFn: (nextConfig: typeof config) =>
@@ -184,314 +189,114 @@ function FixturesPage() {
     onSuccess: (saved) => {
       queryClient.setQueryData(showQueryKeys.config, saved)
       void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
-      setDialogOpen(false)
+      setNewFixture(undefined)
       setRemovingFixtureId(undefined)
-      toast.success("Fixture configuration saved")
+      toast.success("Fixture patch saved")
+    },
+    onError: (error) => toast.error(error.message),
+  })
+
+  const importMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const xml = new Uint8Array(await file.arrayBuffer())
+      return runShowApi(Effect.flatMap(ShowApi, (api) => api.importGrandMa2Fixture(file.name, xml)))
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(showQueryKeys.config, result.config)
+      void queryClient.invalidateQueries({ queryKey: showQueryKeys.grandMa2FixtureTypes })
+      setImportOpen(false)
+      setImportFile(undefined)
+      const names = result.fixtureTypes.map((fixtureType) => fixtureType.name).join(", ")
+      toast.success(names ? `Imported ${names}` : "grandMA2 fixture imported")
     },
     onError: (error) => toast.error(error.message),
   })
 
   const rows = useMemo<FixtureRow[]>(() => {
     const states = new Map(snapshot.fixtureStates.map((state) => [state.fixtureId, state]))
-    return config.fixtures.map((fixture) => ({
-      id: fixture.id,
-      name: fixture.name,
-      profile: fixture.profileName,
-      address: `${fixture.startChannel}–${fixture.startChannel + Math.max(0, fixture.channels.length - 1)}`,
-      intensity: fixture.intensityScale,
-      state: states.get(fixture.id),
-      edit: () => setEditingFixtureId(fixture.id),
-      remove: () => setRemovingFixtureId(fixture.id),
-    }))
-  }, [config.fixtures, snapshot.fixtureStates])
+    return config.fixtures.map((fixture) => {
+      const fixtureType = typeById.get(fixture.fixtureTypeId)
+      const footprint = fixtureType?.channelCount ?? 0
+      return {
+        id: fixture.id,
+        name: fixture.name,
+        fixtureType: fixtureType
+          ? `${fixtureType.manufacturer} ${fixtureType.name}`
+          : "Missing fixture type",
+        mode: fixtureType?.mode ?? "Unknown",
+        address:
+          footprint > 0
+            ? `${fixture.startChannel}–${fixture.startChannel + footprint - 1}`
+            : `${fixture.startChannel}`,
+        intensity: fixture.intensityScale,
+        state: states.get(fixture.id),
+        edit: () => setEditingFixtureId(fixture.id),
+        remove: () => setRemovingFixtureId(fixture.id),
+      }
+    })
+  }, [config.fixtures, snapshot.fixtureStates, typeById])
 
   const table = useTable({ features, columns, data: rows })
   const removingFixture = config.fixtures.find((fixture) => fixture.id === removingFixtureId)
   const editingFixture = config.fixtures.find((fixture) => fixture.id === editingFixtureId)
-
-  const nextStartChannel = Math.min(
-    512,
-    Math.max(
-      1,
-      ...config.fixtures.map((fixture) => {
-        const profile = profiles.find((candidate) => candidate.name === fixture.profileName)
-        const channels = fixture.channels.length > 0 ? fixture.channels : (profile?.channels ?? [])
-        const highestOffset = Math.max(1, ...channels.map((channel) => channel.offset))
-        return fixture.startChannel + highestOffset
-      }),
-    ),
+  const warningCount = fixtureTypes.reduce(
+    (total, fixtureType) => total + fixtureType.warnings.length,
+    0,
   )
 
-  const form = useForm({
-    defaultValues: {
-      name: `New Fixture ${config.fixtures.length + 1}`,
-      profileName: profiles[0]?.name ?? "",
-      startChannel: nextStartChannel,
-      position: config.fixtures.length,
-      intensityScale: 1,
-      panMin: 0,
-      panMax: 255,
-      tiltMin: 0,
-      tiltMax: 255,
-    },
-    onSubmit: async ({ value }) => {
-      const profile = profiles.find((candidate) => candidate.name === value.profileName)
-      if (
-        config.fixtures.some(
-          (fixture) => fixture.name.toLocaleLowerCase() === value.name.trim().toLocaleLowerCase(),
-        )
-      ) {
-        throw new Error("Fixture names must be unique")
-      }
-      const next = clone(ShowConfigSchema, config)
-      next.fixtures.push(
-        create(FixtureConfigSchema, {
-          id: crypto.randomUUID(),
-          name: value.name.trim(),
-          profileName: profile?.name ?? "",
-          startChannel: value.startChannel,
-          position: value.position,
-          intensityScale: value.intensityScale,
-          panMin: value.panMin,
-          panMax: value.panMax,
-          tiltMin: value.tiltMin,
-          tiltMax: value.tiltMax,
-          channels: profile?.channels.map((channel) => clone(ChannelConfigSchema, channel)) ?? [],
+  const createFixture = () => {
+    const nextStartChannel = Math.min(
+      512,
+      Math.max(
+        1,
+        ...config.fixtures.map((fixture) => {
+          const fixtureType = typeById.get(fixture.fixtureTypeId)
+          return fixture.startChannel + Math.max(1, fixtureType?.channelCount ?? 1)
         }),
-      )
-      await updateMutation.mutateAsync(next)
-      form.reset()
-    },
-  })
+      ),
+    )
+    setNewFixture(
+      create(FixtureConfigSchema, {
+        id: crypto.randomUUID(),
+        name: `New fixture ${config.fixtures.length + 1}`,
+        fixtureTypeId: fixtureTypes[0]?.id ?? "",
+        startChannel: nextStartChannel,
+        position: config.fixtures.length,
+        intensityScale: 1,
+        movementPanMin: 0,
+        movementPanMax: 1,
+        movementTiltMin: 0,
+        movementTiltMax: 1,
+      }),
+    )
+  }
 
   return (
     <div className="grid gap-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight text-balance">
-            Fixtures
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Patch lights to DMX addresses and inspect their live output.
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">Fixtures</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Patch grandMA2 fixture types. Channel functions and 3D metadata come directly from each
+            XML file.
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <PlusIcon data-icon="inline-start" aria-hidden="true" /> Add Fixture
-        </Button>
-        <Credenza open={dialogOpen} onOpenChange={setDialogOpen}>
-          <CredenzaContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
-            <CredenzaHeader className="shrink-0">
-              <CredenzaTitle>Add Fixture</CredenzaTitle>
-              <CredenzaDescription>
-                Choose a fixture profile and its first channel in the universe.
-              </CredenzaDescription>
-            </CredenzaHeader>
-            <form
-              className="flex min-h-0 flex-1 flex-col overflow-hidden"
-              onSubmit={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                void form.handleSubmit()
-              }}
-            >
-              <CredenzaBody className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                <FieldGroup>
-                  <form.Field
-                    name="name"
-                    validators={{
-                      onChange: ({ value }) => {
-                        if (!value.trim()) return "Name is required"
-                        if (
-                          config.fixtures.some(
-                            (fixture) =>
-                              fixture.name.toLocaleLowerCase() === value.trim().toLocaleLowerCase(),
-                          )
-                        ) {
-                          return "Name must be unique"
-                        }
-                        return undefined
-                      },
-                    }}
-                  >
-                    {(field) => {
-                      const invalid = field.state.meta.isTouched && !field.state.meta.isValid
-                      return (
-                        <Field data-invalid={invalid}>
-                          <FieldLabel htmlFor={`add-${field.name}`}>Name</FieldLabel>
-                          <Input
-                            id={`add-${field.name}`}
-                            name={field.name}
-                            autoComplete="off"
-                            aria-invalid={invalid}
-                            value={field.state.value}
-                            onBlur={field.handleBlur}
-                            onChange={(event) => field.handleChange(event.target.value)}
-                          />
-                          {invalid ? (
-                            <FieldError>
-                              {field.state.meta.errors.map(String).join(", ")}
-                            </FieldError>
-                          ) : null}
-                        </Field>
-                      )
-                    }}
-                  </form.Field>
-                  <form.Field name="profileName">
-                    {(field) => (
-                      <Field>
-                        <FieldLabel htmlFor={`add-${field.name}-trigger`}>Profile</FieldLabel>
-                        <Select
-                          name={field.name}
-                          items={[
-                            { label: "Custom", value: "__custom" },
-                            ...profiles.map((profile) => ({
-                              label: profile.name,
-                              value: profile.name,
-                            })),
-                          ]}
-                          value={field.state.value || "__custom"}
-                          onValueChange={(value) =>
-                            field.handleChange(value === "__custom" ? "" : (value ?? ""))
-                          }
-                        >
-                          <SelectTrigger id={`add-${field.name}-trigger`} className="w-full">
-                            <SelectValue>{field.state.value || "Custom"}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="__custom">Custom</SelectItem>
-                              {profiles.map((profile) => (
-                                <SelectItem key={profile.name} value={profile.name}>
-                                  {profile.name}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                    )}
-                  </form.Field>
-                  <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    <form.Field name="startChannel">
-                      {(field) => (
-                        <Field>
-                          <FieldLabel htmlFor={`add-${field.name}`}>Start channel</FieldLabel>
-                          <Input
-                            id={`add-${field.name}`}
-                            name={field.name}
-                            type="number"
-                            inputMode="numeric"
-                            autoComplete="off"
-                            min={1}
-                            max={512}
-                            value={field.state.value}
-                            onBlur={field.handleBlur}
-                            onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                          />
-                        </Field>
-                      )}
-                    </form.Field>
-                    <form.Field name="position">
-                      {(field) => (
-                        <Field>
-                          <FieldLabel htmlFor={`add-${field.name}`}>Position</FieldLabel>
-                          <Input
-                            id={`add-${field.name}`}
-                            name={field.name}
-                            type="number"
-                            inputMode="numeric"
-                            autoComplete="off"
-                            min={0}
-                            value={field.state.value}
-                            onBlur={field.handleBlur}
-                            onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                          />
-                        </Field>
-                      )}
-                    </form.Field>
-                    <form.Field name="intensityScale">
-                      {(field) => (
-                        <Field>
-                          <FieldLabel htmlFor={`add-${field.name}`}>Intensity scale</FieldLabel>
-                          <Input
-                            id={`add-${field.name}`}
-                            name={field.name}
-                            type="number"
-                            inputMode="decimal"
-                            autoComplete="off"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={field.state.value}
-                            onBlur={field.handleBlur}
-                            onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                          />
-                        </Field>
-                      )}
-                    </form.Field>
-                  </FieldGroup>
-                  <FieldSet className="border p-3">
-                    <FieldLegend variant="label">Movement limits</FieldLegend>
-                    <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      {(["panMin", "panMax", "tiltMin", "tiltMax"] as const).map((name) => (
-                        <form.Field key={name} name={name}>
-                          {(field) => (
-                            <Field>
-                              <FieldLabel htmlFor={`add-${field.name}`} className="capitalize">
-                                {name.replace(/([A-Z])/g, " $1")}
-                              </FieldLabel>
-                              <Input
-                                id={`add-${field.name}`}
-                                name={field.name}
-                                type="number"
-                                inputMode="numeric"
-                                autoComplete="off"
-                                min={0}
-                                max={255}
-                                value={field.state.value}
-                                onBlur={field.handleBlur}
-                                onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                              />
-                            </Field>
-                          )}
-                        </form.Field>
-                      ))}
-                    </FieldGroup>
-                  </FieldSet>
-                </FieldGroup>
-              </CredenzaBody>
-              <CredenzaFooter className="shrink-0">
-                <CredenzaClose type="button">Cancel</CredenzaClose>
-                <form.Subscribe
-                  selector={(state) => [state.canSubmit, state.isSubmitting] as const}
-                >
-                  {([canSubmit, isSubmitting]) => {
-                    const adding = isSubmitting || updateMutation.isPending
-                    return (
-                      <Button type="submit" disabled={!canSubmit || adding}>
-                        {adding ? <Spinner data-icon="inline-start" /> : null}
-                        {adding ? "Adding…" : "Add Fixture"}
-                      </Button>
-                    )
-                  }}
-                </form.Subscribe>
-              </CredenzaFooter>
-            </form>
-          </CredenzaContent>
-        </Credenza>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <UploadSimpleIcon data-icon="inline-start" aria-hidden="true" />
+            Import grandMA2 XML
+          </Button>
+          <Button disabled={fixtureTypes.length === 0} onClick={createFixture}>
+            <PlusIcon data-icon="inline-start" aria-hidden="true" />
+            Add fixture
+          </Button>
+        </div>
       </div>
 
-      <section className="grid border bg-card sm:grid-cols-3">
-        <div className="border-r p-4">
-          <p className="text-xs text-muted-foreground">Fixtures</p>
-          <p className="mt-1 font-heading text-lg font-semibold tabular-nums">
-            {config.fixtures.length}
-          </p>
-        </div>
-        <div className="border-r p-4">
-          <p className="text-xs text-muted-foreground">Profiles available</p>
-          <p className="mt-1 font-heading text-lg font-semibold tabular-nums">{profiles.length}</p>
-        </div>
+      <section className="grid border bg-card sm:grid-cols-4">
+        <Metric label="Patched fixtures" value={`${config.fixtures.length}`} />
+        <Metric label="Fixture types" value={`${fixtureTypes.length}`} />
+        <Metric label="Imported files" value={`${config.importedFixtureFiles.length}`} />
         <div className="p-4">
           <p className="text-xs text-muted-foreground">Output status</p>
           <Badge
@@ -505,11 +310,11 @@ function FixturesPage() {
 
       <SectionPanel
         title="Fixture patch"
-        description="Configured output order and current intensity"
+        description="DMX ranges come from each parsed grandMA2 mode"
       >
         <Table>
           <TableCaption className="sr-only">
-            Fixture addresses, intensity scales, live output, and actions.
+            Patched grandMA2 fixtures, addresses, intensity scales, live output, and actions.
           </TableCaption>
           <TableHeader>
             {table.getHeaderGroups().map((group) => (
@@ -531,9 +336,9 @@ function FixturesPage() {
                       <EmptyMedia variant="icon">
                         <LightbulbFilamentIcon aria-hidden="true" />
                       </EmptyMedia>
-                      <EmptyTitle>No fixtures configured</EmptyTitle>
+                      <EmptyTitle>No fixtures patched</EmptyTitle>
                       <EmptyDescription>
-                        Add a fixture to begin patching the DMX universe.
+                        Add a fixture type to start using the DMX universe.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -554,11 +359,75 @@ function FixturesPage() {
         </Table>
       </SectionPanel>
 
+      <SectionPanel
+        title="grandMA2 library"
+        description="Bundled and imported XML fixture types available to this show"
+        action={
+          warningCount > 0 ? (
+            <Badge variant="outline">
+              <WarningIcon data-icon="inline-start" aria-hidden="true" />
+              {warningCount} {warningCount === 1 ? "warning" : "warnings"}
+            </Badge>
+          ) : undefined
+        }
+      >
+        <div className="divide-y">
+          {fixtureTypes.map((fixtureType) => (
+            <FixtureTypeRow key={fixtureType.id} fixtureType={fixtureType} />
+          ))}
+        </div>
+      </SectionPanel>
+
+      <Credenza open={importOpen} onOpenChange={setImportOpen}>
+        <CredenzaContent className="sm:max-w-lg">
+          <CredenzaHeader>
+            <CredenzaTitle>Import grandMA2 fixture</CredenzaTitle>
+            <CredenzaDescription>
+              Select an unencrypted grandMA2 XML fixture file. The server validates its channels,
+              physical ranges, body dimensions, emitters, and embedded model before saving it.
+            </CredenzaDescription>
+          </CredenzaHeader>
+          <CredenzaBody>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="grandma2-file">Fixture XML</FieldLabel>
+                <Input
+                  id="grandma2-file"
+                  type="file"
+                  accept=".xml,application/xml,text/xml"
+                  onChange={(event) => setImportFile(event.target.files?.[0])}
+                />
+                <FieldDescription>
+                  Maximum file size is 2 MB. grandMA2 XMLP files are encrypted and are not
+                  supported.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+          </CredenzaBody>
+          <CredenzaFooter>
+            <CredenzaClose type="button">Cancel</CredenzaClose>
+            <Button
+              disabled={!importFile || importMutation.isPending}
+              onClick={() => {
+                if (importFile) importMutation.mutate(importFile)
+              }}
+            >
+              {importMutation.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <UploadSimpleIcon data-icon="inline-start" aria-hidden="true" />
+              )}
+              {importMutation.isPending ? "Importing…" : "Import fixture"}
+            </Button>
+          </CredenzaFooter>
+        </CredenzaContent>
+      </Credenza>
+
       <ConfirmCredenza
         open={removingFixture !== undefined}
         title={`Remove ${removingFixture?.name ?? "fixture"}?`}
-        description="This removes the fixture and its channel overrides from the active show configuration."
-        confirmLabel="Remove Fixture"
+        description="This removes the fixture instance from the active patch. Its grandMA2 fixture type stays in the library."
+        confirmLabel="Remove fixture"
         icon={<TrashIcon aria-hidden="true" />}
         destructive
         pending={updateMutation.isPending}
@@ -573,14 +442,39 @@ function FixturesPage() {
         }}
       />
 
+      {newFixture ? (
+        <FixtureEditor
+          key={newFixture.id}
+          fixture={newFixture}
+          fixtureTypes={fixtureTypes}
+          existingNames={config.fixtures.map((fixture) => fixture.name)}
+          title="Add fixture"
+          description="Choose a parsed grandMA2 mode and patch it into the DMX universe."
+          submitLabel="Add fixture"
+          open
+          pending={updateMutation.isPending}
+          onOpenChange={(open) => {
+            if (!open) setNewFixture(undefined)
+          }}
+          onSave={async (fixture) => {
+            const next = clone(ShowConfigSchema, config)
+            next.fixtures.push(fixture)
+            await updateMutation.mutateAsync(next)
+          }}
+        />
+      ) : null}
+
       {editingFixture ? (
         <FixtureEditor
           key={editingFixture.id}
           fixture={editingFixture}
-          profiles={profiles}
+          fixtureTypes={fixtureTypes}
           existingNames={config.fixtures
             .filter((fixture) => fixture.id !== editingFixture.id)
             .map((fixture) => fixture.name)}
+          title={`Edit ${editingFixture.name}`}
+          description="Change the fixture type, patch address, stage order, or output envelope."
+          submitLabel="Save fixture"
           open
           pending={updateMutation.isPending}
           onOpenChange={(open) => {
@@ -596,6 +490,43 @@ function FixturesPage() {
           }}
         />
       ) : null}
+    </div>
+  )
+}
+
+function Metric({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="border-b p-4 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 font-heading text-lg font-semibold tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+function FixtureTypeRow({ fixtureType }: { readonly fixtureType: GrandMa2FixtureType }) {
+  return (
+    <div className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div className="flex min-w-0 items-start gap-3">
+        <FileCodeIcon className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-heading text-sm font-semibold">
+              {fixtureType.manufacturer} {fixtureType.name}
+            </p>
+            <Badge variant={fixtureType.builtIn ? "secondary" : "outline"}>
+              {fixtureType.builtIn ? "Bundled" : "Imported"}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {fixtureType.mode} · {fixtureType.channelCount} channels ·{" "}
+            {fixtureType.visual?.emitters.length ?? 0} emitters
+          </p>
+          {fixtureType.warnings.length > 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">{fixtureType.warnings.join(" ")}</p>
+          ) : null}
+        </div>
+      </div>
+      <code className="truncate text-xs text-muted-foreground">{fixtureType.id}</code>
     </div>
   )
 }

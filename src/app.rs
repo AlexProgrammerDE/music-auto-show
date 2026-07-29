@@ -24,11 +24,12 @@ use crate::{
     config::{self, ConfigError, ValidatedShowConfig},
     dmx::{DmxWorker, frame_interval as dmx_frame_interval},
     effects::EffectsEngine,
+    grandma2,
     media::MediaState,
     proto::v1::{
         AudioRuntimeStatus, BeatNetStatus, BluetoothReceiverStatus, CommandResult, DmxConfig,
-        DmxRuntimeStatus, MediaInfo, Recording, RecordingStatus, RunState, RuntimeTimingStatus,
-        ShowCommand, ShowConfig, ShowSnapshot,
+        DmxRuntimeStatus, GrandMa2FixtureType, MediaInfo, Recording, RecordingStatus, RunState,
+        RuntimeTimingStatus, ShowCommand, ShowConfig, ShowSnapshot,
     },
     timing::PeriodicSchedule,
 };
@@ -255,6 +256,34 @@ impl App {
         self.state_tx.borrow().config.as_proto().clone()
     }
 
+    pub async fn grandma2_fixture_types(&self) -> Vec<GrandMa2FixtureType> {
+        self.state_tx.borrow().config.grandma2().to_proto()
+    }
+
+    pub async fn import_grandma2_fixture(
+        &self,
+        filename: &str,
+        xml: &[u8],
+    ) -> Result<(ShowConfig, Vec<GrandMa2FixtureType>), AppError> {
+        let parsed = grandma2::import_fixture_file(filename, xml)
+            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+        let fixture_types = parsed
+            .fixture_types
+            .iter()
+            .map(grandma2::ParsedFixtureType::to_proto)
+            .collect();
+        let mut config = self.config().await;
+        if !config
+            .imported_fixture_files
+            .iter()
+            .any(|file| file.id == parsed.file.id)
+        {
+            config.imported_fixture_files.push(parsed.file);
+            config = self.update_config(config).await?;
+        }
+        Ok((config, fixture_types))
+    }
+
     pub async fn export_config(&self) -> Result<(String, String), AppError> {
         let config = Arc::clone(&self.state_tx.borrow().config);
         let json = config::to_json(&config)?;
@@ -401,7 +430,7 @@ impl ConfigChanges {
             audio: previous.audio() != updated.audio(),
             dmx: previous.dmx() != updated.dmx(),
             effects: previous.effects() != updated.effects()
-                || previous.profiles != updated.profiles
+                || previous.imported_fixture_files != updated.imported_fixture_files
                 || previous.fixtures != updated.fixtures,
         }
     }

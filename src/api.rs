@@ -6,7 +6,6 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     app::{App, AppError},
-    config,
     proto::v1::{
         ClearRecordingRequest, ClearRecordingResponse, ConnectBluetoothReceiverDeviceRequest,
         ConnectBluetoothReceiverDeviceResponse, ControlShowRequest, ControlShowResponse,
@@ -15,9 +14,10 @@ use crate::{
         ForgetBluetoothReceiverDeviceResponse, GetBluetoothReceiverStatusRequest,
         GetBluetoothReceiverStatusResponse, GetConfigRequest, GetConfigResponse,
         GetSnapshotRequest, GetSnapshotResponse, ImportConfigRequest, ImportConfigResponse,
-        ListAudioDevicesRequest, ListAudioDevicesResponse, ListFixtureProfilesRequest,
-        ListFixtureProfilesResponse, ResetConfigRequest, ResetConfigResponse, SetBlackoutRequest,
-        SetBlackoutResponse, SetBluetoothReceiverPairingRequest,
+        ImportGrandMa2FixtureRequest, ImportGrandMa2FixtureResponse, ListAudioDevicesRequest,
+        ListAudioDevicesResponse, ListGrandMa2FixtureTypesRequest,
+        ListGrandMa2FixtureTypesResponse, ResetConfigRequest, ResetConfigResponse,
+        SetBlackoutRequest, SetBlackoutResponse, SetBluetoothReceiverPairingRequest,
         SetBluetoothReceiverPairingResponse, StartRecordingRequest, StartRecordingResponse,
         StopRecordingRequest, StopRecordingResponse, UpdateConfigRequest, UpdateConfigResponse,
         WatchSnapshotsRequest, WatchSnapshotsResponse,
@@ -218,23 +218,29 @@ impl MusicAutoShowService for GrpcApi {
         }))
     }
 
-    async fn list_fixture_profiles(
+    async fn list_grand_ma2_fixture_types(
         &self,
-        _request: Request<ListFixtureProfilesRequest>,
-    ) -> Result<Response<ListFixtureProfilesResponse>, Status> {
-        let config = self.app.config().await;
-        let mut profiles = config::default_profiles();
-        for profile in config.profiles {
-            if let Some(existing) = profiles
-                .iter_mut()
-                .find(|existing| existing.name == profile.name)
-            {
-                *existing = profile;
-            } else {
-                profiles.push(profile);
-            }
-        }
-        Ok(Response::new(ListFixtureProfilesResponse { profiles }))
+        _request: Request<ListGrandMa2FixtureTypesRequest>,
+    ) -> Result<Response<ListGrandMa2FixtureTypesResponse>, Status> {
+        Ok(Response::new(ListGrandMa2FixtureTypesResponse {
+            fixture_types: self.app.grandma2_fixture_types().await,
+        }))
+    }
+
+    async fn import_grand_ma2_fixture(
+        &self,
+        request: Request<ImportGrandMa2FixtureRequest>,
+    ) -> Result<Response<ImportGrandMa2FixtureResponse>, Status> {
+        let request = request.into_inner();
+        let (config, fixture_types) = self
+            .app
+            .import_grandma2_fixture(&request.filename, &request.xml)
+            .await
+            .map_err(app_status)?;
+        Ok(Response::new(ImportGrandMa2FixtureResponse {
+            config: Some(config),
+            fixture_types,
+        }))
     }
 
     async fn control_show(
@@ -317,6 +323,20 @@ mod tests {
     use super::*;
     use tokio_stream::StreamExt;
 
+    const IMPORTED_FIXTURE: &[u8] = br#"<?xml version="1.0"?>
+      <MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+        <FixtureType name="Imported wash" mode="RGB">
+          <manufacturer>Example</manufacturer>
+          <Modules>
+            <Module index="0" name="Main" class="Conventional" beamtype="Wash">
+              <ChannelType attribute="DIM" feature="DIMMER" coarse="1">
+                <ChannelFunction subattribute="DIM" attribute="DIM" feature="DIMMER" min_dmx_24="0" max_dmx_24="16777215"/>
+              </ChannelType>
+            </Module>
+          </Modules>
+        </FixtureType>
+      </MA>"#;
+
     #[tokio::test]
     async fn snapshot_stream_closes_when_application_stops() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
@@ -370,6 +390,63 @@ mod tests {
             .expect_err("invalid configuration should be rejected");
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        app.stop_runtime().await;
+    }
+
+    #[tokio::test]
+    async fn imported_grandma2_fixture_is_persisted_and_listed() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let config_path = directory.path().join("config.json");
+        let app = Arc::new(
+            App::load(config_path.clone(), true)
+                .await
+                .expect("simulated application should load"),
+        );
+        app.start_runtime()
+            .await
+            .expect("show runtime should start");
+        let api = GrpcApi::new(Arc::clone(&app));
+
+        let response = api
+            .import_grand_ma2_fixture(Request::new(ImportGrandMa2FixtureRequest {
+                filename: "imported-wash.xml".into(),
+                xml: IMPORTED_FIXTURE.into(),
+            }))
+            .await
+            .expect("valid grandMA2 fixture should import")
+            .into_inner();
+
+        assert_eq!(response.fixture_types.len(), 1);
+        assert_eq!(
+            response.fixture_types[0].name, "Imported wash",
+            "the API should return the parsed fixture type"
+        );
+        assert_eq!(
+            response
+                .config
+                .expect("updated configuration should be returned")
+                .imported_fixture_files
+                .len(),
+            1
+        );
+
+        let listed = api
+            .list_grand_ma2_fixture_types(Request::new(ListGrandMa2FixtureTypesRequest {}))
+            .await
+            .expect("fixture library should be listed")
+            .into_inner();
+        assert_eq!(listed.fixture_types.len(), 4);
+        assert!(
+            listed
+                .fixture_types
+                .iter()
+                .any(|fixture_type| fixture_type.name == "Imported wash")
+        );
+
+        let persisted =
+            std::fs::read_to_string(config_path).expect("configuration should be persisted");
+        assert!(persisted.contains("\"imported_fixture_files\""));
+        assert!(persisted.contains("Imported wash"));
         app.stop_runtime().await;
     }
 }

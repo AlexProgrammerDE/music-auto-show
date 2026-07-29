@@ -1,8 +1,4 @@
-import type {
-  FixtureConfig,
-  FixtureProfile,
-  FixtureState,
-} from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import type { FixtureState, FixtureVisual } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 export type StageColor = {
   readonly red: number
@@ -36,40 +32,56 @@ export function fixtureBrightness(state: FixtureState) {
   return emitterLevel * (state.dimmer / 255)
 }
 
-export function normalizeFixturePosition(value: number, minimum: number, maximum: number) {
-  if (maximum <= minimum) return 0
-  return Math.max(-1, Math.min(1, ((value - minimum) / (maximum - minimum)) * 2 - 1))
+export function physicalAxisValue(value: number, minimum: number, maximum: number) {
+  const normalized = Math.max(0, Math.min(255, value)) / 255
+  return minimum + (maximum - minimum) * normalized
 }
 
 export function movingBeamTarget(
-  fixtureX: number,
-  fixtureZ: number,
-  fixture: FixtureConfig,
-  profile: FixtureProfile | undefined,
+  origin: StagePoint,
+  visual: FixtureVisual,
   state: FixtureState,
+  length = 6,
 ): StagePoint {
-  const pan = normalizeFixturePosition(state.pan, fixture.panMin, fixture.panMax)
-  const tilt = normalizeFixturePosition(state.tilt, fixture.tiltMin, fixture.tiltMax)
-  const panTravel = Math.min(360, Math.max(90, profile?.panMaxDegrees || 180))
-  const panAngle = pan * ((panTravel * Math.PI) / 360)
-  const distance = 2.25 + ((tilt + 1) / 2) * 3
+  const pan =
+    (physicalAxisValue(
+      state.pan + state.panFine / 255,
+      visual.panMinDegrees,
+      visual.panMaxDegrees,
+    ) *
+      Math.PI) /
+    180
+  const tilt =
+    (physicalAxisValue(
+      state.tilt + state.tiltFine / 255,
+      visual.tiltMinDegrees,
+      visual.tiltMaxDegrees,
+    ) *
+      Math.PI) /
+    180
+  const horizontal = Math.sin(tilt)
   return {
-    x: fixtureX + Math.sin(panAngle) * distance,
-    y: 0,
-    z: fixtureZ + Math.cos(panAngle) * distance,
+    x: origin.x + Math.sin(pan) * horizontal * length,
+    y: origin.y - Math.cos(tilt) * length,
+    z: origin.z + Math.cos(pan) * horizontal * length,
   }
 }
 
 export function effectBeamTarget(
-  fixtureX: number,
-  fixtureZ: number,
+  origin: StagePoint,
   rotation: number,
   beam: number,
+  beamCount: number,
 ): StagePoint {
-  const angle = rotation * Math.PI * 2 + (beam / 4) * Math.PI * 2
+  const angle = rotation * Math.PI * 2 + (beam / Math.max(1, beamCount)) * Math.PI * 2
+  const radius = 2.4 + (beam % 3) * 0.45
   return {
-    x: fixtureX + Math.sin(angle) * 3.4,
+    x: origin.x + Math.sin(angle) * radius,
     y: 0,
-    z: fixtureZ + Math.cos(angle) * 3.4,
+    z: origin.z + Math.cos(angle) * radius,
   }
+}
+
+export function fixedBeamTarget(origin: StagePoint): StagePoint {
+  return { x: origin.x, y: 0, z: origin.z + 0.7 }
 }

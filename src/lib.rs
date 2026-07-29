@@ -18,6 +18,7 @@ pub mod checkpoint;
 pub mod config;
 pub mod dmx;
 pub mod effects;
+pub mod grandma2;
 pub mod media;
 pub mod proto;
 mod timing;
