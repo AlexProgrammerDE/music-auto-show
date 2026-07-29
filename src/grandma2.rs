@@ -9,9 +9,9 @@ use quick_xml::{
 use sha2::{Digest, Sha256};
 
 use crate::proto::v1::{
-    FixtureEmitter, FixtureEmitterKind, FixtureMesh, FixtureVisual, FixtureVisualKind,
-    GrandMa2Channel, GrandMa2ChannelFunction, GrandMa2ChannelSet, GrandMa2FixtureFile,
-    GrandMa2FixtureType,
+    FixtureEmitter, FixtureEmitterKind, FixtureMesh, FixtureModelKind, FixtureVisual,
+    FixtureVisualKind, GrandMa2Channel, GrandMa2ChannelFunction, GrandMa2ChannelSet,
+    GrandMa2FixtureFile, GrandMa2FixtureType,
 };
 
 pub const PURELIGHT_MUVY_WASHQ_ID: &str = "builtin:purelight-muvy-washq-14ch:0";
@@ -726,8 +726,8 @@ fn raw_module(reader: &Reader<&[u8]>, element: &BytesStart<'_>) -> Result<RawMod
         name: attr(reader, element, "name")?.unwrap_or_default(),
         class: attr(reader, element, "class")?.unwrap_or_default(),
         beam_type: attr(reader, element, "beamtype")?.unwrap_or_default(),
-        beam_angle: float_attr(reader, element, "beam_angle")?.unwrap_or(25.0),
-        beam_intensity: float_attr(reader, element, "beam_intensity")?.unwrap_or(1000.0),
+        beam_angle: float_attr(reader, element, "beam_angle")?.unwrap_or_default(),
+        beam_intensity: float_attr(reader, element, "beam_intensity")?.unwrap_or_default(),
         ..Default::default()
     })
 }
@@ -940,6 +940,20 @@ fn compile_channel(raw: &RawChannel, warnings: &mut Vec<String>) -> MappedChanne
             }
         })
         .collect::<Vec<_>>();
+    functions.sort_by_key(|function| function.from_dmx);
+    for pair in functions.windows(2) {
+        if pair[0].to_dmx >= pair[1].from_dmx {
+            warnings.push(format!(
+                "Channel {} ({}) has overlapping function ranges {}-{} and {}-{}.",
+                raw.coarse,
+                raw.attribute,
+                pair[0].from_dmx,
+                pair[0].to_dmx,
+                pair[1].from_dmx,
+                pair[1].to_dmx
+            ));
+        }
+    }
     if functions.is_empty() {
         functions.push(MappedFunction {
             name: raw.attribute.clone(),
@@ -1128,7 +1142,7 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         .iter()
         .find(|module| !module.channels.is_empty())
         .or_else(|| raw.modules.first());
-    let dimensions = main_module
+    let ma_dimensions = main_module
         .and_then(|module| module.size)
         .filter(|size| size.iter().all(|value| value.is_finite() && *value > 0.0))
         .unwrap_or_else(|| {
@@ -1138,6 +1152,7 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
             );
             [0.24, 0.18, 0.20]
         });
+    let dimensions = ma_dimensions_to_stage(ma_dimensions);
 
     let moving_head = raw
         .modules
@@ -1155,12 +1170,23 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         FixtureVisualKind::Effect
     } else if raw.modules.iter().any(|module| {
         let beam = normalized(&module.beam_type);
-        beam.contains("WASH") || beam.contains("BEAM")
+        matches!(beam.as_str(), "SPOT" | "WASH" | "EFFECT" | "FIBER" | "BEAM")
     }) {
         FixtureVisualKind::Par
     } else {
         FixtureVisualKind::Other
     };
+    for module in &raw.modules {
+        let beam = normalized(&module.beam_type);
+        if !beam.is_empty()
+            && !matches!(beam.as_str(), "NONE" | "SPOT" | "WASH" | "EFFECT" | "FIBER")
+        {
+            warnings.push(format!(
+                "Module '{}' uses unsupported grandMA2 beam type '{}'; the preview treats it as Spot.",
+                module.name, module.beam_type
+            ));
+        }
+    }
 
     let emitter_modules = if raw.instances.is_empty() {
         raw.modules
@@ -1183,7 +1209,8 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         .into_iter()
         .filter(|module| {
             let beam_type = normalized(&module.1.beam_type);
-            !beam_type.is_empty() && beam_type != "NONE"
+            let class = normalized(&module.1.class);
+            (!beam_type.is_empty() && beam_type != "NONE") || class == "LED"
         })
         .map(|(instance_index, module)| {
             let lower_name = module.name.to_ascii_lowercase();
@@ -1198,7 +1225,11 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
                 id: format!("instance-{instance_index}-module-{}", module.index),
                 name: module.name.clone(),
                 kind: emitter_kind as i32,
-                beam_angle_degrees: module.beam_angle.clamp(1.0, 179.0),
+                beam_angle_degrees: if module.beam_angle > 0.0 {
+                    module.beam_angle.clamp(1.0, 179.0)
+                } else {
+                    0.0
+                },
                 beam_intensity: module.beam_intensity.max(0.0),
                 x_m: 0.0,
                 y_m: 0.0,
@@ -1208,6 +1239,15 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
                 } else {
                     0
                 },
+                direction_x: 0.0,
+                direction_y: 0.0,
+                direction_z: 1.0,
+                casts_beam: normalized(&module.class) != "LED"
+                    && normalized(&module.beam_type) != "NONE",
+                aperture_m: module
+                    .size
+                    .map_or(0.04, |size| size[0].min(size[2]))
+                    .clamp(0.005, 0.5),
             }
         })
         .collect::<Vec<_>>();
@@ -1216,18 +1256,36 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
             id: "estimated-emitter".into(),
             name: "Estimated beam".into(),
             kind: FixtureEmitterKind::Color as i32,
-            beam_angle_degrees: main_module.map_or(25.0, |module| module.beam_angle),
-            beam_intensity: main_module.map_or(1000.0, |module| module.beam_intensity),
+            beam_angle_degrees: main_module.map_or(0.0, |module| module.beam_angle),
+            beam_intensity: main_module.map_or(0.0, |module| module.beam_intensity),
             x_m: 0.0,
             y_m: 0.0,
             z_m: dimensions[2] / 2.0,
             color_rgb: 0,
+            direction_x: 0.0,
+            direction_y: 0.0,
+            direction_z: 1.0,
+            casts_beam: true,
+            aperture_m: dimensions[0].min(dimensions[1]) * 0.4,
         });
         warnings.push(
             "The grandMA2 file has no beam module; the preview uses one estimated emitter.".into(),
         );
     }
-    layout_emitters(&mut emitters, dimensions, moving_head);
+    layout_emitters(&mut emitters, dimensions, moving_head, effect);
+    let model_kind = if moving_head {
+        FixtureModelKind::HeadMover
+    } else if effect
+        && emitters
+            .iter()
+            .any(|emitter| emitter.kind == FixtureEmitterKind::Strobe as i32)
+    {
+        FixtureModelKind::DerbyEffect
+    } else if effect {
+        FixtureModelKind::CompactEffect
+    } else {
+        FixtureModelKind::Generic
+    };
 
     let mut meshes = Vec::new();
     for module in &raw.modules {
@@ -1255,7 +1313,16 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
         tilt_max_degrees: tilt_max,
         emitters,
         meshes,
+        model_kind: model_kind as i32,
     }
+}
+
+fn ma_dimensions_to_stage(dimensions: [f32; 3]) -> [f32; 3] {
+    [dimensions[0], dimensions[2], dimensions[1]]
+}
+
+fn ma_vector_to_stage(vector: [f32; 3]) -> [f32; 3] {
+    [vector[0], vector[2], -vector[1]]
 }
 
 fn physical_axis_range(raw: &RawFixtureType, semantic: DmxSemantic) -> Option<(f32, f32)> {
@@ -1276,7 +1343,12 @@ fn physical_axis_range(raw: &RawFixtureType, semantic: DmxSemantic) -> Option<(f
         })
 }
 
-fn layout_emitters(emitters: &mut [FixtureEmitter], dimensions: [f32; 3], moving_head: bool) {
+fn layout_emitters(
+    emitters: &mut [FixtureEmitter],
+    dimensions: [f32; 3],
+    moving_head: bool,
+    effect: bool,
+) {
     if moving_head {
         return;
     }
@@ -1292,6 +1364,24 @@ fn layout_emitters(emitters: &mut [FixtureEmitter], dimensions: [f32; 3], moving
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if indices.is_empty() {
+            continue;
+        }
+        if kind == FixtureEmitterKind::Strobe && indices.len() >= 4 {
+            let row_length = indices.len().div_ceil(2);
+            for (slot, index) in indices.into_iter().enumerate() {
+                let column = slot % row_length;
+                emitters[index].x_m = if row_length == 1 {
+                    0.0
+                } else {
+                    -dimensions[0] * 0.41
+                        + dimensions[0] * 0.82 * column as f32 / (row_length - 1) as f32
+                };
+                emitters[index].y_m = if slot < row_length {
+                    dimensions[1] * 0.38
+                } else {
+                    -dimensions[1] * 0.38
+                };
+            }
             continue;
         }
         let columns = (indices.len() as f32).sqrt().ceil() as usize;
@@ -1317,6 +1407,33 @@ fn layout_emitters(emitters: &mut [FixtureEmitter], dimensions: [f32; 3], moving
                 height / 2.0 - height * row as f32 / (rows - 1) as f32
             };
         }
+    }
+    if effect {
+        let half_width = (dimensions[0] * 0.5).max(0.01);
+        let half_height = (dimensions[1] * 0.5).max(0.01);
+        for emitter in emitters.iter_mut().filter(|emitter| emitter.casts_beam) {
+            let direction = normalize_vector([
+                emitter.x_m / half_width * 0.48,
+                emitter.y_m / half_height * 0.34,
+                1.0,
+            ]);
+            emitter.direction_x = direction[0];
+            emitter.direction_y = direction[1];
+            emitter.direction_z = direction[2];
+        }
+    }
+}
+
+fn normalize_vector(vector: [f32; 3]) -> [f32; 3] {
+    let length = vector
+        .iter()
+        .map(|component| component * component)
+        .sum::<f32>()
+        .sqrt();
+    if length <= f32::EPSILON {
+        [0.0, 0.0, 1.0]
+    } else {
+        [vector[0] / length, vector[1] / length, vector[2] / length]
     }
 }
 
@@ -1352,20 +1469,24 @@ fn decode_mesh(raw: &RawMesh, module_index: u32) -> Result<FixtureMesh> {
     let mut positions = Vec::with_capacity(vertex_count * 3);
     let mut normals = Vec::with_capacity(vertex_count * 3);
     for vertex in vertices[4..].chunks_exact(32) {
-        for offset in [0, 4, 8] {
+        let mut ma_position = [0.0; 3];
+        for (component, offset) in [0, 4, 8].into_iter().enumerate() {
             let value = f32::from_le_bytes(vertex[offset..offset + 4].try_into()?);
             if !value.is_finite() {
                 bail!("mesh contains a non-finite vertex position");
             }
-            positions.push(value);
+            ma_position[component] = value;
         }
-        for offset in [12, 16, 20] {
+        positions.extend(ma_vector_to_stage(ma_position));
+        let mut ma_normal = [0.0; 3];
+        for (component, offset) in [12, 16, 20].into_iter().enumerate() {
             let value = f32::from_le_bytes(vertex[offset..offset + 4].try_into()?);
             if !value.is_finite() {
                 bail!("mesh contains a non-finite vertex normal");
             }
-            normals.push(value);
+            ma_normal[component] = value;
         }
+        normals.extend(ma_vector_to_stage(ma_normal));
     }
     let indices = faces[4..]
         .chunks_exact(2)
@@ -1394,6 +1515,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn converts_ma_coordinates_to_the_stage_coordinate_system() {
+        assert_eq!(
+            ma_dimensions_to_stage([0.27, 0.22, 0.26]),
+            [0.27, 0.26, 0.22]
+        );
+        assert_eq!(ma_vector_to_stage([1.0, 2.0, 3.0]), [1.0, 3.0, -2.0]);
+    }
+
+    #[test]
     fn builtins_are_clean_and_expose_physical_metadata() {
         let library = GrandMa2Library::load(&[]).expect("built-ins should parse");
         assert_eq!(library.fixture_types().len(), 3);
@@ -1407,18 +1537,67 @@ mod tests {
         assert_eq!(muvy.visual.pan_max_degrees, 270.0);
         assert_eq!(muvy.visual.tilt_min_degrees, -135.0);
         assert_eq!(muvy.visual.tilt_max_degrees, 135.0);
+        assert_eq!(muvy.visual.width_m, 0.27);
+        assert_eq!(muvy.visual.height_m, 0.26);
+        assert_eq!(muvy.visual.depth_m, 0.22);
+        assert_eq!(muvy.visual.model_kind(), FixtureModelKind::HeadMover);
+        assert!(muvy.visual.emitters[0].casts_beam);
+        assert_eq!(muvy.visual.emitters[0].beam_angle_degrees, 45.0);
+        assert_eq!(muvy.visual.emitters[0].beam_intensity, 0.0);
 
         let derby = library
             .get(SHOWTEC_TECHNO_DERBY_ID)
             .expect("Techno Derby fixture should exist");
         assert_eq!(derby.footprint, 4);
         assert_eq!(derby.visual.emitters.len(), 20);
+        assert_eq!(derby.visual.width_m, 0.265);
+        assert_eq!(derby.visual.height_m, 0.19);
+        assert_eq!(derby.visual.depth_m, 0.19);
+        assert_eq!(derby.visual.model_kind(), FixtureModelKind::DerbyEffect);
+        assert_eq!(
+            derby
+                .visual
+                .emitters
+                .iter()
+                .filter(|emitter| emitter.casts_beam)
+                .count(),
+            4
+        );
+        assert!(
+            derby
+                .visual
+                .emitters
+                .iter()
+                .all(|emitter| emitter.beam_angle_degrees == 0.0 && emitter.beam_intensity == 0.0)
+        );
+        assert!(
+            derby
+                .visual
+                .emitters
+                .iter()
+                .filter(|emitter| emitter.kind == FixtureEmitterKind::Strobe as i32)
+                .all(|emitter| !emitter.casts_beam)
+        );
 
         let lixada = library
             .get(LIXADA_MINI_BUTTERFLY_ID)
             .expect("Lixada fixture should exist");
         assert_eq!(lixada.footprint, 7);
         assert_eq!(lixada.visual.emitters.len(), 4);
+        assert_eq!(lixada.visual.width_m, 0.2);
+        assert_eq!(lixada.visual.height_m, 0.14);
+        assert_eq!(lixada.visual.depth_m, 0.17);
+        assert_eq!(lixada.visual.model_kind(), FixtureModelKind::CompactEffect);
+        assert!(
+            lixada
+                .visual
+                .emitters
+                .iter()
+                .all(|emitter| emitter.casts_beam
+                    && emitter.direction_z > 0.85
+                    && emitter.beam_angle_degrees == 0.0
+                    && emitter.beam_intensity == 0.0)
+        );
         assert!(
             lixada
                 .channels
@@ -1426,6 +1605,19 @@ mod tests {
                 .filter(|channel| channel.has_semantic(DmxSemantic::CustomColor))
                 .all(|channel| channel.color_hues.len() == 2)
         );
+        for fixture_type in library.fixture_types() {
+            for channel in &fixture_type.channels {
+                assert!(
+                    channel
+                        .functions
+                        .windows(2)
+                        .all(|pair| pair[0].to_dmx < pair[1].from_dmx),
+                    "{} channel {} has overlapping functions",
+                    fixture_type.name,
+                    channel.coarse
+                );
+            }
+        }
     }
 
     #[test]

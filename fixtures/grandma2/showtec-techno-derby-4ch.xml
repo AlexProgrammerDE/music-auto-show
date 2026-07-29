@@ -18,7 +18,7 @@
           <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="393215" subattribute="NOFEATURE" subattribute_user_name="Off" attribute="DUMMY" feature="CONTROL">
             <ChannelSet index="0" name="Off" from_dmx="0" to_dmx="5"/>
           </ChannelFunction>
-          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="15073279" subattribute="COLORMIXCOLOR" subattribute_user_name="Color" attribute="COLORMIXER" feature="COLORMIX">
+          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="14155775" subattribute="COLORMIXCOLOR" subattribute_user_name="Color" attribute="COLORMIXER" feature="COLORMIX">
             <ChannelSet index="0" name="Red" from_dmx="6" to_dmx="20"/>
             <ChannelSet index="1" name="Green" from_dmx="21" to_dmx="35"/>
             <ChannelSet index="2" name="Blue" from_dmx="36" to_dmx="50"/>
@@ -43,7 +43,7 @@
           <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="393215" subattribute="NOFEATURE" subattribute_user_name="Strobe off" attribute="DUMMY" feature="CONTROL">
             <ChannelSet index="0" name="Strobe off" from_dmx="0" to_dmx="5"/>
           </ChannelFunction>
-          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="16777215" physfrom="0.1" physto="25" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
+          <ChannelFunction index="1" min_dmx_24="393216" max_dmx_24="16777215" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
             <ChannelSet index="0" name="Slow strobe" from_dmx="6" to_dmx="6"/>
             <ChannelSet index="1" name="Fast strobe" from_dmx="255" to_dmx="255"/>
           </ChannelFunction>
@@ -56,7 +56,7 @@
             <ChannelSet index="0" name="Manual start" from_dmx="1" to_dmx="1"/>
             <ChannelSet index="1" name="Manual end" from_dmx="127" to_dmx="127"/>
           </ChannelFunction>
-          <ChannelFunction index="2" min_dmx_24="8388608" max_dmx_24="16777215" physfrom="0.1" physto="10" subattribute="GOBO1_POSROT" subattribute_user_name="Automatic rotation" attribute="GOBO1_POS" feature="GOBO1">
+          <ChannelFunction index="2" min_dmx_24="8388608" max_dmx_24="16777215" subattribute="GOBO1_POSROT" subattribute_user_name="Automatic rotation" attribute="GOBO1_POS" feature="GOBO1">
             <ChannelSet index="0" name="Auto slow" from_dmx="128" to_dmx="128"/>
             <ChannelSet index="1" name="Auto fast" from_dmx="255" to_dmx="255"/>
           </ChannelFunction>
@@ -87,26 +87,26 @@
           </ChannelFunction>
         </ChannelType>
       </Module>
-      <Module index="1" name="RGBW beam 1" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
-      <Module index="2" name="RGBW beam 2" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
-      <Module index="3" name="RGBW beam 3" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
-      <Module index="4" name="RGBW beam 4" class="Conventional" beamtype="Beam" beam_angle="24" beam_intensity="1200"><Body><Size x="0.042" y="0.042" z="0.018"/></Body></Module>
-      <Module index="5" name="White strobe 1" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="6" name="White strobe 2" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="7" name="White strobe 3" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="8" name="White strobe 4" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="9" name="White strobe 5" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="10" name="White strobe 6" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="11" name="White strobe 7" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="12" name="White strobe 8" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="13" name="White strobe 9" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="14" name="White strobe 10" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="15" name="White strobe 11" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="16" name="White strobe 12" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="17" name="White strobe 13" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="18" name="White strobe 14" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="19" name="White strobe 15" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
-      <Module index="20" name="White strobe 16" class="Conventional" beamtype="Wash" beam_angle="55" beam_intensity="500"><Body><Size x="0.015" y="0.015" z="0.008"/></Body></Module>
+      <Module index="1" name="RGBW effect 1" class="Conventional" beamtype="Effect"><Body><Size x="0.042" y="0.018" z="0.042"/></Body></Module>
+      <Module index="2" name="RGBW effect 2" class="Conventional" beamtype="Effect"><Body><Size x="0.042" y="0.018" z="0.042"/></Body></Module>
+      <Module index="3" name="RGBW effect 3" class="Conventional" beamtype="Effect"><Body><Size x="0.042" y="0.018" z="0.042"/></Body></Module>
+      <Module index="4" name="RGBW effect 4" class="Conventional" beamtype="Effect"><Body><Size x="0.042" y="0.018" z="0.042"/></Body></Module>
+      <Module index="5" name="White strobe 1" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="6" name="White strobe 2" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="7" name="White strobe 3" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="8" name="White strobe 4" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="9" name="White strobe 5" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="10" name="White strobe 6" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="11" name="White strobe 7" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="12" name="White strobe 8" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="13" name="White strobe 9" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="14" name="White strobe 10" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="15" name="White strobe 11" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="16" name="White strobe 12" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="17" name="White strobe 13" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="18" name="White strobe 14" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="19" name="White strobe 15" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
+      <Module index="20" name="White strobe 16" class="LED" beamtype="None"><Body><Size x="0.015" y="0.008" z="0.015"/></Body></Module>
     </Modules>
     <Instances index="1">
       <Instance index="0" module_index="0"/>

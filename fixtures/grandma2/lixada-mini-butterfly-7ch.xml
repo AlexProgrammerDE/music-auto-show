@@ -6,7 +6,7 @@
   <Info datetime="2026-07-29T00:00:00" showfile="music-auto-show"/>
   <FixtureType index="0" name="LED Mini Butterfly" mode="7 channel">
     <InfoItems>
-      <Info type="Revision" date="2026-07-29T00:00:00">Mapped from the published L0142 seven-channel DMX chart.</Info>
+      <Info type="Revision" date="2026-07-29T00:00:00">Channel map corroborated by the available seven-channel chart; physical dimensions and optics remain preview estimates because no manufacturer manual is available.</Info>
     </InfoItems>
     <short_name>Mini Butterfly</short_name>
     <manufacturer>Lixada</manufacturer>
@@ -30,7 +30,7 @@
           <ChannelFunction index="0" min_dmx_24="0" max_dmx_24="65535" subattribute="NOFEATURE" subattribute_user_name="Strobe off" attribute="DUMMY" feature="CONTROL">
             <ChannelSet index="0" name="Strobe off" from_dmx="0" to_dmx="0"/>
           </ChannelFunction>
-          <ChannelFunction index="1" min_dmx_24="65536" max_dmx_24="16777215" physfrom="0.1" physto="25" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
+          <ChannelFunction index="1" min_dmx_24="65536" max_dmx_24="16777215" subattribute="STROBE" subattribute_user_name="Strobe" attribute="SHUTTER" feature="SHUTTER">
             <ChannelSet index="0" name="Slow strobe" from_dmx="1" to_dmx="1"/>
             <ChannelSet index="1" name="Fast strobe" from_dmx="255" to_dmx="255"/>
           </ChannelFunction>
@@ -54,10 +54,10 @@
           </ChannelFunction>
         </ChannelType>
       </Module>
-      <Module index="1" name="Color beam 1" class="Conventional" beamtype="Beam" beam_angle="18" beam_intensity="750"><Body><Size x="0.030" y="0.030" z="0.016"/></Body></Module>
-      <Module index="2" name="Color beam 2" class="Conventional" beamtype="Beam" beam_angle="18" beam_intensity="750"><Body><Size x="0.030" y="0.030" z="0.016"/></Body></Module>
-      <Module index="3" name="Color beam 3" class="Conventional" beamtype="Beam" beam_angle="18" beam_intensity="750"><Body><Size x="0.030" y="0.030" z="0.016"/></Body></Module>
-      <Module index="4" name="Color beam 4" class="Conventional" beamtype="Beam" beam_angle="18" beam_intensity="750"><Body><Size x="0.030" y="0.030" z="0.016"/></Body></Module>
+      <Module index="1" name="Color effect 1" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
+      <Module index="2" name="Color effect 2" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
+      <Module index="3" name="Color effect 3" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
+      <Module index="4" name="Color effect 4" class="Conventional" beamtype="Effect"><Body><Size x="0.030" y="0.016" z="0.030"/></Body></Module>
     </Modules>
     <Instances index="1">
       <Instance index="0" module_index="0"/>

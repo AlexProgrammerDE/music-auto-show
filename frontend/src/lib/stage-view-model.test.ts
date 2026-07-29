@@ -7,6 +7,7 @@ import {
   fixtureBrightness,
   fixtureColor,
   physicalAxisValue,
+  rotatedEffectDirection,
 } from "@/lib/stage-view-model"
 
 describe("stage view model", () => {
@@ -22,9 +23,23 @@ describe("stage view model", () => {
   })
 
   it("maps DMX values through physical grandMA2 axis ranges", () => {
-    expect(physicalAxisValue(0, -270, 270)).toBe(-270)
-    expect(physicalAxisValue(127.5, -270, 270)).toBe(0)
-    expect(physicalAxisValue(255, -270, 270)).toBe(270)
+    expect(physicalAxisValue(0, 0, -270, 270)).toBe(-270)
+    const belowCenter = physicalAxisValue(127, 255, -270, 270)
+    const aboveCenter = physicalAxisValue(128, 0, -270, 270)
+    expect(belowCenter).toBeCloseTo(-aboveCenter)
+    expect(Math.abs(belowCenter)).toBeLessThan(0.005)
+    expect(physicalAxisValue(255, 255, -270, 270)).toBe(270)
+  })
+
+  it("rotates an effect fan around its forward optical axis", () => {
+    const direction = { x: 0.4, y: 0.2, z: 1 }
+    const rotated = rotatedEffectDirection(direction, 0.25)
+    const magnitude = Math.hypot(rotated.x, rotated.y, rotated.z)
+
+    expect(rotated.x).toBeCloseTo(-0.1826, 4)
+    expect(rotated.y).toBeCloseTo(0.3651, 4)
+    expect(rotated.z).toBeGreaterThan(0.9)
+    expect(magnitude).toBeCloseTo(1)
   })
 
   it("stops a transformed beam at the stage floor", () => {

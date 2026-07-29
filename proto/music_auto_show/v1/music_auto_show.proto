@@ -555,6 +555,14 @@ enum FixtureEmitterKind {
   FIXTURE_EMITTER_KIND_STROBE = 3;
 }
 
+enum FixtureModelKind {
+  FIXTURE_MODEL_KIND_UNSPECIFIED = 0;
+  FIXTURE_MODEL_KIND_HEAD_MOVER = 1;
+  FIXTURE_MODEL_KIND_DERBY_EFFECT = 2;
+  FIXTURE_MODEL_KIND_COMPACT_EFFECT = 3;
+  FIXTURE_MODEL_KIND_GENERIC = 4;
+}
+
 message FixtureVisual {
   FixtureVisualKind kind = 1;
   float width_m = 2;
@@ -566,6 +574,7 @@ message FixtureVisual {
   float tilt_max_degrees = 8;
   repeated FixtureEmitter emitters = 9;
   repeated FixtureMesh meshes = 10;
+  FixtureModelKind model_kind = 11;
 }
 
 message FixtureEmitter {
@@ -578,6 +587,11 @@ message FixtureEmitter {
   float y_m = 7;
   float z_m = 8;
   uint32 color_rgb = 9;
+  float direction_x = 10;
+  float direction_y = 11;
+  float direction_z = 12;
+  bool casts_beam = 13;
+  float aperture_m = 14;
 }
 
 message FixtureMesh {

@@ -12,7 +12,7 @@
     <manufacturer>PURElight</manufacturer>
     <short_manufacturer>PURElight</short_manufacturer>
     <Modules index="0">
-      <Module index="0" name="Moving head" class="Headmover" beamtype="Wash" beam_angle="45" beam_intensity="10000">
+      <Module index="0" name="Moving head" class="Headmover" beamtype="Wash" beam_angle="45">
         <Body>
           <Size x="0.27" y="0.22" z="0.26"/>
         </Body>

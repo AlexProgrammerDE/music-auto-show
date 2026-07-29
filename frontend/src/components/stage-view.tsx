@@ -6,7 +6,7 @@ import {
   BufferGeometry,
   CanvasTexture,
   Color,
-  ConeGeometry,
+  CylinderGeometry,
   DirectionalLight,
   DoubleSide,
   Float32BufferAttribute,
@@ -30,6 +30,7 @@ import {
 
 import {
   FixtureEmitterKind,
+  FixtureModelKind,
   FixtureVisualKind,
   type FixtureConfig,
   type FixtureEmitter,
@@ -41,13 +42,14 @@ import {
   fixtureBrightness,
   fixtureColor,
   physicalAxisValue,
+  rotatedEffectDirection,
   type StagePoint,
 } from "@/lib/stage-view-model"
 
 type EmitterVisual = {
   readonly metadata: FixtureEmitter
-  readonly lens: Mesh<SphereGeometry, MeshStandardMaterial>
-  readonly beam: Mesh<ConeGeometry, MeshBasicMaterial>
+  readonly lens: Mesh<BufferGeometry, MeshStandardMaterial>
+  readonly beam?: Mesh<BufferGeometry, MeshBasicMaterial>
   readonly localDirection: Vector3
 }
 
@@ -86,7 +88,6 @@ const UP = new Vector3(0, 1, 0)
 const OPTICAL_FORWARD = new Vector3(0, 0, 1)
 const OFF_COLOR = new Color(0.055, 0.065, 0.07)
 const FIXTURE_SCALE = 2.4
-const FIXED_FIXTURE_PITCH_RADIANS = (58 * Math.PI) / 180
 const FIXTURE_LABEL_FONT = '600 32px "Public Sans Variable", "Public Sans", sans-serif'
 const FIXTURE_LABEL_HEIGHT = 52
 const FIXTURE_LABEL_MAX_TEXT_WIDTH = 400
@@ -199,17 +200,67 @@ function applyTheme(runtime: StageRuntime) {
   })
 }
 
+function createBeamGeometry(segments = 24) {
+  const positions: number[] = []
+  const indices: number[] = []
+  for (let ring = 0; ring < 2; ring += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2
+      positions.push(Math.cos(angle), ring === 0 ? 0.5 : -0.5, Math.sin(angle))
+    }
+  }
+  for (let segment = 0; segment < segments; segment += 1) {
+    const next = (segment + 1) % segments
+    const top = segment
+    const topNext = next
+    const bottom = segments + segment
+    const bottomNext = segments + next
+    indices.push(top, bottom, topNext, topNext, bottom, bottomNext)
+  }
+  const geometry = new BufferGeometry()
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3))
+  geometry.setIndex(indices)
+  return geometry
+}
+
+function updateBeamGeometry(
+  geometry: BufferGeometry,
+  length: number,
+  sourceRadius: number,
+  targetRadius: number,
+) {
+  const position = geometry.getAttribute("position")
+  const segments = position.count / 2
+  for (let ring = 0; ring < 2; ring += 1) {
+    const radius = ring === 0 ? sourceRadius : targetRadius
+    const y = ring === 0 ? length / 2 : -length / 2
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2
+      const index = ring * segments + segment
+      position.setXYZ(index, Math.cos(angle) * radius, y, Math.sin(angle) * radius)
+    }
+  }
+  position.needsUpdate = true
+  geometry.computeBoundingSphere()
+}
+
 function setBeamTransform(
-  beam: Mesh<ConeGeometry, MeshBasicMaterial>,
+  beam: Mesh<BufferGeometry, MeshBasicMaterial>,
   origin: Vector3,
   target: StagePoint,
+  beamAngleDegrees: number,
+  aperture: number,
 ) {
+  const previewBeamAngleDegrees = beamAngleDegrees > 0 ? beamAngleDegrees : 25
   const targetVector = new Vector3(target.x, target.y, target.z)
   const length = Math.max(0.05, origin.distanceTo(targetVector))
   const towardSource = origin.clone().sub(targetVector).normalize()
+  const halfAngle = (Math.max(1, Math.min(170, previewBeamAngleDegrees)) * Math.PI) / 360
+  const sourceRadius = Math.max(0.003, aperture / 2)
+  const targetRadius = sourceRadius + Math.tan(halfAngle) * length
+  updateBeamGeometry(beam.geometry, length, sourceRadius, targetRadius)
   beam.position.lerpVectors(origin, targetVector, 0.5)
   beam.quaternion.setFromUnitVectors(UP, towardSource)
-  beam.scale.set(1, length, 1)
 }
 
 function disposeScene(runtime: StageRuntime) {
@@ -272,19 +323,15 @@ function createEmbeddedMeshes(fixtureType: GrandMa2FixtureType, root: Group) {
   return materials
 }
 
-function createEmitterVisual(
-  metadata: FixtureEmitter,
-  parent: Group,
-  scene: Scene,
-  localDirection = OPTICAL_FORWARD,
-) {
+function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Scene) {
   const lensMaterial = new MeshStandardMaterial({
     color: OFF_COLOR,
     emissive: OFF_COLOR,
     emissiveIntensity: 0,
     roughness: 0.18,
   })
-  const lens = new Mesh(new SphereGeometry(0.045, 18, 12), lensMaterial)
+  const lensRadius = Math.max(0.018, Math.min(0.075, metadata.apertureM * FIXTURE_SCALE * 0.5))
+  const lens = new Mesh(new SphereGeometry(lensRadius, 18, 12), lensMaterial)
   lens.position.set(
     metadata.xM * FIXTURE_SCALE,
     metadata.yM * FIXTURE_SCALE,
@@ -292,33 +339,28 @@ function createEmitterVisual(
   )
   parent.add(lens)
 
-  const halfAngle = (Math.max(1, Math.min(170, metadata.beamAngleDegrees)) * Math.PI) / 360
-  const beamMaterial = new MeshBasicMaterial({
-    color: OFF_COLOR,
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    side: DoubleSide,
-    blending: AdditiveBlending,
-  })
-  const beam = new Mesh(new ConeGeometry(Math.tan(halfAngle), 1, 24, 1, true), beamMaterial)
-  beam.visible = false
-  scene.add(beam)
+  let beam: Mesh<BufferGeometry, MeshBasicMaterial> | undefined
+  if (metadata.castsBeam) {
+    const beamMaterial = new MeshBasicMaterial({
+      color: OFF_COLOR,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: DoubleSide,
+      blending: AdditiveBlending,
+    })
+    beam = new Mesh(createBeamGeometry(), beamMaterial)
+    beam.visible = false
+    scene.add(beam)
+  }
+  const localDirection = new Vector3(metadata.directionX, metadata.directionY, metadata.directionZ)
+  if (localDirection.lengthSq() <= Number.EPSILON) localDirection.copy(OPTICAL_FORWARD)
   return {
     metadata,
     lens,
     beam,
-    localDirection: localDirection.clone().normalize(),
+    localDirection: localDirection.normalize(),
   } satisfies EmitterVisual
-}
-
-function effectEmitterDirection(
-  metadata: FixtureEmitter,
-  dimensions: ReturnType<typeof fixtureDimensions>,
-) {
-  const x = (metadata.xM * FIXTURE_SCALE) / Math.max(0.01, dimensions.width * 0.52 * 0.5)
-  const y = (metadata.yM * FIXTURE_SCALE) / Math.max(0.01, dimensions.height * 0.52 * 0.5)
-  return new Vector3(x * 0.55, y * 0.45, 1).normalize()
 }
 
 function createMovingHead(
@@ -339,9 +381,9 @@ function createMovingHead(
   const bodyMaterial = createHousingMaterial()
   housingMaterials.push(bodyMaterial)
 
-  const baseHeight = dimensions.height * 0.24
+  const baseHeight = dimensions.height * 0.3
   const base = new Mesh(
-    new BoxGeometry(dimensions.width, baseHeight, dimensions.depth),
+    new CylinderGeometry(dimensions.width * 0.45, dimensions.width * 0.5, baseHeight, 24),
     bodyMaterial,
   )
   base.position.y = -baseHeight / 2
@@ -351,24 +393,51 @@ function createMovingHead(
   panPivot.position.y = -baseHeight
   root.add(panPivot)
 
-  const armHeight = dimensions.height * 0.54
-  const armWidth = Math.max(0.045, dimensions.width * 0.12)
+  const armHeight = dimensions.height * 0.5
+  const armWidth = Math.max(0.045, dimensions.width * 0.1)
   for (const side of [-1, 1]) {
-    const arm = new Mesh(new BoxGeometry(armWidth, armHeight, armWidth), bodyMaterial)
+    const arm = new Mesh(
+      new BoxGeometry(armWidth, armHeight, dimensions.depth * 0.24),
+      bodyMaterial,
+    )
     arm.position.set(side * dimensions.width * 0.37, -armHeight / 2, 0)
     panPivot.add(arm)
   }
 
   const tiltPivot = new Group()
-  tiltPivot.position.y = -armHeight * 0.6
+  tiltPivot.position.y = -armHeight * 0.58
   panPivot.add(tiltPivot)
+  const headDepth = dimensions.depth * 0.7
+  const headRadius = Math.min(dimensions.width * 0.31, dimensions.height * 0.2)
   const head = new Mesh(
-    new BoxGeometry(dimensions.width * 0.58, dimensions.height * 0.32, dimensions.depth * 0.68),
+    new CylinderGeometry(headRadius, headRadius * 0.95, headDepth, 28),
     bodyMaterial,
   )
+  head.rotation.x = Math.PI / 2
   tiltPivot.add(head)
 
+  const inactiveLensMaterial = new MeshStandardMaterial({
+    color: 0x121719,
+    roughness: 0.16,
+    metalness: 0.18,
+  })
+  const lensRingRadius = headRadius * 0.55
+  for (let lensIndex = 0; lensIndex < 6; lensIndex += 1) {
+    const angle = (lensIndex / 6) * Math.PI * 2
+    const lens = new Mesh(
+      new SphereGeometry(Math.max(0.018, headRadius * 0.13), 14, 10),
+      inactiveLensMaterial,
+    )
+    lens.position.set(
+      Math.cos(angle) * lensRingRadius,
+      Math.sin(angle) * lensRingRadius,
+      headDepth / 2,
+    )
+    tiltPivot.add(lens)
+  }
+
   const emitterGroup = new Group()
+  emitterGroup.position.z = headDepth / 2 - dimensions.depth / 2
   tiltPivot.add(emitterGroup)
   const metadata = fixtureType.visual?.emitters[0] ?? {
     id: "estimated-emitter",
@@ -380,6 +449,11 @@ function createMovingHead(
     yM: 0,
     zM: 0,
     colorRgb: 0,
+    directionX: 0,
+    directionY: 0,
+    directionZ: 1,
+    castsBeam: true,
+    apertureM: 0.08,
     $typeName: "music_auto_show.v1.FixtureEmitter" as const,
   }
   const emitters = [createEmitterVisual(metadata, emitterGroup, scene)]
@@ -413,33 +487,64 @@ function createFixedFixture(
   if (label) root.add(label.sprite)
 
   const aimGroup = new Group()
-  aimGroup.rotation.x = FIXED_FIXTURE_PITCH_RADIANS
+  aimGroup.position.y = -dimensions.height * 0.5
+  const opticalOrigin = mount.clone().add(aimGroup.position)
+  const stageTarget = new Vector3(mount.x, 0, 4.2)
+  const mountedDirection = stageTarget.sub(opticalOrigin).normalize()
+  aimGroup.quaternion.setFromUnitVectors(OPTICAL_FORWARD, mountedDirection)
   root.add(aimGroup)
 
   const housingMaterials = createEmbeddedMeshes(fixtureType, aimGroup)
   if (housingMaterials.length === 0) {
     const bodyMaterial = createHousingMaterial()
+    const modelKind = fixtureType.visual?.modelKind ?? FixtureModelKind.GENERIC
     const housing = new Mesh(
       new BoxGeometry(dimensions.width, dimensions.height, dimensions.depth),
       bodyMaterial,
     )
-    housing.position.y = -dimensions.height / 2
     aimGroup.add(housing)
+    const frontDepth = Math.max(0.018, dimensions.depth * 0.08)
+    const front = new Mesh(
+      new BoxGeometry(dimensions.width * 0.94, dimensions.height * 0.88, frontDepth),
+      bodyMaterial,
+    )
+    front.position.z = dimensions.depth / 2 + frontDepth / 2
+    aimGroup.add(front)
+
+    const bracketThickness = Math.max(0.018, dimensions.width * 0.045)
+    const bracketHeight =
+      modelKind === FixtureModelKind.DERBY_EFFECT
+        ? dimensions.height * 0.68
+        : dimensions.height * 0.48
+    for (const side of [-1, 1]) {
+      const arm = new Mesh(
+        new BoxGeometry(bracketThickness, bracketHeight, bracketThickness),
+        bodyMaterial,
+      )
+      arm.position.set(
+        side * dimensions.width * 0.55,
+        dimensions.height * 0.28,
+        -dimensions.depth * 0.18,
+      )
+      aimGroup.add(arm)
+    }
+    const bracketTop = new Mesh(
+      new BoxGeometry(dimensions.width * 1.15, bracketThickness, bracketThickness),
+      bodyMaterial,
+    )
+    bracketTop.position.set(
+      0,
+      dimensions.height * 0.28 + bracketHeight / 2,
+      -dimensions.depth * 0.18,
+    )
+    aimGroup.add(bracketTop)
     housingMaterials.push(bodyMaterial)
   }
 
   const emitterGroup = new Group()
-  emitterGroup.position.y = -dimensions.height / 2
   aimGroup.add(emitterGroup)
   const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
-    createEmitterVisual(
-      metadata,
-      emitterGroup,
-      scene,
-      fixtureType.visual?.kind === FixtureVisualKind.EFFECT
-        ? effectEmitterDirection(metadata, dimensions)
-        : OPTICAL_FORWARD,
-    ),
+    createEmitterVisual(metadata, emitterGroup, scene),
   )
   return {
     fixture,
@@ -551,7 +656,8 @@ function updateFixtureVisuals(
       const metadata = visual.fixtureType.visual
       visual.panPivot.rotation.y =
         (physicalAxisValue(
-          state.pan + state.panFine / 255,
+          state.pan,
+          state.panFine,
           metadata.panMinDegrees,
           metadata.panMaxDegrees,
         ) *
@@ -559,7 +665,8 @@ function updateFixtureVisuals(
         180
       const tiltRadians =
         (physicalAxisValue(
-          state.tilt + state.tiltFine / 255,
+          state.tilt,
+          state.tiltFine,
           metadata.tiltMinDegrees,
           metadata.tiltMaxDegrees,
         ) *
@@ -584,13 +691,14 @@ function updateFixtureVisuals(
         : strobePulse
           ? brightness
           : 0
-      const photometricGain = Math.max(
-        0.35,
-        Math.min(1.5, Math.sqrt(Math.max(1, emitter.metadata.beamIntensity) / 1000)),
-      )
+      const photometricGain =
+        emitter.metadata.beamIntensity > 0
+          ? Math.max(0.35, Math.min(1.5, Math.sqrt(emitter.metadata.beamIntensity / 1000)))
+          : 1
       emitter.lens.material.color.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
       emitter.lens.material.emissive.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
       emitter.lens.material.emissiveIntensity = emitterBrightness * 3.5 * photometricGain
+      if (!emitter.beam) return
       emitter.beam.visible = Boolean(state && emitterBrightness > 0.02)
       emitter.beam.material.color.copy(emitterColor)
       emitter.beam.material.opacity = Math.min(
@@ -601,13 +709,20 @@ function updateFixtureVisuals(
 
       const origin = new Vector3()
       emitter.lens.getWorldPosition(origin)
-      const localDirection = emitter.localDirection.clone()
-      if (visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT) {
-        localDirection.applyAxisAngle(OPTICAL_FORWARD, visual.rotationPhase * Math.PI * 2)
-      }
+      const rotatedDirection =
+        visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT
+          ? rotatedEffectDirection(emitter.localDirection, visual.rotationPhase)
+          : emitter.localDirection
+      const localDirection = new Vector3(rotatedDirection.x, rotatedDirection.y, rotatedDirection.z)
       const worldDirection = emitter.lens.localToWorld(localDirection).sub(origin).normalize()
       const target: StagePoint = beamTargetFromDirection(origin, worldDirection)
-      setBeamTransform(emitter.beam, origin, target)
+      setBeamTransform(
+        emitter.beam,
+        origin,
+        target,
+        emitter.metadata.beamAngleDegrees,
+        emitter.metadata.apertureM * FIXTURE_SCALE,
+      )
     })
   })
   runtime.renderer.render(runtime.scene, runtime.camera)

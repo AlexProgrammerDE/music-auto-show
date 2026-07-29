@@ -32,9 +32,26 @@ export function fixtureBrightness(state: FixtureState) {
   return emitterLevel * (state.dimmer / 255)
 }
 
-export function physicalAxisValue(value: number, minimum: number, maximum: number) {
-  const normalized = Math.max(0, Math.min(255, value)) / 255
+export function physicalAxisValue(coarse: number, fine: number, minimum: number, maximum: number) {
+  const coarseValue = Math.max(0, Math.min(255, Math.round(coarse)))
+  const fineValue = Math.max(0, Math.min(255, Math.round(fine)))
+  const normalized = (coarseValue * 256 + fineValue) / 65_535
   return minimum + (maximum - minimum) * normalized
+}
+
+export function rotatedEffectDirection(direction: StagePoint, phase: number): StagePoint {
+  const magnitude = Math.hypot(direction.x, direction.y, direction.z)
+  if (magnitude <= Number.EPSILON) return { x: 0, y: 0, z: 1 }
+
+  const angle = ((phase % 1) + 1) % 1
+  const radians = angle * Math.PI * 2
+  const cosine = Math.cos(radians)
+  const sine = Math.sin(radians)
+  return {
+    x: (direction.x * cosine - direction.y * sine) / magnitude,
+    y: (direction.x * sine + direction.y * cosine) / magnitude,
+    z: direction.z / magnitude,
+  }
 }
 
 export function beamTargetFromDirection(
