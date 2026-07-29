@@ -6,7 +6,8 @@
   <Info datetime="2026-07-29T00:00:00" showfile="music-auto-show"/>
   <FixtureType index="0" name="LED Mini Butterfly" mode="7 channel">
     <InfoItems>
-      <Info type="Revision" date="2026-07-29T00:00:00">Channel map corroborated by the available seven-channel chart; physical dimensions and optics remain preview estimates because no manufacturer manual is available.</Info>
+      <Info type="Revision" date="2026-07-29T00:00:00">Channel map corroborated by the available seven-channel chart.</Info>
+      <Info type="Warning" date="2026-07-29T00:00:00">Physical dimensions, emitter placement, and optics are preview estimates because no manufacturer manual is available.</Info>
     </InfoItems>
     <short_name>Mini Butterfly</short_name>
     <manufacturer>Lixada</manufacturer>

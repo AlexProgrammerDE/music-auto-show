@@ -8,6 +8,7 @@ import {
   fixtureColor,
   physicalAxisValue,
   rotatedEffectDirection,
+  strobePatternLevel,
 } from "@/lib/stage-view-model"
 
 describe("stage view model", () => {
@@ -40,6 +41,27 @@ describe("stage view model", () => {
     expect(rotated.y).toBeCloseTo(0.3651, 4)
     expect(rotated.z).toBeGreaterThan(0.9)
     expect(magnitude).toBeCloseTo(1)
+  })
+
+  it("keeps continuous Techno Derby strobe mode on across every emitter", () => {
+    expect(
+      Array.from({ length: 16 }, (_, emitterIndex) =>
+        strobePatternLevel(18, emitterIndex, 16, 2.4),
+      ),
+    ).toEqual(Array.from({ length: 16 }, () => 1))
+  })
+
+  it("previews Techno Derby chase patterns as deterministic selective groups", () => {
+    const firstFrame = Array.from({ length: 16 }, (_, emitterIndex) =>
+      strobePatternLevel(1, emitterIndex, 16, 0.5),
+    )
+    const repeatedFrame = Array.from({ length: 16 }, (_, emitterIndex) =>
+      strobePatternLevel(1, emitterIndex, 16, 0.5),
+    )
+
+    expect(firstFrame).toEqual(repeatedFrame)
+    expect(firstFrame.filter((level) => level === 1)).toHaveLength(1)
+    expect(strobePatternLevel(0, 0, 16, 0.5)).toBe(0)
   })
 
   it("stops a transformed beam at the stage floor", () => {

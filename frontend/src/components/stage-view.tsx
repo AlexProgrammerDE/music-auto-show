@@ -19,6 +19,7 @@ import {
   MeshStandardMaterial,
   PerspectiveCamera,
   PlaneGeometry,
+  Quaternion,
   Scene,
   SphereGeometry,
   Sprite,
@@ -27,13 +28,16 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three"
+import { OrbitControls } from "three/addons/controls/OrbitControls.js"
 
 import {
   FixtureEmitterKind,
   FixtureModelKind,
+  FixtureModelNodeKind,
   FixtureVisualKind,
   type FixtureConfig,
   type FixtureEmitter,
+  type FixtureModelNode,
   type FixtureState,
   type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
@@ -43,12 +47,14 @@ import {
   fixtureColor,
   physicalAxisValue,
   rotatedEffectDirection,
+  strobePatternLevel,
   type StagePoint,
 } from "@/lib/stage-view-model"
 
 type EmitterVisual = {
   readonly metadata: FixtureEmitter
   readonly lens: Mesh<BufferGeometry, MeshStandardMaterial>
+  readonly lenses: readonly Mesh<BufferGeometry, MeshStandardMaterial>[]
   readonly beam?: Mesh<BufferGeometry, MeshBasicMaterial>
   readonly localDirection: Vector3
 }
@@ -67,6 +73,9 @@ type FixtureVisual = {
   readonly mount: Vector3
   readonly panPivot?: Group
   readonly tiltPivot?: Group
+  readonly importedAxes: boolean
+  readonly panBaseQuaternion?: Quaternion
+  readonly tiltBaseQuaternion?: Quaternion
   readonly emitterGroup: Group
   readonly housingMaterials: readonly MeshStandardMaterial[]
   readonly emitters: readonly EmitterVisual[]
@@ -78,6 +87,7 @@ type StageRuntime = {
   readonly renderer: WebGLRenderer
   readonly scene: Scene
   readonly camera: PerspectiveCamera
+  readonly controls: OrbitControls
   readonly fixtures: ReadonlyMap<string, FixtureVisual>
   readonly floorMaterial: MeshStandardMaterial
   readonly trussMaterial: MeshStandardMaterial
@@ -85,7 +95,9 @@ type StageRuntime = {
 }
 
 const UP = new Vector3(0, 1, 0)
+const TILT_AXIS = new Vector3(1, 0, 0)
 const OPTICAL_FORWARD = new Vector3(0, 0, 1)
+const MODEL_OPTICAL_FORWARD = new Vector3(0, 1, 0)
 const OFF_COLOR = new Color(0.055, 0.065, 0.07)
 const FIXTURE_SCALE = 2.4
 const FIXTURE_LABEL_FONT = '600 32px "Public Sans Variable", "Public Sans", sans-serif'
@@ -250,8 +262,10 @@ function setBeamTransform(
   target: StagePoint,
   beamAngleDegrees: number,
   aperture: number,
+  visualKind: FixtureVisualKind,
 ) {
-  const previewBeamAngleDegrees = beamAngleDegrees > 0 ? beamAngleDegrees : 25
+  const previewBeamAngleDegrees =
+    beamAngleDegrees > 0 ? beamAngleDegrees : visualKind === FixtureVisualKind.EFFECT ? 5 : 25
   const targetVector = new Vector3(target.x, target.y, target.z)
   const length = Math.max(0.05, origin.distanceTo(targetVector))
   const towardSource = origin.clone().sub(targetVector).normalize()
@@ -264,6 +278,7 @@ function setBeamTransform(
 }
 
 function disposeScene(runtime: StageRuntime) {
+  runtime.controls.dispose()
   runtime.scene.traverse((object) => {
     if (object instanceof Mesh) {
       object.geometry.dispose()
@@ -301,42 +316,98 @@ function createHousingMaterial(color?: number) {
   })
 }
 
-function createEmbeddedMeshes(fixtureType: GrandMa2FixtureType, root: Group) {
-  const materials: MeshStandardMaterial[] = []
-  for (const metadata of fixtureType.visual?.meshes ?? []) {
-    if (metadata.vertices.length < 9 || metadata.indices.length < 3) continue
-    const geometry = new BufferGeometry()
-    geometry.setAttribute("position", new Float32BufferAttribute(metadata.vertices, 3))
-    if (metadata.normals.length === metadata.vertices.length) {
-      geometry.setAttribute("normal", new Float32BufferAttribute(metadata.normals, 3))
-    } else {
-      geometry.computeVertexNormals()
-    }
-    geometry.setIndex(metadata.indices)
-    geometry.computeBoundingSphere()
-    const material = createHousingMaterial(metadata.colorRgb)
-    const mesh = new Mesh(geometry, material)
-    mesh.scale.setScalar(FIXTURE_SCALE)
-    root.add(mesh)
-    materials.push(material)
-  }
-  return materials
+type ModelHierarchyVisual = {
+  readonly materials: readonly MeshStandardMaterial[]
+  readonly nodesById: ReadonlyMap<string, Group>
+  readonly panPivot?: Group
+  readonly tiltPivot?: Group
 }
 
-function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Scene) {
+function hasModelNodeKind(nodes: readonly FixtureModelNode[], kind: FixtureModelNodeKind): boolean {
+  return nodes.some((node) => node.kind === kind || hasModelNodeKind(node.children, kind))
+}
+
+function createModelHierarchy(
+  nodes: readonly FixtureModelNode[],
+  root: Group,
+): ModelHierarchyVisual {
+  const materials: MeshStandardMaterial[] = []
+  const nodesById = new Map<string, Group>()
+  let panPivot: Group | undefined
+  let tiltPivot: Group | undefined
+
+  const createNode = (metadata: FixtureModelNode, parent: Group) => {
+    const group = new Group()
+    group.name = metadata.name
+    const transform = metadata.transform
+    if (transform) {
+      group.position.set(
+        transform.xM * FIXTURE_SCALE,
+        transform.yM * FIXTURE_SCALE,
+        transform.zM * FIXTURE_SCALE,
+      )
+      group.quaternion.set(
+        transform.quaternionX,
+        transform.quaternionY,
+        transform.quaternionZ,
+        transform.quaternionW,
+      )
+      group.scale.set(transform.scaleX, transform.scaleY, transform.scaleZ)
+    }
+    parent.add(group)
+    nodesById.set(metadata.id, group)
+    if (!panPivot && metadata.kind === FixtureModelNodeKind.PAN_AXIS) panPivot = group
+    if (!tiltPivot && metadata.kind === FixtureModelNodeKind.TILT_AXIS) tiltPivot = group
+
+    const meshMetadata = metadata.mesh
+    if (meshMetadata && meshMetadata.vertices.length >= 9 && meshMetadata.indices.length >= 3) {
+      const geometry = new BufferGeometry()
+      geometry.setAttribute("position", new Float32BufferAttribute(meshMetadata.vertices, 3))
+      if (meshMetadata.normals.length === meshMetadata.vertices.length) {
+        geometry.setAttribute("normal", new Float32BufferAttribute(meshMetadata.normals, 3))
+      } else {
+        geometry.computeVertexNormals()
+      }
+      geometry.setIndex(meshMetadata.indices)
+      geometry.computeBoundingSphere()
+      const material = createHousingMaterial(meshMetadata.colorRgb)
+      const mesh = new Mesh(geometry, material)
+      mesh.scale.setScalar(FIXTURE_SCALE)
+      group.add(mesh)
+      materials.push(material)
+    }
+    metadata.children.forEach((child) => createNode(child, group))
+  }
+
+  nodes.forEach((node) => createNode(node, root))
+  return { materials, nodesById, panPivot, tiltPivot }
+}
+
+function createEmitterVisual(
+  metadata: FixtureEmitter,
+  fallbackParent: Group,
+  nodesById: ReadonlyMap<string, Group>,
+  scene: Scene,
+  lensRadiusOverride?: number,
+) {
+  const modelParent = metadata.modelNodeId ? nodesById.get(metadata.modelNodeId) : undefined
+  const parent = modelParent ?? fallbackParent
   const lensMaterial = new MeshStandardMaterial({
     color: OFF_COLOR,
     emissive: OFF_COLOR,
     emissiveIntensity: 0,
     roughness: 0.18,
   })
-  const lensRadius = Math.max(0.018, Math.min(0.075, metadata.apertureM * FIXTURE_SCALE * 0.5))
+  const lensRadius =
+    lensRadiusOverride ?? Math.max(0.018, Math.min(0.075, metadata.apertureM * FIXTURE_SCALE * 0.5))
   const lens = new Mesh(new SphereGeometry(lensRadius, 18, 12), lensMaterial)
-  lens.position.set(
-    metadata.xM * FIXTURE_SCALE,
-    metadata.yM * FIXTURE_SCALE,
-    metadata.zM * FIXTURE_SCALE,
-  )
+  if (!modelParent) {
+    lens.position.set(
+      metadata.xM * FIXTURE_SCALE,
+      metadata.yM * FIXTURE_SCALE,
+      metadata.zM * FIXTURE_SCALE,
+    )
+  }
   parent.add(lens)
 
   let beam: Mesh<BufferGeometry, MeshBasicMaterial> | undefined
@@ -353,11 +424,14 @@ function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Sce
     beam.visible = false
     scene.add(beam)
   }
-  const localDirection = new Vector3(metadata.directionX, metadata.directionY, metadata.directionZ)
+  const localDirection = modelParent
+    ? MODEL_OPTICAL_FORWARD.clone()
+    : new Vector3(metadata.directionX, metadata.directionY, metadata.directionZ)
   if (localDirection.lengthSq() <= Number.EPSILON) localDirection.copy(OPTICAL_FORWARD)
   return {
     metadata,
     lens,
+    lenses: [lens],
     beam,
     localDirection: localDirection.normalize(),
   } satisfies EmitterVisual
@@ -377,7 +451,37 @@ function createMovingHead(
   const label = createFixtureLabel(fixture.name)
   if (label) root.add(label.sprite)
 
-  const housingMaterials = createEmbeddedMeshes(fixtureType, root)
+  const modelNodes = fixtureType.visual?.modelNodes ?? []
+  const usesImportedHierarchy =
+    modelNodes.length > 0 &&
+    hasModelNodeKind(modelNodes, FixtureModelNodeKind.PAN_AXIS) &&
+    hasModelNodeKind(modelNodes, FixtureModelNodeKind.TILT_AXIS) &&
+    Boolean(fixtureType.visual?.emitters.some((emitter) => emitter.modelNodeId))
+  if (usesImportedHierarchy) {
+    const hierarchy = createModelHierarchy(modelNodes, root)
+    const emitterGroup = hierarchy.tiltPivot ?? root
+    const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
+      createEmitterVisual(metadata, emitterGroup, hierarchy.nodesById, scene),
+    )
+    return {
+      fixture,
+      fixtureType,
+      root,
+      mount,
+      panPivot: hierarchy.panPivot,
+      tiltPivot: hierarchy.tiltPivot,
+      importedAxes: true,
+      panBaseQuaternion: hierarchy.panPivot?.quaternion.clone(),
+      tiltBaseQuaternion: hierarchy.tiltPivot?.quaternion.clone(),
+      emitterGroup,
+      housingMaterials: hierarchy.materials,
+      emitters,
+      label,
+      rotationPhase: 0,
+    } satisfies FixtureVisual
+  }
+
+  const housingMaterials: MeshStandardMaterial[] = []
   const bodyMaterial = createHousingMaterial()
   housingMaterials.push(bodyMaterial)
 
@@ -416,26 +520,6 @@ function createMovingHead(
   head.rotation.x = Math.PI / 2
   tiltPivot.add(head)
 
-  const inactiveLensMaterial = new MeshStandardMaterial({
-    color: 0x121719,
-    roughness: 0.16,
-    metalness: 0.18,
-  })
-  const lensRingRadius = headRadius * 0.55
-  for (let lensIndex = 0; lensIndex < 6; lensIndex += 1) {
-    const angle = (lensIndex / 6) * Math.PI * 2
-    const lens = new Mesh(
-      new SphereGeometry(Math.max(0.018, headRadius * 0.13), 14, 10),
-      inactiveLensMaterial,
-    )
-    lens.position.set(
-      Math.cos(angle) * lensRingRadius,
-      Math.sin(angle) * lensRingRadius,
-      headDepth / 2,
-    )
-    tiltPivot.add(lens)
-  }
-
   const emitterGroup = new Group()
   emitterGroup.position.z = headDepth / 2 - dimensions.depth / 2
   tiltPivot.add(emitterGroup)
@@ -454,9 +538,24 @@ function createMovingHead(
     directionZ: 1,
     castsBeam: true,
     apertureM: 0.08,
+    modelNodeId: "",
     $typeName: "music_auto_show.v1.FixtureEmitter" as const,
   }
-  const emitters = [createEmitterVisual(metadata, emitterGroup, scene)]
+  const sourceLensRadius = Math.max(0.018, headRadius * 0.13)
+  const emitter = createEmitterVisual(metadata, emitterGroup, new Map(), scene, sourceLensRadius)
+  const lensRingRadius = headRadius * 0.55
+  const ringLenses = Array.from({ length: 6 }, (_, lensIndex) => {
+    const angle = (lensIndex / 6) * Math.PI * 2
+    const lens = new Mesh(new SphereGeometry(sourceLensRadius, 14, 10), emitter.lens.material)
+    lens.position.set(
+      Math.cos(angle) * lensRingRadius,
+      Math.sin(angle) * lensRingRadius,
+      metadata.zM * FIXTURE_SCALE,
+    )
+    emitterGroup.add(lens)
+    return lens
+  })
+  const emitters: readonly EmitterVisual[] = [{ ...emitter, lenses: [emitter.lens, ...ringLenses] }]
   return {
     fixture,
     fixtureType,
@@ -464,6 +563,7 @@ function createMovingHead(
     mount,
     panPivot,
     tiltPivot,
+    importedAxes: false,
     emitterGroup,
     housingMaterials,
     emitters,
@@ -486,16 +586,25 @@ function createFixedFixture(
   const label = createFixtureLabel(fixture.name)
   if (label) root.add(label.sprite)
 
-  const aimGroup = new Group()
-  aimGroup.position.y = -dimensions.height * 0.5
-  const opticalOrigin = mount.clone().add(aimGroup.position)
-  const stageTarget = new Vector3(mount.x, 0, 4.2)
-  const mountedDirection = stageTarget.sub(opticalOrigin).normalize()
-  aimGroup.quaternion.setFromUnitVectors(OPTICAL_FORWARD, mountedDirection)
-  root.add(aimGroup)
+  const modelNodes = fixtureType.visual?.modelNodes ?? []
+  let emitterGroup: Group
+  let nodesById: ReadonlyMap<string, Group>
+  let housingMaterials: readonly MeshStandardMaterial[]
+  if (modelNodes.length > 0) {
+    const hierarchy = createModelHierarchy(modelNodes, root)
+    emitterGroup = root
+    nodesById = hierarchy.nodesById
+    housingMaterials = hierarchy.materials
+  } else {
+    const aimGroup = new Group()
+    aimGroup.position.y = -dimensions.height * 0.5
+    const opticalOrigin = mount.clone().add(aimGroup.position)
+    const stageTarget = new Vector3(mount.x, 0, 4.2)
+    const mountedDirection = stageTarget.sub(opticalOrigin).normalize()
+    aimGroup.quaternion.setFromUnitVectors(OPTICAL_FORWARD, mountedDirection)
+    root.add(aimGroup)
 
-  const housingMaterials = createEmbeddedMeshes(fixtureType, aimGroup)
-  if (housingMaterials.length === 0) {
+    const materials: MeshStandardMaterial[] = []
     const bodyMaterial = createHousingMaterial()
     const modelKind = fixtureType.visual?.modelKind ?? FixtureModelKind.GENERIC
     const housing = new Mesh(
@@ -538,19 +647,22 @@ function createFixedFixture(
       -dimensions.depth * 0.18,
     )
     aimGroup.add(bracketTop)
-    housingMaterials.push(bodyMaterial)
+    materials.push(bodyMaterial)
+    emitterGroup = new Group()
+    aimGroup.add(emitterGroup)
+    nodesById = new Map()
+    housingMaterials = materials
   }
 
-  const emitterGroup = new Group()
-  aimGroup.add(emitterGroup)
   const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
-    createEmitterVisual(metadata, emitterGroup, scene),
+    createEmitterVisual(metadata, emitterGroup, nodesById, scene),
   )
   return {
     fixture,
     fixtureType,
     root,
     mount,
+    importedAxes: false,
     emitterGroup,
     housingMaterials,
     emitters,
@@ -577,6 +689,14 @@ function createStageRuntime(
   const camera = new PerspectiveCamera(42, 1, 0.1, 40)
   camera.position.set(0, 4.9, 8.2)
   camera.lookAt(0, 1.35, 0)
+  const controls = new OrbitControls(camera, canvas)
+  controls.target.set(0, 1.35, 0)
+  controls.enableDamping = true
+  controls.dampingFactor = 0.08
+  controls.minDistance = 2.5
+  controls.maxDistance = 18
+  controls.maxPolarAngle = Math.PI * 0.96
+  controls.update()
   scene.add(new HemisphereLight(0xffffff, 0x1b2224, 1.7))
   const keyLight = new DirectionalLight(0xffffff, 1.4)
   keyLight.position.set(3, 6, 5)
@@ -622,6 +742,7 @@ function createStageRuntime(
     renderer,
     scene,
     camera,
+    controls,
     fixtures: fixtureVisuals,
     floorMaterial,
     trussMaterial,
@@ -644,6 +765,7 @@ function updateFixtureVisuals(
   elapsedSeconds: number,
 ) {
   const stateById = new Map(states.map((state) => [state.fixtureId, state]))
+  const axisRotation = new Quaternion()
   runtime.fixtures.forEach((visual, fixtureId) => {
     const state = stateById.get(fixtureId)
     const color = state ? fixtureColor(state) : { red: 0, green: 0, blue: 0 }
@@ -654,7 +776,7 @@ function updateFixtureVisuals(
 
     if (state && visual.panPivot && visual.tiltPivot && visual.fixtureType.visual) {
       const metadata = visual.fixtureType.visual
-      visual.panPivot.rotation.y =
+      const panRadians =
         (physicalAxisValue(
           state.pan,
           state.panFine,
@@ -672,22 +794,48 @@ function updateFixtureVisuals(
         ) *
           Math.PI) /
         180
-      visual.tiltPivot.rotation.x = Math.PI / 2 - tiltRadians
+      if (visual.importedAxes && visual.panBaseQuaternion && visual.tiltBaseQuaternion) {
+        visual.panPivot.quaternion
+          .copy(visual.panBaseQuaternion)
+          .multiply(axisRotation.setFromAxisAngle(UP, panRadians))
+        visual.tiltPivot.quaternion
+          .copy(visual.tiltBaseQuaternion)
+          .multiply(axisRotation.setFromAxisAngle(TILT_AXIS, tiltRadians))
+      } else {
+        visual.panPivot.rotation.y = panRadians
+        visual.tiltPivot.rotation.x = Math.PI / 2 - tiltRadians
+      }
     }
     if (state) {
       visual.rotationPhase = wrappedPhaseStep(visual.rotationPhase, state.effectRotation)
     }
     visual.root.updateWorldMatrix(true, true)
 
+    const strobeEmitterCount = visual.emitters.filter(
+      (emitter) => emitter.metadata.kind === FixtureEmitterKind.STROBE,
+    ).length
+    let strobeEmitterIndex = 0
     visual.emitters.forEach((emitter) => {
       const kind = emitter.metadata.kind
       const strobeEmitter = kind === FixtureEmitterKind.STROBE
+      const patternLevel =
+        state && strobeEmitter && state.effectPattern > 0
+          ? strobePatternLevel(
+              state.effectPattern,
+              strobeEmitterIndex,
+              strobeEmitterCount,
+              elapsedSeconds,
+            )
+          : 0
+      if (strobeEmitter) strobeEmitterIndex += 1
       const emitterColor =
         strobeEmitter || kind === FixtureEmitterKind.WHITE ? new Color(1, 1, 1) : threeColor
       const emitterBrightness = strobeEmitter
-        ? state && state.strobe > 0 && strobePulse
-          ? Math.max(brightness, state.strobe / 255)
-          : 0
+        ? state?.effectPattern
+          ? patternLevel
+          : state && state.strobe > 0 && strobePulse
+            ? Math.max(brightness, state.strobe / 255)
+            : 0
         : strobePulse
           ? brightness
           : 0
@@ -695,9 +843,11 @@ function updateFixtureVisuals(
         emitter.metadata.beamIntensity > 0
           ? Math.max(0.35, Math.min(1.5, Math.sqrt(emitter.metadata.beamIntensity / 1000)))
           : 1
-      emitter.lens.material.color.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
-      emitter.lens.material.emissive.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
-      emitter.lens.material.emissiveIntensity = emitterBrightness * 3.5 * photometricGain
+      emitter.lenses.forEach((lens) => {
+        lens.material.color.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
+        lens.material.emissive.copy(emitterBrightness > 0 ? emitterColor : OFF_COLOR)
+        lens.material.emissiveIntensity = emitterBrightness * 3.5 * photometricGain
+      })
       if (!emitter.beam) return
       emitter.beam.visible = Boolean(state && emitterBrightness > 0.02)
       emitter.beam.material.color.copy(emitterColor)
@@ -710,7 +860,7 @@ function updateFixtureVisuals(
       const origin = new Vector3()
       emitter.lens.getWorldPosition(origin)
       const rotatedDirection =
-        visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT
+        visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT && !emitter.metadata.modelNodeId
           ? rotatedEffectDirection(emitter.localDirection, visual.rotationPhase)
           : emitter.localDirection
       const localDirection = new Vector3(rotatedDirection.x, rotatedDirection.y, rotatedDirection.z)
@@ -722,9 +872,11 @@ function updateFixtureVisuals(
         target,
         emitter.metadata.beamAngleDegrees,
         emitter.metadata.apertureM * FIXTURE_SCALE,
+        visual.fixtureType.visual.kind,
       )
     })
   })
+  runtime.controls.update()
   runtime.renderer.render(runtime.scene, runtime.camera)
 }
 
@@ -807,11 +959,16 @@ export function StageView({
     <div className="relative h-80 overflow-hidden bg-background">
       <canvas
         ref={canvasRef}
-        className="block size-full touch-manipulation"
-        aria-label="Live 3D stage preview driven by grandMA2 body, emitter, beam, pan, and tilt metadata"
+        className="block size-full cursor-grab touch-none active:cursor-grabbing"
+        aria-label="Interactive live 3D stage preview driven by grandMA2 body, emitter, beam, pan, and tilt metadata"
       >
         Live 3D stage preview
       </canvas>
+      {orderedFixtures.length > 0 && !webglUnavailable ? (
+        <p className="pointer-events-none absolute bottom-2 left-2 bg-background/80 px-2 py-1 text-[10px] text-muted-foreground">
+          Drag to orbit · Scroll or pinch to zoom · Right-drag or two-finger drag to pan
+        </p>
+      ) : null}
       {orderedFixtures.length === 0 ? (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           Add fixtures to preview the stage

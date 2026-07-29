@@ -7,6 +7,7 @@
   <FixtureType index="0" name="Techno Derby" mode="Default">
     <InfoItems>
       <Info type="Revision" date="2026-07-29T00:00:00">Corrected from the Showtec 43156 manufacturer manual.</Info>
+      <Info type="Warning" date="2026-07-29T00:00:00">Strobe pattern animations 1-17 are schematic previews because the manual does not document the individual LED sequences.</Info>
     </InfoItems>
     <short_name>Techno Derby</short_name>
     <manufacturer>Showtec</manufacturer>

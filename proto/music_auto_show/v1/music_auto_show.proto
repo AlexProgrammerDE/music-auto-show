@@ -563,6 +563,17 @@ enum FixtureModelKind {
   FIXTURE_MODEL_KIND_GENERIC = 4;
 }
 
+enum FixtureModelNodeKind {
+  FIXTURE_MODEL_NODE_KIND_UNSPECIFIED = 0;
+  FIXTURE_MODEL_NODE_KIND_GROUP = 1;
+  FIXTURE_MODEL_NODE_KIND_MESH = 2;
+  FIXTURE_MODEL_NODE_KIND_PAN_AXIS = 3;
+  FIXTURE_MODEL_NODE_KIND_TILT_AXIS = 4;
+  FIXTURE_MODEL_NODE_KIND_BEAM = 5;
+  FIXTURE_MODEL_NODE_KIND_BEAM_DIAMETER = 6;
+  FIXTURE_MODEL_NODE_KIND_BEAM_CLIP = 7;
+}
+
 message FixtureVisual {
   FixtureVisualKind kind = 1;
   float width_m = 2;
@@ -573,7 +584,7 @@ message FixtureVisual {
   float tilt_min_degrees = 7;
   float tilt_max_degrees = 8;
   repeated FixtureEmitter emitters = 9;
-  repeated FixtureMesh meshes = 10;
+  repeated FixtureModelNode model_nodes = 10;
   FixtureModelKind model_kind = 11;
 }
 
@@ -592,6 +603,7 @@ message FixtureEmitter {
   float direction_z = 12;
   bool casts_beam = 13;
   float aperture_m = 14;
+  string model_node_id = 15;
 }
 
 message FixtureMesh {
@@ -601,6 +613,31 @@ message FixtureMesh {
   repeated float normals = 4;
   repeated uint32 indices = 5;
   uint32 color_rgb = 6;
+}
+
+message FixtureModelTransform {
+  float x_m = 1;
+  float y_m = 2;
+  float z_m = 3;
+  float quaternion_x = 4;
+  float quaternion_y = 5;
+  float quaternion_z = 6;
+  float quaternion_w = 7;
+  float scale_x = 8;
+  float scale_y = 9;
+  float scale_z = 10;
+}
+
+message FixtureModelNode {
+  string id = 1;
+  string name = 2;
+  FixtureModelNodeKind kind = 3;
+  FixtureModelTransform transform = 4;
+  FixtureMesh mesh = 5;
+  repeated FixtureModelNode children = 6;
+  string emitter_id = 7;
+  float beam_diameter_m = 8;
+  float beam_clipping_distance_m = 9;
 }
 
 message FixtureConfig {

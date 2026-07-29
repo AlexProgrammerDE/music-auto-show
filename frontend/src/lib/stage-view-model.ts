@@ -54,6 +54,38 @@ export function rotatedEffectDirection(direction: StagePoint, phase: number): St
   }
 }
 
+export function strobePatternLevel(
+  pattern: number,
+  emitterIndex: number,
+  emitterCount: number,
+  elapsedSeconds: number,
+) {
+  const count = Math.max(0, Math.floor(emitterCount))
+  if (count === 0 || pattern <= 0 || emitterIndex < 0 || emitterIndex >= count) return 0
+  const selectedPattern = Math.max(1, Math.min(18, Math.round(pattern)))
+  if (selectedPattern === 18) return 1
+
+  const normalizedIndex = Math.floor(emitterIndex)
+  const speed = 4 + ((selectedPattern - 1) % 5) * 1.5
+  const step = Math.floor(Math.max(0, elapsedSeconds) * speed)
+  if (selectedPattern <= 8) {
+    const width = 1 + ((selectedPattern - 1) % 4)
+    const direction = selectedPattern <= 4 ? 1 : -1
+    const leadingIndex = (((direction * step) % count) + count) % count
+    return (normalizedIndex - leadingIndex + count) % count < Math.min(width, count) ? 1 : 0
+  }
+  if (selectedPattern <= 12) {
+    const groupSize = selectedPattern - 7
+    return (Math.floor(normalizedIndex / groupSize) + step) % 2 === 0 ? 1 : 0
+  }
+
+  const waveCount = 1 + ((selectedPattern - 13) % 3)
+  const phase =
+    (normalizedIndex / count) * Math.PI * 2 * waveCount + elapsedSeconds * speed * Math.PI * 2
+  const threshold = selectedPattern >= 16 ? -0.35 : 0.25
+  return Math.sin(phase) > threshold ? 1 : 0
+}
+
 export function beamTargetFromDirection(
   origin: StagePoint,
   direction: StagePoint,

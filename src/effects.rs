@@ -591,10 +591,9 @@ impl EffectsEngine {
             RotationMode::AutoSlow
             | RotationMode::AutoMedium
             | RotationMode::AutoFast
-            | RotationMode::AutoMusic => self.rotation_phase,
-            RotationMode::ManualSlow | RotationMode::ManualBeat => {
-                0.5 + 0.5 * (self.rotation_phase * TAU).sin()
-            }
+            | RotationMode::AutoMusic
+            | RotationMode::ManualSlow
+            | RotationMode::ManualBeat => self.rotation_phase,
         }
     }
 
@@ -1924,7 +1923,7 @@ mod tests {
             .expect("effects configuration")
             .rotation_mode = RotationMode::ManualSlow as i32;
         let config = validated(config);
-        approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 1.0, epsilon = 0.0001);
+        approx::assert_abs_diff_eq!(engine.preview_rotation(&config), 0.25, epsilon = 0.0001);
 
         let mut config = config.into_proto();
         config
