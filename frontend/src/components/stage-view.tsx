@@ -4,6 +4,7 @@ import {
   AdditiveBlending,
   BoxGeometry,
   BufferGeometry,
+  CanvasTexture,
   Color,
   ConeGeometry,
   DirectionalLight,
@@ -20,6 +21,8 @@ import {
   PlaneGeometry,
   Scene,
   SphereGeometry,
+  Sprite,
+  SpriteMaterial,
   SRGBColorSpace,
   Vector3,
   WebGLRenderer,
@@ -34,11 +37,9 @@ import {
   type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
-  effectBeamTarget,
-  fixedBeamTarget,
+  beamTargetFromDirection,
   fixtureBrightness,
   fixtureColor,
-  movingBeamTarget,
   physicalAxisValue,
   type StagePoint,
 } from "@/lib/stage-view-model"
@@ -47,6 +48,14 @@ type EmitterVisual = {
   readonly metadata: FixtureEmitter
   readonly lens: Mesh<SphereGeometry, MeshStandardMaterial>
   readonly beam: Mesh<ConeGeometry, MeshBasicMaterial>
+  readonly localDirection: Vector3
+}
+
+type FixtureLabelVisual = {
+  readonly canvas: HTMLCanvasElement
+  readonly name: string
+  readonly sprite: Sprite
+  readonly texture: CanvasTexture
 }
 
 type FixtureVisual = {
@@ -59,6 +68,7 @@ type FixtureVisual = {
   readonly emitterGroup: Group
   readonly housingMaterials: readonly MeshStandardMaterial[]
   readonly emitters: readonly EmitterVisual[]
+  readonly label?: FixtureLabelVisual
   rotationPhase: number
 }
 
@@ -73,14 +83,102 @@ type StageRuntime = {
 }
 
 const UP = new Vector3(0, 1, 0)
+const OPTICAL_FORWARD = new Vector3(0, 0, 1)
 const OFF_COLOR = new Color(0.055, 0.065, 0.07)
 const FIXTURE_SCALE = 2.4
+const FIXED_FIXTURE_PITCH_RADIANS = (58 * Math.PI) / 180
+const FIXTURE_LABEL_FONT = '600 32px "Public Sans Variable", "Public Sans", sans-serif'
+const FIXTURE_LABEL_HEIGHT = 52
+const FIXTURE_LABEL_MAX_TEXT_WIDTH = 400
+const FIXTURE_LABEL_WORLD_HEIGHT = 0.3
 
 function stageTheme() {
   const dark = document.documentElement.classList.contains("dark")
   return dark
-    ? { background: 0x090c0d, floor: 0x171d1f, structure: 0x7f898c, grid: 0x30383a }
-    : { background: 0xf8f9f9, floor: 0xe9eded, structure: 0x687174, grid: 0xc8d0d2 }
+    ? {
+        background: 0x090c0d,
+        floor: 0x171d1f,
+        structure: 0x7f898c,
+        grid: 0x30383a,
+        labelBackground: "rgba(9, 12, 13, 0.88)",
+        labelBorder: "rgba(127, 137, 140, 0.42)",
+        labelText: "#d9dfe0",
+      }
+    : {
+        background: 0xf8f9f9,
+        floor: 0xe9eded,
+        structure: 0x687174,
+        grid: 0xc8d0d2,
+        labelBackground: "rgba(248, 249, 249, 0.9)",
+        labelBorder: "rgba(104, 113, 116, 0.36)",
+        labelText: "#252b2d",
+      }
+}
+
+function fitFixtureLabel(context: CanvasRenderingContext2D, name: string, maxWidth: number) {
+  const label = name.trim() || "Unnamed fixture"
+  if (context.measureText(label).width <= maxWidth) return label
+
+  const suffix = "…"
+  let end = label.length
+  while (end > 1 && context.measureText(`${label.slice(0, end)}${suffix}`).width > maxWidth) {
+    end -= 1
+  }
+  return `${label.slice(0, end).trimEnd()}${suffix}`
+}
+
+function paintFixtureLabel(label: FixtureLabelVisual) {
+  const context = label.canvas.getContext("2d")
+  if (!context) return
+
+  const theme = stageTheme()
+  context.clearRect(0, 0, label.canvas.width, label.canvas.height)
+  context.fillStyle = theme.labelBackground
+  context.fillRect(0, 0, label.canvas.width, label.canvas.height)
+  context.strokeStyle = theme.labelBorder
+  context.lineWidth = 2
+  context.strokeRect(1, 1, label.canvas.width - 2, label.canvas.height - 2)
+  context.font = FIXTURE_LABEL_FONT
+  context.fillStyle = theme.labelText
+  context.textAlign = "center"
+  context.textBaseline = "middle"
+  context.fillText(label.name, label.canvas.width / 2, label.canvas.height / 2 + 1)
+  label.texture.needsUpdate = true
+}
+
+function createFixtureLabel(name: string) {
+  const canvas = document.createElement("canvas")
+  const context = canvas.getContext("2d")
+  if (!context) return undefined
+
+  context.font = FIXTURE_LABEL_FONT
+  const fittedName = fitFixtureLabel(context, name, FIXTURE_LABEL_MAX_TEXT_WIDTH)
+  canvas.width = Math.ceil(context.measureText(fittedName).width + 34)
+  canvas.height = FIXTURE_LABEL_HEIGHT
+
+  const texture = new CanvasTexture(canvas)
+  texture.colorSpace = SRGBColorSpace
+  const sprite = new Sprite(
+    new SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  )
+  sprite.center.set(0.5, 0)
+  sprite.position.set(0, 0.24, 0)
+  sprite.scale.set(
+    Math.min(1.55, (canvas.width / canvas.height) * FIXTURE_LABEL_WORLD_HEIGHT),
+    FIXTURE_LABEL_WORLD_HEIGHT,
+    1,
+  )
+  sprite.renderOrder = 20
+
+  const label = { canvas, name: fittedName, sprite, texture } satisfies FixtureLabelVisual
+  paintFixtureLabel(label)
+  return label
 }
 
 function applyTheme(runtime: StageRuntime) {
@@ -91,6 +189,7 @@ function applyTheme(runtime: StageRuntime) {
   runtime.trussMaterial.color.setHex(theme.structure)
   runtime.fixtures.forEach((fixture) => {
     fixture.housingMaterials.forEach((material) => material.color.setHex(theme.structure))
+    if (fixture.label) paintFixtureLabel(fixture.label)
   })
   const materials = Array.isArray(runtime.grid.material)
     ? runtime.grid.material
@@ -115,10 +214,16 @@ function setBeamTransform(
 
 function disposeScene(runtime: StageRuntime) {
   runtime.scene.traverse((object) => {
-    if (!(object instanceof Mesh)) return
-    object.geometry.dispose()
-    const materials = Array.isArray(object.material) ? object.material : [object.material]
-    materials.forEach((material) => material.dispose())
+    if (object instanceof Mesh) {
+      object.geometry.dispose()
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      materials.forEach((material) => material.dispose())
+      return
+    }
+    if (object instanceof Sprite) {
+      object.material.map?.dispose()
+      object.material.dispose()
+    }
   })
   runtime.grid.geometry.dispose()
   const gridMaterials = Array.isArray(runtime.grid.material)
@@ -167,7 +272,12 @@ function createEmbeddedMeshes(fixtureType: GrandMa2FixtureType, root: Group) {
   return materials
 }
 
-function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Scene) {
+function createEmitterVisual(
+  metadata: FixtureEmitter,
+  parent: Group,
+  scene: Scene,
+  localDirection = OPTICAL_FORWARD,
+) {
   const lensMaterial = new MeshStandardMaterial({
     color: OFF_COLOR,
     emissive: OFF_COLOR,
@@ -194,7 +304,21 @@ function createEmitterVisual(metadata: FixtureEmitter, parent: Group, scene: Sce
   const beam = new Mesh(new ConeGeometry(Math.tan(halfAngle), 1, 24, 1, true), beamMaterial)
   beam.visible = false
   scene.add(beam)
-  return { metadata, lens, beam } satisfies EmitterVisual
+  return {
+    metadata,
+    lens,
+    beam,
+    localDirection: localDirection.clone().normalize(),
+  } satisfies EmitterVisual
+}
+
+function effectEmitterDirection(
+  metadata: FixtureEmitter,
+  dimensions: ReturnType<typeof fixtureDimensions>,
+) {
+  const x = (metadata.xM * FIXTURE_SCALE) / Math.max(0.01, dimensions.width * 0.52 * 0.5)
+  const y = (metadata.yM * FIXTURE_SCALE) / Math.max(0.01, dimensions.height * 0.52 * 0.5)
+  return new Vector3(x * 0.55, y * 0.45, 1).normalize()
 }
 
 function createMovingHead(
@@ -207,6 +331,9 @@ function createMovingHead(
   const root = new Group()
   root.position.copy(mount)
   scene.add(root)
+
+  const label = createFixtureLabel(fixture.name)
+  if (label) root.add(label.sprite)
 
   const housingMaterials = createEmbeddedMeshes(fixtureType, root)
   const bodyMaterial = createHousingMaterial()
@@ -266,6 +393,7 @@ function createMovingHead(
     emitterGroup,
     housingMaterials,
     emitters,
+    label,
     rotationPhase: 0,
   } satisfies FixtureVisual
 }
@@ -281,7 +409,14 @@ function createFixedFixture(
   root.position.copy(mount)
   scene.add(root)
 
-  const housingMaterials = createEmbeddedMeshes(fixtureType, root)
+  const label = createFixtureLabel(fixture.name)
+  if (label) root.add(label.sprite)
+
+  const aimGroup = new Group()
+  aimGroup.rotation.x = FIXED_FIXTURE_PITCH_RADIANS
+  root.add(aimGroup)
+
+  const housingMaterials = createEmbeddedMeshes(fixtureType, aimGroup)
   if (housingMaterials.length === 0) {
     const bodyMaterial = createHousingMaterial()
     const housing = new Mesh(
@@ -289,15 +424,22 @@ function createFixedFixture(
       bodyMaterial,
     )
     housing.position.y = -dimensions.height / 2
-    root.add(housing)
+    aimGroup.add(housing)
     housingMaterials.push(bodyMaterial)
   }
 
   const emitterGroup = new Group()
   emitterGroup.position.y = -dimensions.height / 2
-  root.add(emitterGroup)
+  aimGroup.add(emitterGroup)
   const emitters = (fixtureType.visual?.emitters ?? []).map((metadata) =>
-    createEmitterVisual(metadata, emitterGroup, scene),
+    createEmitterVisual(
+      metadata,
+      emitterGroup,
+      scene,
+      fixtureType.visual?.kind === FixtureVisualKind.EFFECT
+        ? effectEmitterDirection(metadata, dimensions)
+        : OPTICAL_FORWARD,
+    ),
   )
   return {
     fixture,
@@ -307,6 +449,7 @@ function createFixedFixture(
     emitterGroup,
     housingMaterials,
     emitters,
+    label,
     rotationPhase: 0,
   } satisfies FixtureVisual
 }
@@ -414,7 +557,7 @@ function updateFixtureVisuals(
         ) *
           Math.PI) /
         180
-      visual.tiltPivot.rotation.x =
+      const tiltRadians =
         (physicalAxisValue(
           state.tilt + state.tiltFine / 255,
           metadata.tiltMinDegrees,
@@ -422,16 +565,14 @@ function updateFixtureVisuals(
         ) *
           Math.PI) /
         180
+      visual.tiltPivot.rotation.x = Math.PI / 2 - tiltRadians
     }
     if (state) {
       visual.rotationPhase = wrappedPhaseStep(visual.rotationPhase, state.effectRotation)
     }
-    if (visual.fixtureType.visual?.kind === FixtureVisualKind.EFFECT) {
-      visual.emitterGroup.rotation.y = visual.rotationPhase * Math.PI * 2
-    }
     visual.root.updateWorldMatrix(true, true)
 
-    visual.emitters.forEach((emitter, emitterIndex) => {
+    visual.emitters.forEach((emitter) => {
       const kind = emitter.metadata.kind
       const strobeEmitter = kind === FixtureEmitterKind.STROBE
       const emitterColor =
@@ -460,19 +601,12 @@ function updateFixtureVisuals(
 
       const origin = new Vector3()
       emitter.lens.getWorldPosition(origin)
-      let target: StagePoint
-      if (visual.fixtureType.visual.kind === FixtureVisualKind.MOVING_HEAD) {
-        target = movingBeamTarget(origin, visual.fixtureType.visual, state)
-      } else if (visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT) {
-        target = effectBeamTarget(
-          origin,
-          visual.rotationPhase,
-          emitterIndex,
-          visual.emitters.length,
-        )
-      } else {
-        target = fixedBeamTarget(origin)
+      const localDirection = emitter.localDirection.clone()
+      if (visual.fixtureType.visual.kind === FixtureVisualKind.EFFECT) {
+        localDirection.applyAxisAngle(OPTICAL_FORWARD, visual.rotationPhase * Math.PI * 2)
       }
+      const worldDirection = emitter.lens.localToWorld(localDirection).sub(origin).normalize()
+      const target: StagePoint = beamTargetFromDirection(origin, worldDirection)
       setBeamTransform(emitter.beam, origin, target)
     })
   })
@@ -563,22 +697,6 @@ export function StageView({
       >
         Live 3D stage preview
       </canvas>
-      <div className="pointer-events-none absolute top-[13%] right-[18%] left-[18%] flex justify-around gap-2">
-        {orderedFixtures.map((fixture) => {
-          const state = stateById.get(fixture.id)
-          return (
-            <span
-              key={fixture.id}
-              className="min-w-0 text-center font-heading text-[10px] text-muted-foreground"
-            >
-              <span className="block truncate">{fixture.name}</span>
-              {state && state.strobe > 0 ? (
-                <span className="mt-0.5 block text-[9px] text-foreground">Strobe</span>
-              ) : null}
-            </span>
-          )
-        })}
-      </div>
       {orderedFixtures.length === 0 ? (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           Add fixtures to preview the stage

@@ -1,4 +1,4 @@
-import type { FixtureState, FixtureVisual } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import type { FixtureState } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 export type StageColor = {
   readonly red: number
@@ -37,51 +37,25 @@ export function physicalAxisValue(value: number, minimum: number, maximum: numbe
   return minimum + (maximum - minimum) * normalized
 }
 
-export function movingBeamTarget(
+export function beamTargetFromDirection(
   origin: StagePoint,
-  visual: FixtureVisual,
-  state: FixtureState,
-  length = 6,
+  direction: StagePoint,
+  maxLength = 7,
+  floorY = 0,
 ): StagePoint {
-  const pan =
-    (physicalAxisValue(
-      state.pan + state.panFine / 255,
-      visual.panMinDegrees,
-      visual.panMaxDegrees,
-    ) *
-      Math.PI) /
-    180
-  const tilt =
-    (physicalAxisValue(
-      state.tilt + state.tiltFine / 255,
-      visual.tiltMinDegrees,
-      visual.tiltMaxDegrees,
-    ) *
-      Math.PI) /
-    180
-  const horizontal = Math.sin(tilt)
-  return {
-    x: origin.x + Math.sin(pan) * horizontal * length,
-    y: origin.y - Math.cos(tilt) * length,
-    z: origin.z + Math.cos(pan) * horizontal * length,
-  }
-}
+  const magnitude = Math.hypot(direction.x, direction.y, direction.z)
+  if (magnitude <= Number.EPSILON) return origin
 
-export function effectBeamTarget(
-  origin: StagePoint,
-  rotation: number,
-  beam: number,
-  beamCount: number,
-): StagePoint {
-  const angle = rotation * Math.PI * 2 + (beam / Math.max(1, beamCount)) * Math.PI * 2
-  const radius = 2.4 + (beam % 3) * 0.45
-  return {
-    x: origin.x + Math.sin(angle) * radius,
-    y: 0,
-    z: origin.z + Math.cos(angle) * radius,
+  const unit = {
+    x: direction.x / magnitude,
+    y: direction.y / magnitude,
+    z: direction.z / magnitude,
   }
-}
-
-export function fixedBeamTarget(origin: StagePoint): StagePoint {
-  return { x: origin.x, y: 0, z: origin.z + 0.7 }
+  const floorDistance = unit.y < -0.001 ? Math.max(0, origin.y - floorY) / -unit.y : maxLength
+  const length = Math.min(maxLength, Math.max(0.05, floorDistance))
+  return {
+    x: origin.x + unit.x * length,
+    y: origin.y + unit.y * length,
+    z: origin.z + unit.z * length,
+  }
 }
