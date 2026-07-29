@@ -27,3 +27,5 @@ target/
 # redistributed with the application.
 models/*.pt
 models/*.pth
+
+.env
