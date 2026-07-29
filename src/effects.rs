@@ -10,9 +10,9 @@ use crate::{
     config::ValidatedShowConfig,
     grandma2::{DmxSemantic, MappedChannel, MappedFunction, ParsedFixtureType},
     proto::v1::{
-        AudioAnalysis, EffectFixtureMode, EffectsConfig, FixtureConfig, FixtureState,
-        FixtureVisualKind, MovementMode, RgbColor, RotationMode, StrobeEffectMode,
-        VisualizationMode,
+        AudioAnalysis, EffectDriver, EffectFixtureMode, EffectRuntimeStatus, EffectsConfig,
+        EnergyTier, FixtureConfig, FixtureState, FixtureVisualKind, MovementMode, RgbColor,
+        RotationMode, StrobeEffectMode, VisualizationMode,
     },
 };
 
@@ -24,6 +24,7 @@ const REFERENCE_TEMPO: f32 = 120.0;
 pub struct EffectOutput {
     pub fixture_states: Vec<FixtureState>,
     pub universe: Vec<u8>,
+    pub runtime: EffectRuntimeStatus,
 }
 
 pub struct EffectsEngine {
@@ -111,12 +112,14 @@ impl EffectsEngine {
             return EffectOutput {
                 fixture_states: self.ordered_states(config),
                 universe: vec![0; universe_size],
+                runtime: self.runtime_status(config, audio, false),
             };
         }
 
         let now = self.elapsed_seconds;
         self.update_album_hues(album_colors);
         let beat_triggered = audio.estimated_beat != self.last_beat;
+        let beat_accent_active = beat_triggered && beat_response(config) > 0.0;
         let bar_triggered = audio.estimated_bar != self.last_bar;
         self.last_beat = audio.estimated_beat;
         self.last_bar = audio.estimated_bar;
@@ -139,12 +142,18 @@ impl EffectsEngine {
             self.process_effect_fixtures(
                 config,
                 audio,
-                beat_triggered,
+                beat_accent_active,
                 bar_triggered,
                 delta_seconds,
             );
             if effects(config).movement_enabled {
-                self.apply_movement(config, audio, beat_triggered, bar_triggered, delta_seconds);
+                self.apply_movement(
+                    config,
+                    audio,
+                    beat_accent_active,
+                    bar_triggered,
+                    delta_seconds,
+                );
             }
             if effects(config).force_max_brightness {
                 self.apply_force_max_brightness(config);
@@ -156,6 +165,77 @@ impl EffectsEngine {
         EffectOutput {
             fixture_states: self.ordered_states(config),
             universe,
+            runtime: self.runtime_status(config, audio, beat_accent_active),
+        }
+    }
+
+    fn runtime_status(
+        &self,
+        config: &ValidatedShowConfig,
+        audio: &AudioAnalysis,
+        beat_accent_active: bool,
+    ) -> EffectRuntimeStatus {
+        let visualization_mode = config.visualization_mode();
+        let harmony_palette_active =
+            effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18;
+        let mut active_drivers: Vec<i32> = match visualization_mode {
+            VisualizationMode::Energy | VisualizationMode::Unspecified => vec![
+                EffectDriver::Energy as i32,
+                EffectDriver::Bass as i32,
+                EffectDriver::Mid as i32,
+                EffectDriver::Beat as i32,
+                EffectDriver::Palette as i32,
+            ],
+            VisualizationMode::FrequencySplit => vec![
+                EffectDriver::Bass as i32,
+                EffectDriver::Mid as i32,
+                EffectDriver::High as i32,
+                EffectDriver::Beat as i32,
+            ],
+            VisualizationMode::BeatPulse => vec![
+                EffectDriver::Beat as i32,
+                EffectDriver::Downbeat as i32,
+                EffectDriver::Palette as i32,
+            ],
+            VisualizationMode::ColorCycle => vec![
+                EffectDriver::Beat as i32,
+                EffectDriver::Palette as i32,
+                EffectDriver::Time as i32,
+            ],
+            VisualizationMode::RainbowWave => vec![
+                EffectDriver::Energy as i32,
+                EffectDriver::Beat as i32,
+                EffectDriver::Time as i32,
+            ],
+            VisualizationMode::StrobeBeat => {
+                vec![EffectDriver::Beat as i32, EffectDriver::Bass as i32]
+            }
+            VisualizationMode::RandomFlash => {
+                vec![EffectDriver::Beat as i32, EffectDriver::Palette as i32]
+            }
+        };
+        if self.is_drop {
+            active_drivers.push(EffectDriver::Structure as i32);
+        }
+        if harmony_palette_active {
+            active_drivers.push(EffectDriver::Harmony as i32);
+        }
+        let rendered_color = average_rendered_color(self.smoothed.values());
+        EffectRuntimeStatus {
+            visualization_mode: visualization_mode as i32,
+            movement_mode: config.movement_mode() as i32,
+            rotation_mode: config.rotation_mode() as i32,
+            strobe_effect_mode: config.strobe_effect_mode() as i32,
+            palette_index: self.color_index as u32,
+            rendered_color: Some(rendered_color),
+            drop_active: self.is_drop,
+            strobe_active: self.strobe_active,
+            beat_accent_active,
+            beat_response: beat_response(config),
+            energy_tier: energy_tier(audio.energy) as i32,
+            active_drivers,
+            effect_cycle_position: (audio.estimated_beat % 32) as u32 + 1,
+            harmony_palette_active,
         }
     }
 
@@ -226,7 +306,10 @@ impl EffectsEngine {
         delta_seconds: f32,
     ) {
         let settings = effects(config);
-        if !self.album_hues.is_empty() {
+        if settings.harmony_palette_enabled && audio.harmonic_confidence >= 0.18 {
+            let circle_of_fifths_position = (audio.key_pitch_class * 7) % 12;
+            self.target_hue = (circle_of_fifths_position as f32 / 12.0 + audio.mid * 0.04) % 1.0;
+        } else if !self.album_hues.is_empty() {
             if bar {
                 self.color_index = (self.color_index + 1) % self.album_hues.len();
             }
@@ -246,7 +329,7 @@ impl EffectsEngine {
 
         self.base_intensity = 0.3 + audio.energy * 0.5;
         if beat {
-            self.pulse_intensity = 0.3 + audio.bass * 0.4;
+            self.pulse_intensity = (0.3 + audio.bass * 0.4) * beat_response(config);
         } else {
             self.pulse_intensity *= 1.0 - ease_out_cubic(audio.beat_position);
         }
@@ -288,7 +371,7 @@ impl EffectsEngine {
                 ((0.3 + audio.high * 0.7) * scale, 0.6 + audio.high * 0.15)
             };
             if beat {
-                intensity = (intensity + 0.2).min(1.0);
+                intensity = (intensity + 0.2 * beat_response(config)).min(1.0);
             }
             if let Some(state) = self.states.get_mut(&fixture_key(fixture)) {
                 set_hsv(state, hue, 0.9, intensity);
@@ -299,7 +382,10 @@ impl EffectsEngine {
 
     fn beat_pulse_mode(&mut self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) {
         let palette = [0.0, 0.15, 0.55, 0.75, 0.9];
-        let base_hue = if self.album_hues.is_empty() {
+        let base_hue = if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18
+        {
+            ((audio.key_pitch_class * 7) % 12) as f32 / 12.0
+        } else if self.album_hues.is_empty() {
             palette[audio.estimated_bar as usize % palette.len()]
         } else {
             self.album_hues[audio.estimated_bar as usize % self.album_hues.len()]
@@ -308,10 +394,18 @@ impl EffectsEngine {
         for fixture in &config.fixtures {
             let scale = fixture.intensity_scale * settings.intensity;
             let (brightness, hue) = if beat {
-                (scale, (base_hue + fixture.position as f32 * 0.05) % 1.0)
+                (
+                    scale * (0.15 + 0.85 * beat_response(config)).min(1.0),
+                    (base_hue + fixture.position as f32 * 0.05) % 1.0,
+                )
             } else {
                 (
-                    scale * (1.0 - ease_out_cubic(audio.beat_position)) * 0.8,
+                    scale
+                        * (0.12
+                            + (1.0 - ease_out_cubic(audio.beat_position))
+                                * 0.68
+                                * beat_response(config))
+                        .min(1.0),
                     base_hue,
                 )
             };
@@ -328,7 +422,11 @@ impl EffectsEngine {
         audio: &AudioAnalysis,
         beat: bool,
     ) {
-        let base_hue = if self.album_hues.is_empty() {
+        let base_hue = if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18
+        {
+            let harmonic_hue = ((audio.key_pitch_class * 7) % 12) as f32 / 12.0;
+            (harmonic_hue + audio.beat_position * 0.04).rem_euclid(1.0)
+        } else if self.album_hues.is_empty() {
             ((audio.estimated_beat % 32) as f32 + audio.beat_position) / 32.0
         } else {
             let current = audio.estimated_bar as usize % self.album_hues.len();
@@ -344,9 +442,9 @@ impl EffectsEngine {
         let settings = effects(config);
         let base_brightness = 0.4 + audio.energy * 0.4;
         let pulse = if beat {
-            0.2
+            0.2 * beat_response(config)
         } else {
-            0.2 * (1.0 - audio.beat_position)
+            0.2 * (1.0 - audio.beat_position) * beat_response(config)
         };
         let count = config.fixtures.len().max(1) as f32;
         for fixture in &config.fixtures {
@@ -380,7 +478,7 @@ impl EffectsEngine {
             let mut brightness =
                 base_brightness * wave_brightness * fixture.intensity_scale * settings.intensity;
             if beat {
-                brightness = (brightness + 0.15).min(1.0);
+                brightness = (brightness + 0.15 * beat_response(config)).min(1.0);
             }
             if let Some(state) = self.states.get_mut(&fixture_key(fixture)) {
                 set_hsv(state, hue, 0.85, brightness.max(0.1));
@@ -396,23 +494,29 @@ impl EffectsEngine {
         beat: bool,
     ) {
         let settings = effects(config);
+        let response = beat_response(config).min(1.0);
         for fixture in &config.fixtures {
             let scale = fixture.intensity_scale * settings.intensity;
             if let Some(state) = self.states.get_mut(&fixture_key(fixture)) {
                 if beat {
-                    state.red = 255;
-                    state.green = 255;
-                    state.blue = 255;
-                    state.dimmer = dmx(scale);
-                    state.strobe = 200;
+                    let brightness = scale * (0.12 + 0.88 * response);
+                    state.red = dmx(brightness);
+                    state.green = dmx(brightness);
+                    state.blue = dmx(brightness);
+                    state.dimmer = dmx(brightness);
+                    state.strobe = (200.0 * response) as u32;
                 } else {
-                    let decay = (1.0 - audio.beat_position * 3.0).max(0.0);
-                    let brightness = dmx(decay * scale);
+                    let decay = (1.0 - audio.beat_position * 3.0).max(0.0) * response;
+                    let brightness = dmx((0.06 + decay * 0.94) * scale);
                     state.red = brightness;
                     state.green = brightness;
                     state.blue = brightness;
                     state.dimmer = brightness;
-                    state.strobe = if audio.beat_position < 0.3 { 200 } else { 0 };
+                    state.strobe = if audio.beat_position < 0.3 {
+                        (200.0 * response) as u32
+                    } else {
+                        0
+                    };
                 }
             }
         }
@@ -425,8 +529,9 @@ impl EffectsEngine {
         beat: bool,
     ) {
         let settings = effects(config);
+        let response = beat_response(config).min(1.0);
         let mut flash_names = Vec::new();
-        let flash_hue = if beat && !config.fixtures.is_empty() {
+        let flash_hue = if beat && response > 0.0 && !config.fixtures.is_empty() {
             let count = (config.fixtures.len() / 3).max(1);
             flash_names = config
                 .fixtures
@@ -444,8 +549,9 @@ impl EffectsEngine {
             let scale = fixture.intensity_scale * settings.intensity;
             if let Some(state) = self.states.get_mut(&fixture_key(fixture)) {
                 if flash_names.contains(&fixture_key(fixture)) {
-                    set_hsv(state, flash_hue, 1.0, scale);
-                    state.dimmer = dmx(scale);
+                    let brightness = scale * (0.12 + 0.88 * response);
+                    set_hsv(state, flash_hue, 1.0, brightness);
+                    state.dimmer = dmx(brightness);
                 } else {
                     let decay = (1.0 - audio.beat_position * 2.5).max(0.0);
                     state.dimmer = (state.dimmer as f32 * decay) as u32;
@@ -602,6 +708,7 @@ impl EffectsEngine {
 
     fn strobe_value(&self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) -> u32 {
         let mode = config.effect_fixture_mode();
+        let response = beat_response(config).min(1.0);
         if mode == EffectFixtureMode::MovementOnly {
             return 0;
         }
@@ -612,20 +719,20 @@ impl EffectsEngine {
         match mode {
             EffectFixtureMode::StrobeOnly if value == 0 => {
                 if beat && audio.bass > 0.5 {
-                    value = (80.0 + audio.bass * 120.0) as u32;
+                    value = ((80.0 + audio.bass * 120.0) * response) as u32;
                 } else if audio.energy > 0.2 {
                     value = (6.0 + audio.energy * 100.0) as u32;
                 }
             }
             EffectFixtureMode::StrobeFocus if value == 0 => {
                 if beat && audio.bass > 0.6 {
-                    value = (60.0 + audio.bass * 100.0) as u32;
+                    value = ((60.0 + audio.bass * 100.0) * response) as u32;
                 } else if audio.energy > 0.5 {
                     value = (6.0 + (audio.energy - 0.5) * 60.0) as u32;
                 }
             }
             _ if value == 0 && beat && audio.bass > 0.8 => {
-                value = (80.0 + audio.bass * 80.0) as u32;
+                value = ((80.0 + audio.bass * 80.0) * response) as u32;
             }
             _ => {}
         }
@@ -1335,6 +1442,40 @@ impl EffectsEngine {
 
 fn effects(config: &ValidatedShowConfig) -> &EffectsConfig {
     config.effects()
+}
+
+fn beat_response(config: &ValidatedShowConfig) -> f32 {
+    (effects(config).beat_sensitivity * 2.0).clamp(0.0, 2.0)
+}
+
+fn energy_tier(energy: f32) -> EnergyTier {
+    if energy < 0.33 {
+        EnergyTier::Low
+    } else if energy < 0.7 {
+        EnergyTier::Medium
+    } else {
+        EnergyTier::High
+    }
+}
+
+fn average_rendered_color<'a>(states: impl Iterator<Item = &'a FixtureState>) -> RgbColor {
+    let (red, green, blue, count) =
+        states.fold((0_u64, 0_u64, 0_u64, 0_u64), |accumulator, state| {
+            (
+                accumulator.0 + u64::from(state.red),
+                accumulator.1 + u64::from(state.green),
+                accumulator.2 + u64::from(state.blue),
+                accumulator.3 + 1,
+            )
+        });
+    if count == 0 {
+        return RgbColor::default();
+    }
+    RgbColor {
+        red: (red / count) as u32,
+        green: (green / count) as u32,
+        blue: (blue / count) as u32,
+    }
 }
 
 fn fixture_key(fixture: &FixtureConfig) -> String {
@@ -2225,5 +2366,39 @@ mod tests {
 
         assert!(engine.target_pan["left-mover"] < 127.5);
         assert!(engine.target_pan["right-mover"] > 127.5);
+    }
+
+    #[test]
+    fn beat_sensitivity_scales_accents_and_runtime_telemetry() {
+        fn beat_frame(sensitivity: f32) -> EffectOutput {
+            let mut config = default_show_config(true);
+            let settings = config.effects.as_mut().expect("effects configuration");
+            settings.mode = VisualizationMode::Energy as i32;
+            settings.beat_sensitivity = sensitivity;
+            settings.smooth_factor = 0.0;
+            let config = validated(config);
+            EffectsEngine::default().process(
+                &config,
+                &AudioAnalysis {
+                    energy: 0.4,
+                    bass: 1.0,
+                    tempo: 120.0,
+                    estimated_beat: 1,
+                    ..Default::default()
+                },
+                &[],
+                false,
+                Duration::from_millis(25),
+            )
+        }
+
+        let disabled = beat_frame(0.0);
+        let full = beat_frame(1.0);
+
+        assert!(!disabled.runtime.beat_accent_active);
+        assert_eq!(disabled.runtime.beat_response, 0.0);
+        assert!(full.runtime.beat_accent_active);
+        assert_eq!(full.runtime.beat_response, 2.0);
+        assert!(full.fixture_states[0].dimmer > disabled.fixture_states[0].dimmer);
     }
 }

@@ -42,10 +42,13 @@ pub struct BeatEstimate {
     pub confidence: f32,
     pub beat_position: f32,
     pub bar_position: f32,
+    pub meter: u8,
+    pub beat_index: u8,
     pub estimated_beat: u64,
     pub estimated_bar: u64,
     pub beat_activation: f32,
     pub downbeat_activation: f32,
+    pub tracking_confidence: f32,
 }
 
 /// Fully causal BeatNet+ inference pipeline.
@@ -787,19 +790,24 @@ impl ParticleDecoder {
             .map(|particle| particle.tempo * particle.weight)
             .sum::<f32>();
         let phase = circular_phase(&self.particles);
-        let meter = self.weighted_meter().max(2) as f32;
-        let beat_in_bar = self.weighted_beat_in_bar() as f32;
+        let meter = self.weighted_meter().max(2);
+        let beat_in_bar = self.weighted_beat_in_bar();
+        let tracking_confidence =
+            (phase_consistency(&self.particles) * self.meter_confidence(meter)).clamp(0.0, 1.0);
         BeatEstimate {
             tempo,
             beat,
             downbeat,
             confidence: event_probability.clamp(0.0, 1.0),
             beat_position: phase,
-            bar_position: (beat_in_bar + phase) / meter,
+            bar_position: (beat_in_bar as f32 + phase) / meter as f32,
+            meter,
+            beat_index: beat_in_bar + 1,
             estimated_beat: self.beat_count,
             estimated_bar: self.bar_count.saturating_sub(1),
             beat_activation,
             downbeat_activation,
+            tracking_confidence,
         }
     }
 
@@ -852,6 +860,14 @@ impl ParticleDecoder {
             })
             .unwrap_or(0)
     }
+
+    fn meter_confidence(&self, meter: u8) -> f32 {
+        self.particles
+            .iter()
+            .filter(|particle| particle.meter == meter)
+            .map(|particle| particle.weight)
+            .sum()
+    }
 }
 
 fn circular_phase(particles: &[Particle]) -> f32 {
@@ -865,6 +881,19 @@ fn circular_phase(particles: &[Particle]) -> f32 {
             )
         });
     sine.atan2(cosine).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU
+}
+
+fn phase_consistency(particles: &[Particle]) -> f32 {
+    let (sine, cosine) = particles
+        .iter()
+        .fold((0.0, 0.0), |(sine, cosine), particle| {
+            let angle = particle.phase * std::f32::consts::TAU;
+            (
+                sine + angle.sin() * particle.weight,
+                cosine + angle.cos() * particle.weight,
+            )
+        });
+    sine.hypot(cosine).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -994,6 +1023,23 @@ mod tests {
             .map(|particle| particle.tempo * particle.weight)
             .sum::<f32>();
         approx::assert_abs_diff_eq!(tempo, 120.0, epsilon = 0.2);
+    }
+
+    #[test]
+    fn particle_consensus_exposes_meter_beat_index_and_lock() {
+        let mut decoder = ParticleDecoder::new();
+        let weight = 1.0 / decoder.particles.len() as f32;
+        for particle in &mut decoder.particles {
+            particle.meter = 3;
+            particle.beat_in_bar = 2;
+            particle.phase = 0.25;
+            particle.weight = weight;
+        }
+
+        assert_eq!(decoder.weighted_meter(), 3);
+        assert_eq!(decoder.weighted_beat_in_bar(), 2);
+        approx::assert_abs_diff_eq!(phase_consistency(&decoder.particles), 1.0, epsilon = 0.0001);
+        approx::assert_abs_diff_eq!(decoder.meter_confidence(3), 1.0, epsilon = 0.0001);
     }
 
     fn feed_synthetic_tempo(

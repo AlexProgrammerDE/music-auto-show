@@ -24,7 +24,7 @@ export function SectionPanel({
   readonly className?: string
 }) {
   return (
-    <section>
+    <section className="min-w-0">
       <Card size="sm" className={cn("gap-0 rounded-none py-0", className)}>
         <CardHeader className="min-h-12 gap-0 border-b py-2.5">
           <CardTitle>

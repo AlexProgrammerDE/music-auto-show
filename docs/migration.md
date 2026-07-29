@@ -17,8 +17,8 @@ After:  Rust capture, BeatNet+, effects, DMX, tonic-web + Vite SPA
 | --- | --- |
 | Audio capture | Native CPAL capture with stable device IDs, PipeWire or PulseAudio sink monitoring on Linux, and WASAPI loopback on Windows |
 | Simulation | Deterministic generated audio and an in-memory DMX universe |
-| Audio features | Energy, RMS, bass, mid, high, spectrum, waveform, onset history, danceability, and valence |
-| Beat tracking | Native [BeatNet+](https://github.com/mjhydri/BeatNet-Plus) feature extraction and inference with causal tempo, phase, beat, downbeat, and bar decoding |
+| Audio features | Energy, dBFS RMS and peak, clipping, bass, mid, high, logarithmic spectrum, waveform, onset history, 12-bin chroma, key, and confirmed section history |
+| Beat tracking | Native [BeatNet+](https://github.com/mjhydri/BeatNet-Plus) feature extraction and inference with causal tempo, phase, meter, beat, downbeat, bar, activation, and tracking-confidence telemetry |
 | Visualizations | Energy, frequency split, beat pulse, color cycle, rainbow wave, strobe beat, and random flash |
 | Movement | Subtle, standard, dramatic, wall wash, sweep, random, circle, figure eight, ballyhoo, fan, chase, strobe position, and crazy |
 | Fixture behavior | Smoothing, intensity scaling, grandMA2 physical pan and tilt ranges, color functions, channel sets, strobe programs, rotation, and blackout |
@@ -26,7 +26,7 @@ After:  Rust capture, BeatNet+, effects, DMX, tonic-web + Vite SPA
 | DMX | 512-channel inspection, Open DMX serial output, adapter discovery, status counters, and simulation |
 | Media | Cross-platform now-playing metadata and album-art palette extraction |
 | Recording | Input check while stopped, 30-second capture, metering, WAV preview, clear, and download |
-| Live UI | Waveform, spectrum, five-second spectrogram, meters, BeatNet+ state, metadata-driven 3D fixture models and beams, fixture output, media palette, and I/O status |
+| Live UI | Meter-aware beat runway, shared-axis spectrum and five-second waterfall, waveform, beat diagnostics, perceptual color mapping, harmonic wheel, confirmed structure timeline, six ambient presets, metadata-driven 3D stage, signal-to-show mapping, fixture reactions, media palette, and I/O status |
 | Configuration | Server-side validation, import, export, reset, active-file persistence, grandMA2 fixture files, and fixture patching |
 
 ## BeatNet+ boundary

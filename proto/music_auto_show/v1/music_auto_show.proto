@@ -208,6 +208,7 @@ message ShowSnapshot {
   float effects_fps = 14;
   RuntimeTimingStatus timing = 15;
   uint64 config_generation = 16;
+  EffectRuntimeStatus effect_runtime = 17;
 }
 
 message RuntimeTimingStatus {
@@ -221,6 +222,9 @@ message RuntimeTimingStatus {
 }
 
 message AudioAnalysis {
+  reserved 14, 15;
+  reserved "danceability", "valence";
+
   float energy = 1;
   float rms = 2;
   float bass = 3;
@@ -234,16 +238,64 @@ message AudioAnalysis {
   float bar_position = 11;
   uint64 estimated_beat = 12;
   uint64 estimated_bar = 13;
-  float danceability = 14;
-  float valence = 15;
   repeated float waveform = 16;
   repeated float spectrum = 17;
   repeated SpectrogramFrame spectrogram = 18;
   repeated float onset_history = 19;
+  uint32 meter = 20;
+  uint32 beat_index = 21;
+  float beat_activation = 22;
+  float downbeat_activation = 23;
+  float tracking_confidence = 24;
+  float rms_dbfs = 25;
+  float peak_dbfs = 26;
+  bool clipping = 27;
+  float spectrum_min_hz = 28;
+  float spectrum_max_hz = 29;
+  repeated AnalysisHistoryFrame history = 30;
+  repeated float chroma = 31;
+  uint32 key_pitch_class = 32;
+  Tonality tonality = 33;
+  float harmonic_confidence = 34;
+  MusicSection section = 35;
+  float section_confidence = 36;
+  repeated SectionMarker section_history = 37;
 }
 
 message SpectrogramFrame {
   repeated float bins = 1;
+}
+
+message AnalysisHistoryFrame {
+  float energy = 1;
+  float bass = 2;
+  float mid = 3;
+  float high = 4;
+  float beat_activation = 5;
+  float downbeat_activation = 6;
+}
+
+enum Tonality {
+  TONALITY_UNSPECIFIED = 0;
+  TONALITY_MAJOR = 1;
+  TONALITY_MINOR = 2;
+}
+
+enum MusicSection {
+  MUSIC_SECTION_UNSPECIFIED = 0;
+  MUSIC_SECTION_INTRO = 1;
+  MUSIC_SECTION_BUILD = 2;
+  MUSIC_SECTION_BREAKDOWN = 3;
+  MUSIC_SECTION_DROP = 4;
+  MUSIC_SECTION_MAIN = 5;
+  MUSIC_SECTION_OUTRO = 6;
+}
+
+message SectionMarker {
+  MusicSection section = 1;
+  uint64 estimated_bar = 2;
+  float confidence = 3;
+  uint64 sequence = 4;
 }
 
 message RgbColor {
@@ -418,6 +470,45 @@ message EffectsConfig {
   bool strobe_effect_enabled = 13;
   StrobeEffectMode strobe_effect_mode = 14;
   float strobe_effect_speed = 15;
+  bool harmony_palette_enabled = 16;
+}
+
+message EffectRuntimeStatus {
+  VisualizationMode visualization_mode = 1;
+  MovementMode movement_mode = 2;
+  RotationMode rotation_mode = 3;
+  StrobeEffectMode strobe_effect_mode = 4;
+  uint32 palette_index = 5;
+  RgbColor rendered_color = 6;
+  bool drop_active = 7;
+  bool strobe_active = 8;
+  bool beat_accent_active = 9;
+  float beat_response = 10;
+  EnergyTier energy_tier = 11;
+  repeated EffectDriver active_drivers = 12;
+  uint32 effect_cycle_position = 13;
+  bool harmony_palette_active = 14;
+}
+
+enum EnergyTier {
+  ENERGY_TIER_UNSPECIFIED = 0;
+  ENERGY_TIER_LOW = 1;
+  ENERGY_TIER_MEDIUM = 2;
+  ENERGY_TIER_HIGH = 3;
+}
+
+enum EffectDriver {
+  EFFECT_DRIVER_UNSPECIFIED = 0;
+  EFFECT_DRIVER_ENERGY = 1;
+  EFFECT_DRIVER_BASS = 2;
+  EFFECT_DRIVER_MID = 3;
+  EFFECT_DRIVER_HIGH = 4;
+  EFFECT_DRIVER_BEAT = 5;
+  EFFECT_DRIVER_DOWNBEAT = 6;
+  EFFECT_DRIVER_PALETTE = 7;
+  EFFECT_DRIVER_STRUCTURE = 8;
+  EFFECT_DRIVER_HARMONY = 9;
+  EFFECT_DRIVER_TIME = 10;
 }
 
 enum VisualizationMode {

@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    audio::{AudioWorker, AudioWorkerSnapshot, list_devices},
+    audio::{AudioWorker, AudioWorkerSnapshot, list_devices, silent_analysis},
     bluetooth::BluetoothReceiver,
     config::{self, ConfigError, ValidatedShowConfig},
     dmx::{DmxWorker, frame_interval as dmx_frame_interval},
@@ -931,6 +931,7 @@ impl RuntimeLoop {
         self.snapshot.media = Some(media);
         self.snapshot.fixture_states = output.fixture_states;
         self.snapshot.dmx_universe = output.universe;
+        self.snapshot.effect_runtime = Some(output.runtime);
         self.snapshot.effects_fps = effects_fps;
         self.runtime.audio_deadlines_skipped = audio_frame.analysis_deadlines_skipped;
         self.runtime.recoverable_audio_events = audio_frame.recoverable_stream_events;
@@ -1054,7 +1055,7 @@ fn reset_inactive_runtime_snapshot(
     config: &ValidatedShowConfig,
     simulate: bool,
 ) {
-    snapshot.audio = Some(Default::default());
+    snapshot.audio = Some(silent_analysis());
     snapshot.audio_runtime = Some(stopped_audio_status(config, simulate));
     snapshot.beatnet = Some(stopped_beatnet_status(config));
     snapshot.media = Some(MediaInfo {
@@ -1063,6 +1064,7 @@ fn reset_inactive_runtime_snapshot(
     });
     snapshot.fixture_states.clear();
     snapshot.dmx_universe = vec![0; config.dmx().universe_size as usize];
+    snapshot.effect_runtime = None;
     snapshot.effects_fps = 0.0;
 }
 

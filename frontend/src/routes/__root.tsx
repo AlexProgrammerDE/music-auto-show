@@ -1,6 +1,7 @@
 import { HouseIcon, WarningCircleIcon } from "@phosphor-icons/react"
 import type { QueryClient } from "@tanstack/react-query"
 import { createRootRouteWithContext, Link, Outlet, useRouter } from "@tanstack/react-router"
+import { NuqsAdapter } from "nuqs/adapters/tanstack-router"
 
 import { AppShell } from "@/components/app-shell"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -22,9 +23,11 @@ type RouterContext = {
 function RootComponent() {
   useSnapshotStream()
   return (
-    <AppShell>
-      <Outlet />
-    </AppShell>
+    <NuqsAdapter>
+      <AppShell>
+        <Outlet />
+      </AppShell>
+    </NuqsAdapter>
   )
 }
 

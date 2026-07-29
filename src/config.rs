@@ -619,6 +619,7 @@ fn default_effects() -> Option<EffectsConfig> {
         strobe_effect_enabled: true,
         strobe_effect_mode: StrobeEffectMode::Auto as i32,
         strobe_effect_speed: 0.5,
+        harmony_palette_enabled: false,
     })
 }
 

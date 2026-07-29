@@ -10,15 +10,16 @@ import {
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { Effect } from "effect"
+import { createStandardSchemaV1, useQueryState } from "nuqs"
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { AudioScope } from "@/components/audio-scope"
+import { AnalyzerView } from "@/components/analyzer-view"
 import { ConfirmCredenza } from "@/components/confirm-credenza"
-import { MediaPanel } from "@/components/media-panel"
 import { PageSkeleton } from "@/components/page-skeleton"
+import { PerformanceDeck } from "@/components/performance-deck"
 import { SectionPanel } from "@/components/section-panel"
-import { TempoPulse } from "@/components/tempo-pulse"
+import { FixtureReactionMatrix, SignalToShow } from "@/components/signal-to-show"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,25 +31,35 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Progress } from "@/components/ui/progress"
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
-import { RunState, ShowCommand } from "@/gen/music_auto_show/v1/music_auto_show_pb"
-import { formatDuration, formatPercent } from "@/lib/format"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  EffectDriver,
+  EnergyTier,
+  RunState,
+  ShowCommand,
+  VisualizationMode,
+} from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { dashboardSearchParams, dashboardViewParser } from "@/lib/dashboard-search"
+import { formatDuration, formatEnumLabel, formatPercent } from "@/lib/format"
 import {
   configQueryOptions,
   grandMa2FixtureTypesQueryOptions,
   showQueryKeys,
   snapshotQueryOptions,
 } from "@/lib/queries"
-import { deriveRuntimePresentation } from "@/lib/runtime-status"
+import { deriveRuntimePresentation, type RuntimePresentation } from "@/lib/runtime-status"
 import { ShowApi, runShowApi } from "@/lib/show-api"
 import { cn } from "@/lib/utils"
 
 const StageView = lazy(() =>
   import("@/components/stage-view").then((module) => ({ default: module.StageView })),
 )
+const AmbientVisualizer = lazy(() => import("@/components/ambient-visualizer"))
 
 export const Route = createFileRoute("/")({
+  validateSearch: createStandardSchemaV1(dashboardSearchParams, { partialOutput: true }),
   loader: async ({ context }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(snapshotQueryOptions),
@@ -60,23 +71,300 @@ export const Route = createFileRoute("/")({
   component: LiveDashboard,
 })
 
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function Metric({
+  label,
+  value,
+  detail,
+}: {
+  readonly label: string
+  readonly value: string
+  readonly detail?: string
+}) {
   return (
     <div className="border-b px-4 py-3 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
-      <p className="font-heading text-[11px] font-medium text-muted-foreground">{label}</p>
+      <p className="font-heading text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+        {label}
+      </p>
       <p className="mt-1.5 text-xl leading-none font-semibold tabular-nums">{value}</p>
-      {detail ? <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p> : null}
+      {detail ? <p className="mt-1 text-[10px] text-muted-foreground">{detail}</p> : null}
     </div>
   )
 }
 
-function Level({ label, value, color }: { label: string; value: number; color: string }) {
+function ShowControls({
+  blackoutPending,
+  commandPending,
+  onBlackout,
+  onCommand,
+  running,
+  snapshotState,
+  statusMessage,
+  transitioning,
+  blackout,
+}: {
+  readonly blackoutPending: boolean
+  readonly commandPending: boolean
+  readonly onBlackout: () => void
+  readonly onCommand: () => void
+  readonly running: boolean
+  readonly snapshotState: RunState
+  readonly statusMessage: string
+  readonly transitioning: boolean
+  readonly blackout: boolean
+}) {
   return (
-    <div className="grid grid-cols-[3.5rem_1fr_2.5rem] items-center gap-3">
-      <span className="font-heading text-[11px] font-medium text-muted-foreground">{label}</span>
-      <Progress value={value * 100} className={cn(color)} />
-      <span className="text-right text-[11px] tabular-nums">{formatPercent(value)}</span>
-    </div>
+    <section className="flex flex-col gap-4 border bg-card p-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          className={cn(
+            "size-2.5 shrink-0 rounded-full",
+            running && "bg-chart-1",
+            snapshotState === RunState.ERROR && "bg-destructive",
+            !running && snapshotState !== RunState.ERROR && "bg-muted-foreground/50",
+          )}
+        />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="font-heading text-base font-semibold">Live show</h1>
+            <Badge variant="outline">{formatEnumLabel(RunState[snapshotState] ?? "Stopped")}</Badge>
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {statusMessage || "Ready for audio input"}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant={blackout ? "destructive" : "outline"}
+          disabled={blackoutPending}
+          onClick={onBlackout}
+        >
+          {blackoutPending ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <WarningOctagonIcon
+              data-icon="inline-start"
+              weight={blackout ? "fill" : "regular"}
+              aria-hidden="true"
+            />
+          )}
+          {blackoutPending ? "Updating…" : blackout ? "Release Blackout" : "Blackout"}
+        </Button>
+        <Button disabled={transitioning || commandPending} onClick={onCommand}>
+          {commandPending || transitioning ? (
+            <Spinner data-icon="inline-start" />
+          ) : running ? (
+            <PauseIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+          ) : (
+            <PlayIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+          )}
+          {commandPending || transitioning
+            ? running
+              ? "Stopping…"
+              : "Starting…"
+            : running
+              ? "Stop Show"
+              : "Start Show"}
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function OperationalHealth({
+  runtime,
+  effectsFps,
+  energy,
+  sequence,
+}: {
+  readonly runtime: RuntimePresentation
+  readonly effectsFps: number
+  readonly energy: number
+  readonly sequence: bigint
+}) {
+  return (
+    <SectionPanel title="Operational health" description="Compact runtime and output status">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4">
+        <Metric
+          label="Audio"
+          value={runtime.audioActive ? "Live" : "Idle"}
+          detail={runtime.beatnetStatus}
+        />
+        <Metric
+          label="Energy"
+          value={runtime.audioActive ? formatPercent(energy) : "Idle"}
+          detail="normalized loudness"
+        />
+        <Metric
+          label="Effects"
+          value={runtime.effectsActive ? effectsFps.toFixed(1) : "Idle"}
+          detail={runtime.effectsActive ? "frames/sec" : "show stopped"}
+        />
+        <Metric label="DMX" value={runtime.dmx.label} detail={`snapshot ${sequence.toString()}`} />
+      </div>
+    </SectionPanel>
+  )
+}
+
+function EffectReadout({
+  visualizationMode,
+  drivers,
+  tier,
+  beatResponse,
+  dropActive,
+  strobeActive,
+  renderedColor,
+}: {
+  readonly visualizationMode: VisualizationMode
+  readonly drivers: readonly EffectDriver[]
+  readonly tier: EnergyTier
+  readonly beatResponse: number
+  readonly dropActive: boolean
+  readonly strobeActive: boolean
+  readonly renderedColor: { readonly red: number; readonly green: number; readonly blue: number }
+}) {
+  return (
+    <SectionPanel
+      title="Lighting state"
+      description="The active algorithm, drivers, and rendered result"
+      action={
+        <Badge variant="outline">
+          {formatEnumLabel(VisualizationMode[visualizationMode] ?? "Energy")}
+        </Badge>
+      }
+    >
+      <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div className="flex flex-wrap gap-1.5">
+          {drivers.map((driver) => (
+            <Badge key={driver} variant="secondary">
+              {formatEnumLabel(EffectDriver[driver] ?? "Signal")}
+            </Badge>
+          ))}
+          {dropActive ? <Badge variant="secondary">Drop active</Badge> : null}
+          {strobeActive ? <Badge variant="destructive">Strobe active</Badge> : null}
+        </div>
+        <dl className="grid grid-cols-3 gap-x-5 gap-y-1 text-right text-xs">
+          <dt className="text-muted-foreground">Tier</dt>
+          <dt className="text-muted-foreground">Beat</dt>
+          <dt className="text-muted-foreground">RGB</dt>
+          <dd>{formatEnumLabel(EnergyTier[tier] ?? "Low")}</dd>
+          <dd className="tabular-nums">{Math.round(beatResponse * 100)}%</dd>
+          <dd className="tabular-nums">
+            {renderedColor.red}·{renderedColor.green}·{renderedColor.blue}
+          </dd>
+        </dl>
+      </div>
+    </SectionPanel>
+  )
+}
+
+function RecordingPanel({
+  clearOpen,
+  onClearOpenChange,
+  onRecord,
+  pending,
+  recording,
+  recordingUrl,
+}: {
+  readonly clearOpen: boolean
+  readonly onClearOpenChange: (open: boolean) => void
+  readonly onRecord: (action: "start" | "stop" | "clear") => void
+  readonly pending: boolean
+  readonly recording:
+    | {
+        readonly durationSeconds: number
+        readonly maxDurationSeconds: number
+        readonly recording: boolean
+        readonly hasRecording: boolean
+      }
+    | undefined
+  readonly recordingUrl: string | undefined
+}) {
+  const progress = recording?.maxDurationSeconds
+    ? (recording.durationSeconds / recording.maxDurationSeconds) * 100
+    : 0
+  return (
+    <>
+      <SectionPanel title="Recording" description="Capture the active analysis source">
+        <div className="grid gap-4 p-4">
+          <Progress
+            value={progress}
+            className={cn(
+              "gap-x-3 gap-y-2",
+              recording?.recording && "[&_[data-slot=progress-indicator]]:bg-destructive",
+            )}
+          >
+            <ProgressLabel className="text-xs">Capture duration</ProgressLabel>
+            <ProgressValue className="text-xs">
+              {() =>
+                `${formatDuration(recording?.durationSeconds ?? 0)} / ${formatDuration(
+                  recording?.maxDurationSeconds ?? 0,
+                )}`
+              }
+            </ProgressValue>
+          </Progress>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={recording?.recording ? "destructive" : "outline"}
+              disabled={pending}
+              onClick={() => onRecord(recording?.recording ? "stop" : "start")}
+            >
+              {pending ? (
+                <Spinner data-icon="inline-start" />
+              ) : recording?.recording ? (
+                <StopIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+              ) : (
+                <RecordIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
+              )}
+              {pending ? "Working…" : recording?.recording ? "Stop & Save" : "Record"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!recording?.hasRecording || pending}
+              onClick={() => onClearOpenChange(true)}
+            >
+              <TrashIcon data-icon="inline-start" aria-hidden="true" /> Clear
+            </Button>
+            {recordingUrl ? (
+              <Button
+                nativeButton={false}
+                variant="ghost"
+                size="sm"
+                render={
+                  <a
+                    href={recordingUrl}
+                    download={`music-auto-show-${new Date().toISOString().slice(0, 10)}.wav`}
+                    aria-label="Download recorded audio"
+                  />
+                }
+              >
+                <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" /> Download
+              </Button>
+            ) : null}
+          </div>
+          {recordingUrl ? (
+            <audio
+              controls
+              src={recordingUrl}
+              className="h-9 w-full"
+              aria-label="Recorded audio preview"
+            />
+          ) : null}
+        </div>
+      </SectionPanel>
+      <ConfirmCredenza
+        open={clearOpen}
+        title="Clear the captured audio?"
+        description="This removes the current in-memory recording. Download it first if you need to keep it."
+        confirmLabel="Clear Recording"
+        icon={<TrashIcon aria-hidden="true" />}
+        pending={pending}
+        onOpenChange={onClearOpenChange}
+        onConfirm={() => onRecord("clear")}
+      />
+    </>
   )
 }
 
@@ -85,12 +373,17 @@ function LiveDashboard() {
   const { data: config } = useSuspenseQuery(configQueryOptions)
   const { data: fixtureTypes } = useSuspenseQuery(grandMa2FixtureTypesQueryOptions)
   const queryClient = Route.useRouteContext({ select: (context) => context.queryClient })
+  const [view, setView] = useQueryState(
+    "view",
+    dashboardViewParser.withOptions({ history: "push" }),
+  )
   const running = snapshot.runState === RunState.RUNNING
   const transitioning =
     snapshot.runState === RunState.STARTING || snapshot.runState === RunState.STOPPING
   const runtime = deriveRuntimePresentation(snapshot)
   const audio = snapshot.audio
   const recording = snapshot.recording
+  const effectRuntime = snapshot.effectRuntime
   const [recordingUrl, setRecordingUrl] = useState<string>()
   const [clearRecordingOpen, setClearRecordingOpen] = useState(false)
 
@@ -156,102 +449,19 @@ function LiveDashboard() {
     onError: (error) => toast.error(error.message),
   })
 
-  const fixtureStates = useMemo(
-    () =>
-      new Map(
-        snapshot.fixtureStates
-          .filter((fixture) => fixture.fixtureId !== "")
-          .map((fixture) => [fixture.fixtureId, fixture]),
-      ),
-    [snapshot.fixtureStates],
+  const fixtures = useMemo(
+    () => config.fixtures.filter((fixture) => fixture.id !== ""),
+    [config.fixtures],
   )
 
-  return (
-    <div className="grid gap-5">
-      <section className="flex flex-col gap-4 border bg-card p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <span
-            className={cn(
-              "size-2.5 shrink-0 rounded-full",
-              running && "bg-chart-1 shadow-sm",
-              snapshot.runState === RunState.ERROR && "bg-destructive",
-              !running && snapshot.runState !== RunState.ERROR && "bg-muted-foreground/50",
-            )}
-          />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="font-heading text-base font-semibold">Live show</h1>
-              <Badge variant="outline">{RunState[snapshot.runState]}</Badge>
-            </div>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {snapshot.statusMessage || "Ready for audio input"}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant={snapshot.blackout ? "destructive" : "outline"}
-            disabled={blackoutMutation.isPending}
-            onClick={() => blackoutMutation.mutate(!snapshot.blackout)}
-          >
-            {blackoutMutation.isPending ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <WarningOctagonIcon
-                data-icon="inline-start"
-                weight={snapshot.blackout ? "fill" : "regular"}
-                aria-hidden="true"
-              />
-            )}
-            {blackoutMutation.isPending
-              ? "Updating…"
-              : snapshot.blackout
-                ? "Release Blackout"
-                : "Blackout"}
-          </Button>
-          <Button
-            disabled={transitioning || commandMutation.isPending}
-            onClick={() => commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)}
-          >
-            {commandMutation.isPending || transitioning ? (
-              <Spinner data-icon="inline-start" />
-            ) : running ? (
-              <PauseIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
-            ) : (
-              <PlayIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
-            )}
-            {commandMutation.isPending || transitioning
-              ? running
-                ? "Stopping…"
-                : "Starting…"
-              : running
-                ? "Stop Show"
-                : "Start Show"}
-          </Button>
-        </div>
-      </section>
-
-      <section className="grid border bg-card sm:grid-cols-3 lg:grid-cols-[minmax(24rem,3fr)_repeat(3,minmax(0,1fr))]">
-        <TempoPulse active={runtime.audioActive} analysis={audio} />
-        <Metric
-          label="Energy"
-          value={runtime.audioActive ? formatPercent(audio?.energy ?? 0) : "Idle"}
-          detail={runtime.audioActive ? undefined : "Audio stopped"}
-        />
-        <Metric
-          label="Effects"
-          value={runtime.effectsActive ? snapshot.effectsFps.toFixed(1) : "Idle"}
-          detail={runtime.effectsActive ? "frames/sec" : "Show stopped"}
-        />
-        <Metric
-          label="DMX"
-          value={runtime.dmx.active ? `${snapshot.dmxRuntime?.sendCount ?? 0n}` : "Idle"}
-          detail={runtime.dmx.active ? "frames sent" : "Output stopped"}
-        />
-      </section>
-
-      <MediaPanel active={runtime.audioActive} media={snapshot.media} tempo={audio?.tempo ?? 0} />
-
+  const performance = (
+    <div className="grid min-w-0 gap-5">
+      <PerformanceDeck
+        active={runtime.audioActive}
+        analysis={audio}
+        effectRuntime={effectRuntime}
+        media={snapshot.media}
+      />
       <SectionPanel
         title="3D stage view"
         description="Live color, intensity, movement, strobe, and effect beams"
@@ -270,198 +480,27 @@ function LiveDashboard() {
           />
         </Suspense>
       </SectionPanel>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(290px,.75fr)]">
+      <EffectReadout
+        visualizationMode={effectRuntime?.visualizationMode ?? VisualizationMode.ENERGY}
+        drivers={effectRuntime?.activeDrivers ?? []}
+        tier={effectRuntime?.energyTier ?? EnergyTier.LOW}
+        beatResponse={effectRuntime?.beatResponse ?? 0}
+        dropActive={effectRuntime?.dropActive ?? false}
+        strobeActive={effectRuntime?.strobeActive ?? false}
+        renderedColor={effectRuntime?.renderedColor ?? { red: 0, green: 0, blue: 0 }}
+      />
+      <SignalToShow runtime={effectRuntime} />
+      {fixtures.length > 0 ? (
+        <FixtureReactionMatrix
+          fixtures={fixtures}
+          runtime={effectRuntime}
+          states={snapshot.fixtureStates}
+        />
+      ) : (
         <SectionPanel
-          title="Audio analysis"
-          description={snapshot.audioRuntime?.deviceName || "No active input device"}
-          action={
-            <Badge variant="outline">
-              {snapshot.audioRuntime?.sampleRate
-                ? `${snapshot.audioRuntime.sampleRate.toLocaleString()} Hz`
-                : "Waiting"}
-            </Badge>
-          }
+          title="Fixture reaction matrix"
+          description="Patch fixtures to see assignments"
         >
-          <div className="grid border-b md:grid-cols-2">
-            <AudioScope analysis={audio} mode="waveform" label="Waveform" />
-            <AudioScope analysis={audio} mode="spectrum" label="Spectrum" />
-          </div>
-          <AudioScope analysis={audio} mode="spectrogram" label="Spectrogram" />
-        </SectionPanel>
-
-        <div className="grid content-start gap-5">
-          <SectionPanel title="Frequency bands" description="Normalized live energy">
-            <div className="grid gap-4 p-4">
-              <Level
-                label="Bass"
-                value={audio?.bass ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-chart-2"
-              />
-              <Level
-                label="Mid"
-                value={audio?.mid ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-chart-3"
-              />
-              <Level
-                label="High"
-                value={audio?.high ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-chart-4"
-              />
-              <Level
-                label="RMS"
-                value={audio?.rms ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-chart-1"
-              />
-              <Level
-                label="Dance"
-                value={audio?.danceability ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-chart-5"
-              />
-              <Level
-                label="Valence"
-                value={audio?.valence ?? 0}
-                color="[&_[data-slot=progress-indicator]]:bg-primary"
-              />
-            </div>
-          </SectionPanel>
-
-          <SectionPanel
-            title="BeatNet+"
-            description={snapshot.beatnet?.modelName || "Native detector"}
-            action={
-              <Badge
-                variant={
-                  runtime.beatnetFailed
-                    ? "destructive"
-                    : runtime.beatnetAvailable
-                      ? "secondary"
-                      : "outline"
-                }
-              >
-                {runtime.beatnetStatus}
-              </Badge>
-            }
-          >
-            {runtime.beatnetFailed ? (
-              <Alert variant="destructive" className="m-4 mb-0">
-                <WarningOctagonIcon aria-hidden="true" />
-                <AlertTitle>BeatNet+ is unavailable</AlertTitle>
-                <AlertDescription>
-                  {runtime.beatnetError} The show continues with fallback analysis.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
-              <dt className="text-muted-foreground">Model buffer</dt>
-              <dd className="text-right tabular-nums">
-                {runtime.beatnetAvailable
-                  ? `${(snapshot.beatnet?.bufferDurationSeconds ?? 0).toFixed(2)} s`
-                  : runtime.beatnetStatus}
-              </dd>
-              <dt className="text-muted-foreground">Beat phase</dt>
-              <dd className="text-right tabular-nums">
-                {runtime.beatnetAvailable
-                  ? formatPercent(audio?.beatPosition ?? 0)
-                  : runtime.beatnetFailed
-                    ? "Unavailable"
-                    : "Idle"}
-              </dd>
-              <dt className="text-muted-foreground">Bar phase</dt>
-              <dd className="text-right tabular-nums">
-                {runtime.beatnetAvailable
-                  ? formatPercent(audio?.barPosition ?? 0)
-                  : runtime.beatnetFailed
-                    ? "Unavailable"
-                    : "Idle"}
-              </dd>
-              <dt className="text-muted-foreground">Downbeat</dt>
-              <dd className="text-right">{runtime.downbeatStatus}</dd>
-            </dl>
-          </SectionPanel>
-
-          <SectionPanel title="Recording" description="Capture the active analysis source">
-            <div className="grid gap-3 p-4">
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-muted-foreground">Duration</span>
-                <span className="tabular-nums">
-                  {formatDuration(recording?.durationSeconds ?? 0)} /{" "}
-                  {formatDuration(recording?.maxDurationSeconds ?? 0)}
-                </span>
-              </div>
-              <Progress
-                value={
-                  recording?.maxDurationSeconds
-                    ? (recording.durationSeconds / recording.maxDurationSeconds) * 100
-                    : 0
-                }
-                className={cn(
-                  recording?.recording && "[&_[data-slot=progress-indicator]]:bg-destructive",
-                )}
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant={recording?.recording ? "destructive" : "outline"}
-                  disabled={recordingMutation.isPending}
-                  onClick={() => recordingMutation.mutate(recording?.recording ? "stop" : "start")}
-                >
-                  {recordingMutation.isPending ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : recording?.recording ? (
-                    <StopIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
-                  ) : (
-                    <RecordIcon data-icon="inline-start" weight="fill" aria-hidden="true" />
-                  )}
-                  {recordingMutation.isPending
-                    ? "Working…"
-                    : recording?.recording
-                      ? "Stop & Save"
-                      : "Record"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={!recording?.hasRecording || recordingMutation.isPending}
-                  onClick={() => setClearRecordingOpen(true)}
-                >
-                  <TrashIcon data-icon="inline-start" aria-hidden="true" /> Clear
-                </Button>
-                {recordingUrl ? (
-                  <Button
-                    nativeButton={false}
-                    variant="ghost"
-                    size="sm"
-                    render={
-                      <a
-                        href={recordingUrl}
-                        download={`music-auto-show-${new Date().toISOString().slice(0, 10)}.wav`}
-                        aria-label="Download recorded audio"
-                      />
-                    }
-                  >
-                    <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" /> Download
-                  </Button>
-                ) : null}
-              </div>
-              {recordingUrl ? (
-                <audio
-                  controls
-                  src={recordingUrl}
-                  className="h-9 w-full"
-                  aria-label="Recorded audio preview"
-                />
-              ) : null}
-            </div>
-          </SectionPanel>
-        </div>
-      </div>
-
-      <SectionPanel
-        title="Stage output"
-        description={`${config.fixtures.length} configured fixture${config.fixtures.length === 1 ? "" : "s"}`}
-      >
-        {config.fixtures.length === 0 ? (
           <Empty className="min-h-48 rounded-none">
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -469,7 +508,7 @@ function LiveDashboard() {
               </EmptyMedia>
               <EmptyTitle>No stage output</EmptyTitle>
               <EmptyDescription>
-                Add a fixture to patch the universe and preview live output.
+                Add a fixture to inspect its live signal assignment and response.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -478,56 +517,89 @@ function LiveDashboard() {
               </Button>
             </EmptyContent>
           </Empty>
-        ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-            {config.fixtures.map((fixture) => {
-              const state = fixtureStates.get(fixture.id)
-              const red = state?.red ?? 0
-              const green = state?.green ?? 0
-              const blue = state?.blue ?? 0
-              return (
-                <div
-                  key={fixture.id}
-                  className="flex items-center gap-3 border-r border-b p-3 last:border-r-0"
-                >
-                  <span className="grid size-10 shrink-0 grid-cols-3 items-end gap-0.5 border bg-muted p-1">
-                    <Progress
-                      value={(red / 255) * 100}
-                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-2 [&_[data-slot=progress-track]]:h-full"
-                    />
-                    <Progress
-                      value={(green / 255) * 100}
-                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-3 [&_[data-slot=progress-track]]:h-full"
-                    />
-                    <Progress
-                      value={(blue / 255) * 100}
-                      className="h-full items-end [&_[data-slot=progress-indicator]]:w-full [&_[data-slot=progress-indicator]]:bg-chart-4 [&_[data-slot=progress-track]]:h-full"
-                    />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate font-heading text-xs font-semibold">{fixture.name}</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
-                      RGB {red} · {green} · {blue}
-                    </p>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </SectionPanel>
-
-      <ConfirmCredenza
-        open={clearRecordingOpen}
-        title="Clear the recording?"
-        description="This removes the captured audio from memory and revokes its download link."
-        confirmLabel="Clear Recording"
-        icon={<TrashIcon aria-hidden="true" />}
-        destructive
-        pending={recordingMutation.isPending}
-        onOpenChange={setClearRecordingOpen}
-        onConfirm={() => recordingMutation.mutate("clear")}
+        </SectionPanel>
+      )}
+      <OperationalHealth
+        runtime={runtime}
+        effectsFps={snapshot.effectsFps}
+        energy={audio?.energy ?? 0}
+        sequence={snapshot.sequence}
       />
+    </div>
+  )
+
+  return (
+    <div className="grid gap-5">
+      <ShowControls
+        blackoutPending={blackoutMutation.isPending}
+        commandPending={commandMutation.isPending}
+        onBlackout={() => blackoutMutation.mutate(!snapshot.blackout)}
+        onCommand={() => commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)}
+        running={running}
+        snapshotState={snapshot.runState}
+        statusMessage={snapshot.statusMessage}
+        transitioning={transitioning}
+        blackout={snapshot.blackout}
+      />
+
+      {runtime.beatnetFailed ? (
+        <Alert variant="destructive">
+          <WarningOctagonIcon aria-hidden="true" />
+          <AlertTitle>Beat mapping is running in fallback mode</AlertTitle>
+          <AlertDescription>{runtime.beatnetError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Tabs
+        value={view}
+        onValueChange={(value) => void setView(value as typeof view, { history: "push" })}
+        className="min-w-0 gap-4"
+      >
+        <TabsList
+          variant="line"
+          className="h-auto w-full justify-start overflow-x-auto border-b px-1 pb-2"
+          aria-label="Live show workspace"
+        >
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="analyzer">Analyzer</TabsTrigger>
+          <TabsTrigger value="ambient">Ambient</TabsTrigger>
+        </TabsList>
+        <TabsContent value="performance" className="min-w-0">
+          {view === "performance" ? performance : null}
+        </TabsContent>
+        <TabsContent value="analyzer" className="min-w-0">
+          {view === "analyzer" ? (
+            <div className="grid gap-5">
+              <AnalyzerView
+                analysis={audio}
+                audioRuntime={snapshot.audioRuntime}
+                beatnet={snapshot.beatnet}
+              />
+              <RecordingPanel
+                clearOpen={clearRecordingOpen}
+                onClearOpenChange={setClearRecordingOpen}
+                onRecord={(action) => recordingMutation.mutate(action)}
+                pending={recordingMutation.isPending}
+                recording={recording}
+                recordingUrl={recordingUrl}
+              />
+            </div>
+          ) : null}
+        </TabsContent>
+        <TabsContent value="ambient" className="min-w-0">
+          {view === "ambient" ? (
+            <Suspense
+              fallback={
+                <div className="flex min-h-[28rem] items-center justify-center border bg-card text-xs text-muted-foreground">
+                  Preparing ambient visualizer
+                </div>
+              }
+            >
+              <AmbientVisualizer analysis={audio} effectRuntime={effectRuntime} />
+            </Suspense>
+          ) : null}
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

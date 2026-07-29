@@ -119,6 +119,7 @@ function configFormValues(config: ShowConfig) {
     strobeEffectEnabled: config.effects?.strobeEffectEnabled ?? true,
     strobeEffectMode: config.effects?.strobeEffectMode ?? StrobeEffectMode.AUTO,
     strobeEffectSpeed: cleanFloat(config.effects?.strobeEffectSpeed ?? 0.5),
+    harmonyPaletteEnabled: config.effects?.harmonyPaletteEnabled ?? false,
   }
 }
 
@@ -266,6 +267,7 @@ function SettingsPage() {
         strobeEffectEnabled: value.strobeEffectEnabled,
         strobeEffectMode: value.strobeEffectMode,
         strobeEffectSpeed: value.strobeEffectSpeed,
+        harmonyPaletteEnabled: value.harmonyPaletteEnabled,
       })
       await saveMutation.mutateAsync(next)
     },
@@ -892,6 +894,11 @@ function SettingsPage() {
                     "strobeEffectEnabled",
                     "Effect program",
                     "Enable the fixture-specific strobe effect channel.",
+                  ],
+                  [
+                    "harmonyPaletteEnabled",
+                    "Harmony palette",
+                    "Steer color from the detected key when harmonic confidence is stable.",
                   ],
                 ] as const
               ).map(([name, label, description]) => (
