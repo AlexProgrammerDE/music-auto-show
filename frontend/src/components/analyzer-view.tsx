@@ -24,19 +24,18 @@ import type {
   AudioRuntimeStatus,
   BeatNetStatus,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { useLiveAudio } from "@/hooks/use-live-audio"
 import { analyzerScopeParser } from "@/lib/dashboard-search"
 import { formatPercent } from "@/lib/format"
+import { liveAnalysisHistory, type LiveAnalysisSample } from "@/lib/live-frame-store"
 import { cn } from "@/lib/utils"
 
 function normalizedDb(value: number) {
   return Math.max(0, Math.min(1, (value + 60) / 60))
 }
 
-function peakOf(
-  analysis: AudioAnalysis | undefined,
-  select: (frame: AudioAnalysis["history"][number]) => number,
-) {
-  return Math.max(0, ...(analysis?.history.map(select) ?? []))
+function peakOf(select: (frame: LiveAnalysisSample) => number) {
+  return Math.max(0, ...liveAnalysisHistory().map(select))
 }
 
 function AnalysisLevel({
@@ -70,8 +69,10 @@ function AnalysisLevel({
 }
 
 function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
-  const rms = normalizedDb(analysis?.rmsDbfs ?? -120)
-  const peak = normalizedDb(analysis?.peakDbfs ?? -120)
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
+  const rms = normalizedDb(current?.rmsDbfs ?? -120)
+  const peak = normalizedDb(current?.peakDbfs ?? -120)
   return (
     <SectionPanel
       title="Signal meters"
@@ -80,29 +81,29 @@ function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undef
       <div className="grid gap-5 p-4 md:grid-cols-2">
         <AnalysisLevel
           label="Bass"
-          value={analysis?.bass ?? 0}
-          peak={peakOf(analysis, (frame) => frame.bass)}
+          value={current?.bass ?? 0}
+          peak={peakOf((frame) => frame.bass)}
           threshold={0.5}
           color="[&_[data-slot=progress-indicator]]:bg-chart-2"
         />
         <AnalysisLevel
           label="Mid"
-          value={analysis?.mid ?? 0}
-          peak={peakOf(analysis, (frame) => frame.mid)}
+          value={current?.mid ?? 0}
+          peak={peakOf((frame) => frame.mid)}
           threshold={0.5}
           color="[&_[data-slot=progress-indicator]]:bg-chart-3"
         />
         <AnalysisLevel
           label="High"
-          value={analysis?.high ?? 0}
-          peak={peakOf(analysis, (frame) => frame.high)}
+          value={current?.high ?? 0}
+          peak={peakOf((frame) => frame.high)}
           threshold={0.5}
           color="[&_[data-slot=progress-indicator]]:bg-chart-4"
         />
         <AnalysisLevel
           label="Energy"
-          value={analysis?.energy ?? 0}
-          peak={peakOf(analysis, (frame) => frame.energy)}
+          value={current?.energy ?? 0}
+          peak={peakOf((frame) => frame.energy)}
           threshold={0.6}
           color="[&_[data-slot=progress-indicator]]:bg-chart-1"
         />
@@ -112,7 +113,7 @@ function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undef
           peak={rms}
           threshold={0.8}
           color="[&_[data-slot=progress-indicator]]:bg-primary"
-          display={`${(analysis?.rmsDbfs ?? -120).toFixed(1)} dBFS`}
+          display={`${(current?.rmsDbfs ?? -120).toFixed(1)} dBFS`}
         />
         <AnalysisLevel
           label="Peak"
@@ -120,14 +121,37 @@ function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undef
           peak={peak}
           threshold={0.98}
           color={
-            analysis?.clipping
+            current?.clipping
               ? "[&_[data-slot=progress-indicator]]:bg-destructive"
               : "[&_[data-slot=progress-indicator]]:bg-chart-5"
           }
-          display={`${(analysis?.peakDbfs ?? -120).toFixed(1)} dBFS`}
+          display={`${(current?.peakDbfs ?? -120).toFixed(1)} dBFS`}
         />
       </div>
     </SectionPanel>
+  )
+}
+
+function BeatDiagnostics({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs md:grid-cols-4">
+      <dt className="text-muted-foreground">Decoder</dt>
+      <dd className="text-right">Cascade PF</dd>
+      <dt className="text-muted-foreground">Beat phase</dt>
+      <dd className="text-right tabular-nums">{formatPercent(current?.beatPosition ?? 0)}</dd>
+      <dt className="text-muted-foreground">Bar phase</dt>
+      <dd className="text-right tabular-nums">{formatPercent(current?.barPosition ?? 0)}</dd>
+      <dt className="text-muted-foreground">Meter</dt>
+      <dd className="text-right tabular-nums">{current?.meter || 4}/4</dd>
+      <dt className="text-muted-foreground">Tracking lock</dt>
+      <dd className="text-right tabular-nums">{formatPercent(current?.trackingConfidence ?? 0)}</dd>
+      <dt className="text-muted-foreground">Beat activation</dt>
+      <dd className="text-right tabular-nums">{(current?.beatActivation ?? 0).toFixed(3)}</dd>
+      <dt className="text-muted-foreground">Downbeat activation</dt>
+      <dd className="text-right tabular-nums">{(current?.downbeatActivation ?? 0).toFixed(3)}</dd>
+    </dl>
   )
 }
 
@@ -224,32 +248,7 @@ export function AnalyzerView({
           <AccordionItem value="beatnet-details" className="px-4">
             <AccordionTrigger>Detector and decoder details</AccordionTrigger>
             <AccordionContent>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs md:grid-cols-4">
-                <dt className="text-muted-foreground">Decoder</dt>
-                <dd className="text-right">Cascade PF</dd>
-                <dt className="text-muted-foreground">Beat phase</dt>
-                <dd className="text-right tabular-nums">
-                  {formatPercent(analysis?.beatPosition ?? 0)}
-                </dd>
-                <dt className="text-muted-foreground">Bar phase</dt>
-                <dd className="text-right tabular-nums">
-                  {formatPercent(analysis?.barPosition ?? 0)}
-                </dd>
-                <dt className="text-muted-foreground">Meter</dt>
-                <dd className="text-right tabular-nums">{analysis?.meter || 4}/4</dd>
-                <dt className="text-muted-foreground">Tracking lock</dt>
-                <dd className="text-right tabular-nums">
-                  {formatPercent(analysis?.trackingConfidence ?? 0)}
-                </dd>
-                <dt className="text-muted-foreground">Beat activation</dt>
-                <dd className="text-right tabular-nums">
-                  {(analysis?.beatActivation ?? 0).toFixed(3)}
-                </dd>
-                <dt className="text-muted-foreground">Downbeat activation</dt>
-                <dd className="text-right tabular-nums">
-                  {(analysis?.downbeatActivation ?? 0).toFixed(3)}
-                </dd>
-              </dl>
+              <BeatDiagnostics analysis={analysis} />
             </AccordionContent>
           </AccordionItem>
         </Accordion>

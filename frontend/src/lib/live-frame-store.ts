@@ -5,6 +5,7 @@ import type {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 const FRAME_RETENTION = 8
+export const LIVE_HISTORY_DURATION_MS = 5_000
 export const LIVE_RENDER_DELAY_MS = 30
 
 export interface TimedLiveFrame {
@@ -27,11 +28,30 @@ export interface ProjectedBeat {
   readonly meter: number
 }
 
+export interface LiveAnalysisSample {
+  readonly bass: number
+  readonly beatActivation: number
+  readonly capturedAt: number
+  readonly downbeatActivation: number
+  readonly energy: number
+  readonly high: number
+  readonly mid: number
+}
+
+export interface LiveSpectrogramFrame {
+  readonly bins: readonly number[]
+  readonly capturedAt: number
+}
+
 type Listener = (frame: TimedLiveFrame) => void
+type StoreListener = () => void
 
 let frames: TimedLiveFrame[] = []
+let analysisHistory: LiveAnalysisSample[] = []
+let spectrogramFrames: LiveSpectrogramFrame[] = []
 let minimumClockOffset = Number.POSITIVE_INFINITY
 const listeners = new Set<Listener>()
+const storeListeners = new Set<StoreListener>()
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value))
@@ -60,10 +80,38 @@ export function publishLiveFrame(
   const latest = frames.at(-1)
   if (latest && frame.sequence <= latest.frame.sequence) {
     frames = []
+    analysisHistory = []
+    spectrogramFrames = []
   }
   frames.push(timed)
   if (frames.length > FRAME_RETENTION) frames.shift()
+  const audio = frame.audio
+  if (audio) {
+    analysisHistory.push({
+      bass: audio.bass,
+      beatActivation: audio.beatActivation,
+      capturedAt: timed.capturedAt,
+      downbeatActivation: audio.downbeatActivation,
+      energy: audio.energy,
+      high: audio.high,
+      mid: audio.mid,
+    })
+    if (audio.spectrogramBins.length > 0) {
+      spectrogramFrames.push({
+        bins: audio.spectrogramBins,
+        capturedAt: timed.capturedAt,
+      })
+    }
+    const cutoff = timed.capturedAt - LIVE_HISTORY_DURATION_MS
+    while (analysisHistory.length > 1 && (analysisHistory[0]?.capturedAt ?? cutoff) < cutoff) {
+      analysisHistory.shift()
+    }
+    while (spectrogramFrames.length > 1 && (spectrogramFrames[0]?.capturedAt ?? cutoff) < cutoff) {
+      spectrogramFrames.shift()
+    }
+  }
   for (const listener of listeners) listener(timed)
+  for (const listener of storeListeners) listener()
 }
 
 export function subscribeLiveFrame(listener: Listener) {
@@ -73,8 +121,27 @@ export function subscribeLiveFrame(listener: Listener) {
   }
 }
 
+export function subscribeLiveFrameStore(listener: StoreListener) {
+  storeListeners.add(listener)
+  return () => {
+    storeListeners.delete(listener)
+  }
+}
+
 export function latestLiveFrame() {
   return frames.at(-1)
+}
+
+export function latestLiveAudio() {
+  return latestLiveFrame()?.frame.audio
+}
+
+export function liveAnalysisHistory() {
+  return analysisHistory as readonly LiveAnalysisSample[]
+}
+
+export function liveSpectrogramFrames() {
+  return spectrogramFrames as readonly LiveSpectrogramFrame[]
 }
 
 export function sampleLiveFrame(
@@ -112,55 +179,6 @@ export function interpolatePhase(previous: number, current: number, alpha: numbe
   if (delta > 0.5) delta -= 1
   if (delta < -0.5) delta += 1
   return (previous + delta * clamp01(alpha) + 1) % 1
-}
-
-export function interpolateArray(
-  previous: readonly number[],
-  current: readonly number[],
-  alpha: number,
-) {
-  const length = Math.max(previous.length, current.length)
-  return Array.from({ length }, (_, index) =>
-    interpolateNumber(
-      previous[index] ?? current[index] ?? 0,
-      current[index] ?? previous[index] ?? 0,
-      alpha,
-    ),
-  )
-}
-
-export function interpolatedAudio(sample: LiveFrameSample | undefined): LiveAudioFrame | undefined {
-  const previous = sample?.previous.frame.audio
-  const current = sample?.current.frame.audio
-  if (!sample || !previous || !current) return current ?? previous
-  const alpha = sample.alpha
-  const discrete = alpha < 0.5 ? previous : current
-  return {
-    ...discrete,
-    energy: interpolateNumber(previous.energy, current.energy, alpha),
-    rms: interpolateNumber(previous.rms, current.rms, alpha),
-    bass: interpolateNumber(previous.bass, current.bass, alpha),
-    mid: interpolateNumber(previous.mid, current.mid, alpha),
-    high: interpolateNumber(previous.high, current.high, alpha),
-    beatConfidence: interpolateNumber(previous.beatConfidence, current.beatConfidence, alpha),
-    beatPosition: interpolatePhase(previous.beatPosition, current.beatPosition, alpha),
-    barPosition: interpolatePhase(previous.barPosition, current.barPosition, alpha),
-    beatActivation: interpolateNumber(previous.beatActivation, current.beatActivation, alpha),
-    downbeatActivation: interpolateNumber(
-      previous.downbeatActivation,
-      current.downbeatActivation,
-      alpha,
-    ),
-    trackingConfidence: interpolateNumber(
-      previous.trackingConfidence,
-      current.trackingConfidence,
-      alpha,
-    ),
-    rmsDbfs: interpolateNumber(previous.rmsDbfs, current.rmsDbfs, alpha),
-    peakDbfs: interpolateNumber(previous.peakDbfs, current.peakDbfs, alpha),
-    waveform: discrete.waveform,
-    spectrum: interpolateArray(previous.spectrum, current.spectrum, alpha),
-  }
 }
 
 function interpolateDmx(previous: number, current: number, alpha: number) {
@@ -283,5 +301,8 @@ export function followEnvelope(
 
 export function resetLiveFrameStore() {
   frames = []
+  analysisHistory = []
+  spectrogramFrames = []
   minimumClockOffset = Number.POSITIVE_INFINITY
+  for (const listener of storeListeners) listener()
 }

@@ -8,9 +8,10 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
   followEnvelope,
-  interpolatedAudio,
   interpolateFixtureState,
   interpolatePhase,
+  liveAnalysisHistory,
+  liveSpectrogramFrames,
   projectBeat,
   publishLiveFrame,
   resetLiveFrameStore,
@@ -73,33 +74,65 @@ describe("live frame timing", () => {
     expect(state.red).toBe(100)
   })
 
-  test("holds waveform snapshots instead of blending unrelated sample windows", () => {
-    const previous = {
-      capturedAt: 100,
-      frame: create(LiveFrameSchema, {
+  test("retains exact live analyzer rows without blending measured values", () => {
+    publishLiveFrame(
+      create(LiveFrameSchema, {
+        capturedAtUnixMs: 1_000n,
+        sequence: 1n,
         audio: create(LiveAudioFrameSchema, {
-          energy: 0,
-          waveform: [-1, 1],
+          bass: 0.2,
+          beatActivation: 0.4,
+          spectrogramBins: [0.1, 0.9],
         }),
       }),
-    }
-    const current = {
-      capturedAt: 125,
-      frame: create(LiveFrameSchema, {
+      100,
+      900,
+    )
+    publishLiveFrame(
+      create(LiveFrameSchema, {
+        capturedAtUnixMs: 1_025n,
+        sequence: 2n,
         audio: create(LiveAudioFrameSchema, {
-          energy: 1,
-          waveform: [1, -1],
+          bass: 0.8,
+          beatActivation: 0.7,
+          spectrogramBins: [0.8, 0.2],
         }),
       }),
+      125,
+      900,
+    )
+
+    expect(
+      liveAnalysisHistory().map(({ bass, beatActivation }) => ({ bass, beatActivation })),
+    ).toEqual([
+      { bass: 0.2, beatActivation: 0.4 },
+      { bass: 0.8, beatActivation: 0.7 },
+    ])
+    expect(liveSpectrogramFrames().map((frame) => frame.bins)).toEqual([
+      [0.1, 0.9],
+      [0.8, 0.2],
+    ])
+  })
+
+  test("keeps only the latest five seconds of live analyzer history", () => {
+    for (const [sequence, capturedAt] of [
+      [1n, 1_000n],
+      [2n, 6_001n],
+      [3n, 6_026n],
+    ] as const) {
+      publishLiveFrame(
+        create(LiveFrameSchema, {
+          capturedAtUnixMs: capturedAt,
+          sequence,
+          audio: create(LiveAudioFrameSchema, { spectrogramBins: [Number(sequence)] }),
+        }),
+        Number(capturedAt),
+        0,
+      )
     }
 
-    const early = interpolatedAudio({ alpha: 0.25, current, previous })
-    const late = interpolatedAudio({ alpha: 0.75, current, previous })
-
-    expect(early?.energy).toBe(0.25)
-    expect(early?.waveform).toEqual([-1, 1])
-    expect(late?.energy).toBe(0.75)
-    expect(late?.waveform).toEqual([1, -1])
+    expect(liveAnalysisHistory()).toHaveLength(2)
+    expect(liveSpectrogramFrames().map((frame) => frame.bins)).toEqual([[2], [3]])
   })
 
   test("uses a faster attack than release for responsive stable envelopes", () => {

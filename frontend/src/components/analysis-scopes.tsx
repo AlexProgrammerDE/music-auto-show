@@ -6,9 +6,10 @@ import {
   Tonality,
   type AudioAnalysis,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { useLiveAudio } from "@/hooks/use-live-audio"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import { formatEnumLabel } from "@/lib/format"
-import { latestLiveFrame, projectBeat } from "@/lib/live-frame-store"
+import { latestLiveFrame, liveAnalysisHistory, projectBeat } from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
 function themeColor(variable: string) {
@@ -55,9 +56,12 @@ function useCanvasRender(
 }
 
 export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
   const canvasRef = useCanvasRender(({ context, width, height }) => {
-    const values = analysis?.waveform ?? []
-    const clipping = analysis?.clipping ?? false
+    const frameAudio = latestLiveFrame()?.frame.audio
+    const values = frameAudio?.waveform ?? []
+    const clipping = frameAudio?.clipping ?? false
     const center = height / 2
     context.clearRect(0, 0, width, height)
     context.fillStyle = themeColor("--background")
@@ -100,7 +104,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
       context.stroke()
     }
     context.globalAlpha = 1
-  })
+  }, true)
   return (
     <figure className="relative min-h-72 overflow-hidden border bg-background">
       <canvas
@@ -108,12 +112,12 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
         width={960}
         height={320}
         className="absolute inset-0 size-full"
-        aria-label={`Live waveform centered at zero. RMS ${(analysis?.rmsDbfs ?? -120).toFixed(1)} dBFS, peak ${(analysis?.peakDbfs ?? -120).toFixed(1)} dBFS${analysis?.clipping ? ", clipping detected" : ""}.`}
+        aria-label={`Live waveform centered at zero. RMS ${(current?.rmsDbfs ?? -120).toFixed(1)} dBFS, peak ${(current?.peakDbfs ?? -120).toFixed(1)} dBFS${current?.clipping ? ", clipping detected" : ""}.`}
       />
       <figcaption className="absolute top-2 right-2 flex gap-1.5">
         <Badge variant="outline">0 center</Badge>
-        <Badge variant={analysis?.clipping ? "destructive" : "outline"}>
-          {analysis?.clipping ? "Clipping" : "Headroom OK"}
+        <Badge variant={current?.clipping ? "destructive" : "outline"}>
+          {current?.clipping ? "Clipping" : "Headroom OK"}
         </Badge>
       </figcaption>
     </figure>
@@ -121,8 +125,10 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
 }
 
 export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
   const canvasRef = useCanvasRender(({ context, width, height }, now) => {
-    const frames = analysis?.history ?? []
+    const frames = liveAnalysisHistory()
     const foreground = themeColor("--foreground")
     const border = themeColor("--border")
     context.clearRect(0, 0, width, height)
@@ -166,7 +172,7 @@ export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis
       latest?.frame.audio === undefined
         ? undefined
         : projectBeat(latest.frame.audio, latest.capturedAt, now)
-    const barX = (projected?.barPosition ?? analysis?.barPosition ?? 0) * width
+    const barX = (projected?.barPosition ?? 0) * width
     context.globalAlpha = 0.8
     context.strokeStyle = themeColor("--chart-1")
     context.lineWidth = 2
@@ -183,13 +189,13 @@ export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis
         width={960}
         height={320}
         className="absolute inset-0 size-full"
-        aria-label={`Beat signal history. Beat activation ${(analysis?.beatActivation ?? 0).toFixed(2)}, downbeat activation ${(analysis?.downbeatActivation ?? 0).toFixed(2)}, detected meter ${analysis?.meter || 4}/4.`}
+        aria-label={`Beat signal history. Beat activation ${(current?.beatActivation ?? 0).toFixed(2)}, downbeat activation ${(current?.downbeatActivation ?? 0).toFixed(2)}, detected meter ${current?.meter || 4}/4.`}
       />
       <figcaption className="absolute top-2 right-2 flex gap-1.5">
         <Badge variant="secondary">Beat</Badge>
         <Badge variant="outline">Downbeat</Badge>
         <Badge variant="outline">
-          {analysis?.beatIndex || 1}/{analysis?.meter || 4}
+          {current?.beatIndex || 1}/{current?.meter || 4}
         </Badge>
       </figcaption>
     </figure>
@@ -199,8 +205,10 @@ export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis
 const pitchNames = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"] as const
 
 export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
   const canvasRef = useCanvasRender(({ context, width, height }) => {
-    const chroma = analysis?.chroma ?? []
+    const chroma = latestLiveFrame()?.frame.audio?.chroma ?? []
     const centerX = width / 2
     const centerY = height / 2
     const radius = Math.min(width, height) * 0.34
@@ -223,10 +231,10 @@ export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis |
       context.fillStyle = value > 0.55 ? "black" : themeColor("--foreground")
       context.fillText(pitchNames[pitchClass] ?? "", x, y)
     }
-  })
-  const known = (analysis?.harmonicConfidence ?? 0) >= 0.08
-  const keyName = pitchNames[analysis?.keyPitchClass ?? 0]
-  const tonality = formatEnumLabel(Tonality[analysis?.tonality ?? Tonality.UNSPECIFIED] ?? "")
+  }, true)
+  const known = (current?.harmonicConfidence ?? 0) >= 0.08
+  const keyName = pitchNames[current?.keyPitchClass ?? 0]
+  const tonality = formatEnumLabel(Tonality[current?.tonality ?? Tonality.UNSPECIFIED] ?? "")
   return (
     <div className="grid border bg-background md:grid-cols-[15rem_1fr]">
       <figure className="relative min-h-56 border-b md:border-r md:border-b-0">
@@ -249,7 +257,7 @@ export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis |
           {known ? <span className="text-sm text-muted-foreground">{tonality}</span> : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          {Math.round((analysis?.harmonicConfidence ?? 0) * 100)}% confidence · native 12-bin chroma
+          {Math.round((current?.harmonicConfidence ?? 0) * 100)}% confidence · native 12-bin chroma
         </p>
       </div>
     </div>
@@ -257,14 +265,15 @@ export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis |
 }
 
 export function SectionTimeline({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
-  const current = analysis?.section ?? MusicSection.UNSPECIFIED
+  const liveAudio = useLiveAudio()
+  const current = liveAudio?.section ?? analysis?.section ?? MusicSection.UNSPECIFIED
+  const confidence = liveAudio?.sectionConfidence ?? analysis?.sectionConfidence ?? 0
   return (
     <div className="grid gap-3 border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-heading text-xs font-semibold">Confirmed structure</span>
         <Badge variant={current === MusicSection.DROP ? "secondary" : "outline"}>
-          {formatEnumLabel(MusicSection[current] ?? "Listening")} ·{" "}
-          {Math.round((analysis?.sectionConfidence ?? 0) * 100)}%
+          {formatEnumLabel(MusicSection[current] ?? "Listening")} · {Math.round(confidence * 100)}%
         </Badge>
       </div>
       <div className="flex min-h-12 items-stretch overflow-x-auto border">

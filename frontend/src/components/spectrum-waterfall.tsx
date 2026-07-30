@@ -1,15 +1,17 @@
 import { useEffect, useEffectEvent, useRef } from "react"
 
 import { Badge } from "@/components/ui/badge"
-import type {
-  AudioAnalysis,
-  LiveAudioFrame,
-  SpectrogramFrame,
-} from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import type { AudioAnalysis, LiveAudioFrame } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { useLiveAudio } from "@/hooks/use-live-audio"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
-import { latestLiveFrame } from "@/lib/live-frame-store"
+import {
+  LIVE_HISTORY_DURATION_MS,
+  latestLiveFrame,
+  liveSpectrogramFrames,
+  type LiveSpectrogramFrame,
+} from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
-import { followSpectrumBin, followSpectrumPeak, smoothSpectrumBins } from "@/lib/spectrum-motion"
+import { followSpectrumPeak } from "@/lib/spectrum-motion"
 
 type SpectrumFocus = "spectrum" | "spectrogram"
 
@@ -57,14 +59,11 @@ function drawFrequencyLabels(
 
 function draw(
   surface: CanvasSurface,
-  analysis: AudioAnalysis | undefined,
   liveAudio: LiveAudioFrame | undefined,
   peaks: number[],
-  smoothed: number[],
   focus: SpectrumFocus,
-  frames: readonly SpectrogramFrame[],
-  outgoingFrame: readonly number[] | undefined,
-  waterfallProgress: number,
+  frames: readonly LiveSpectrogramFrame[],
+  now: number,
 ) {
   const { context, width, height } = surface
   const foreground = themeColor("--foreground")
@@ -76,12 +75,9 @@ function draw(
   const spectrumRatio = focus === "spectrum" ? 0.58 : 0.32
   const spectrumHeight = height * spectrumRatio
   const axisY = spectrumHeight - 18
-  const minimum = Math.max(20, liveAudio?.spectrumMinHz || analysis?.spectrumMinHz || 43)
-  const maximum = Math.max(
-    minimum + 1,
-    liveAudio?.spectrumMaxHz || analysis?.spectrumMaxHz || 16_000,
-  )
-  const values = liveAudio?.spectrum.length ? liveAudio.spectrum : (analysis?.spectrum ?? [])
+  const minimum = Math.max(20, liveAudio?.spectrumMinHz || 43)
+  const maximum = Math.max(minimum + 1, liveAudio?.spectrumMaxHz || 16_000)
+  const values = liveAudio?.spectrum ?? []
 
   context.save()
   context.strokeStyle = border
@@ -107,7 +103,7 @@ function draw(
     context.lineWidth = 1.5
     values.forEach((value, index) => {
       const x = (index / (values.length - 1)) * width
-      const y = axisY - (smoothed[index] ?? value) * (axisY - 12)
+      const y = axisY - value * (axisY - 12)
       if (index === 0) context.moveTo(x, y)
       else context.lineTo(x, y)
     })
@@ -130,34 +126,28 @@ function draw(
   const waterfallTop = spectrumHeight + 2
   const waterfallHeight = height - waterfallTop
   if (frames.length > 0) {
-    const rowHeight = waterfallHeight / frames.length
-    const offset = (1 - waterfallProgress) * rowHeight
     context.save()
     context.beginPath()
     context.rect(0, waterfallTop, width, waterfallHeight)
     context.clip()
-    if (outgoingFrame) {
-      const binWidth = width / Math.max(1, outgoingFrame.length)
-      outgoingFrame.forEach((value, binIndex) => {
-        context.fillStyle = magmaColor(value)
-        context.fillRect(
-          binIndex * binWidth,
-          waterfallTop - waterfallProgress * rowHeight,
-          Math.ceil(binWidth),
-          Math.ceil(rowHeight),
-        )
-      })
-    }
     frames.forEach((frame, frameIndex) => {
+      const nextCapturedAt = frames[frameIndex + 1]?.capturedAt ?? now
+      const intervalStart = Math.max(frame.capturedAt, now - LIVE_HISTORY_DURATION_MS)
+      const intervalEnd = Math.min(now, nextCapturedAt)
+      if (intervalEnd <= intervalStart) return
+      const rowTop =
+        waterfallTop +
+        waterfallHeight -
+        ((now - intervalStart) / LIVE_HISTORY_DURATION_MS) * waterfallHeight
+      const rowBottom =
+        waterfallTop +
+        waterfallHeight -
+        ((now - intervalEnd) / LIVE_HISTORY_DURATION_MS) * waterfallHeight
+      const rowHeight = Math.max(1, rowBottom - rowTop)
       const binWidth = width / Math.max(1, frame.bins.length)
       frame.bins.forEach((value, binIndex) => {
         context.fillStyle = magmaColor(value)
-        context.fillRect(
-          binIndex * binWidth,
-          waterfallTop + frameIndex * rowHeight + offset,
-          Math.ceil(binWidth),
-          Math.ceil(rowHeight),
-        )
+        context.fillRect(binIndex * binWidth, rowTop, Math.ceil(binWidth), Math.ceil(rowHeight))
       })
     })
     context.restore()
@@ -179,54 +169,24 @@ export function SpectrumWaterfall({
   readonly analysis: AudioAnalysis | undefined
   readonly focus: SpectrumFocus
 }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
   const peaksRef = useRef<number[]>([])
-  const smoothedRef = useRef<number[]>([])
   const lastRenderRef = useRef(0)
-  const spectrogramRef = useRef<readonly SpectrogramFrame[]>(analysis?.spectrogram ?? [])
-  const outgoingFrameRef = useRef<readonly number[] | undefined>(undefined)
-  const waterfallStartedRef = useRef(0)
-  const waterfallScrollingRef = useRef(false)
   const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
     if (!surface) return
-    const liveAudio = latestLiveFrame()?.frame.audio
-    const sourceValues = liveAudio?.spectrum.length
-      ? liveAudio.spectrum
-      : (analysis?.spectrum ?? [])
-    const values = smoothSpectrumBins(sourceValues)
+    const frameAudio = latestLiveFrame()?.frame.audio
+    const values = frameAudio?.spectrum ?? []
     const delta = lastRenderRef.current === 0 ? 16 : Math.min(100, now - lastRenderRef.current)
     lastRenderRef.current = now
     peaksRef.current = values.map((value, index) =>
       followSpectrumPeak(peaksRef.current[index] ?? value, value, delta),
     )
-    smoothedRef.current = values.map((value, index) =>
-      followSpectrumBin(smoothedRef.current[index] ?? value, value, delta),
-    )
-    const waterfallProgress = waterfallScrollingRef.current
-      ? Math.min(1, (now - waterfallStartedRef.current) / 100)
-      : 1
-    draw(
-      surface,
-      analysis,
-      liveAudio,
-      peaksRef.current,
-      smoothedRef.current,
-      focus,
-      spectrogramRef.current,
-      outgoingFrameRef.current,
-      waterfallProgress,
-    )
+    draw(surface, frameAudio, peaksRef.current, focus, liveSpectrogramFrames(), now)
   })
-  useEffect(() => {
-    const previous = spectrogramRef.current
-    const current = analysis?.spectrogram ?? []
-    waterfallScrollingRef.current = previous.length > 1 && previous.length === current.length
-    outgoingFrameRef.current = waterfallScrollingRef.current ? previous[0]?.bins : undefined
-    spectrogramRef.current = current
-    waterfallStartedRef.current = performance.now()
-  }, [analysis, focus])
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -257,12 +217,12 @@ export function SpectrumWaterfall({
         width={960}
         height={360}
         className="absolute inset-0 size-full"
-        aria-label={`Live logarithmic ${focus} from ${Math.round(analysis?.spectrumMinHz || 43)} hertz to ${Math.round(analysis?.spectrumMaxHz || 16_000)} hertz. Input RMS ${Math.round(analysis?.rmsDbfs ?? -120)} dBFS and peak ${Math.round(analysis?.peakDbfs ?? -120)} dBFS.`}
+        aria-label={`Live logarithmic ${focus} from ${Math.round(current?.spectrumMinHz || 43)} hertz to ${Math.round(current?.spectrumMaxHz || 16_000)} hertz. Input RMS ${Math.round(current?.rmsDbfs ?? -120)} dBFS and peak ${Math.round(current?.peakDbfs ?? -120)} dBFS.`}
       />
       <figcaption className="absolute top-2 right-2 flex gap-1.5">
-        <Badge variant="outline">RMS {(analysis?.rmsDbfs ?? -120).toFixed(1)} dBFS</Badge>
-        <Badge variant={analysis?.clipping ? "destructive" : "outline"}>
-          {analysis?.clipping ? "Clipping" : `Peak ${(analysis?.peakDbfs ?? -120).toFixed(1)} dBFS`}
+        <Badge variant="outline">RMS {(current?.rmsDbfs ?? -120).toFixed(1)} dBFS</Badge>
+        <Badge variant={current?.clipping ? "destructive" : "outline"}>
+          {current?.clipping ? "Clipping" : `Peak ${(current?.peakDbfs ?? -120).toFixed(1)} dBFS`}
         </Badge>
       </figcaption>
     </figure>

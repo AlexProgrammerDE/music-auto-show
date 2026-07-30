@@ -76,6 +76,13 @@ fn live_audio_frame(audio: &AudioAnalysis) -> LiveAudioFrame {
         clipping: audio.clipping,
         spectrum_min_hz: audio.spectrum_min_hz,
         spectrum_max_hz: audio.spectrum_max_hz,
+        spectrogram_bins: audio.spectrogram_bins.clone(),
+        chroma: audio.chroma.clone(),
+        key_pitch_class: audio.key_pitch_class,
+        tonality: audio.tonality,
+        harmonic_confidence: audio.harmonic_confidence,
+        section: audio.section,
+        section_confidence: audio.section_confidence,
     }
 }
 
@@ -403,8 +410,6 @@ fn app_status(error: AppError) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::v1::{AnalysisHistoryFrame, SpectrogramFrame};
-    use prost::Message;
     use tokio_stream::StreamExt;
 
     const IMPORTED_FIXTURE: &[u8] = br#"<?xml version="1.0"?>
@@ -452,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn live_frame_keeps_current_signals_without_repeating_heavy_history() {
+    fn live_frame_keeps_current_analyzer_signals() {
         let snapshot = ShowSnapshot {
             sequence: 42,
             captured_at_unix_ms: 1_234,
@@ -460,14 +465,8 @@ mod tests {
                 energy: 0.8,
                 waveform: vec![0.25; 100],
                 spectrum: vec![0.5; 32],
-                spectrogram: vec![
-                    SpectrogramFrame {
-                        bins: vec![0.75; 64],
-                    };
-                    50
-                ],
-                history: vec![AnalysisHistoryFrame::default(); 50],
-                onset_history: vec![0.5; 64],
+                spectrogram_bins: vec![0.75; 64],
+                chroma: vec![0.25; 12],
                 ..Default::default()
             }),
             ..Default::default()
@@ -479,10 +478,11 @@ mod tests {
         assert_eq!(frame.sequence, snapshot.sequence);
         assert_eq!(audio.waveform.len(), 100);
         assert_eq!(audio.spectrum.len(), 32);
-        assert!(
-            frame.encoded_len() * 4 < snapshot.encoded_len(),
-            "the high-rate live frame must stay substantially smaller than a history snapshot"
+        assert_eq!(
+            audio.spectrogram_bins,
+            snapshot.audio.unwrap().spectrogram_bins
         );
+        assert_eq!(audio.chroma, vec![0.25; 12]);
     }
 
     #[tokio::test]

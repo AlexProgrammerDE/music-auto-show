@@ -5,6 +5,7 @@ import type {
   AudioAnalysis,
   EffectRuntimeStatus,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { useLiveAudio } from "@/hooks/use-live-audio"
 import {
   projectBeatRunwayFrame,
   reconcileBeatRunwaySample,
@@ -13,7 +14,12 @@ import {
   type BeatRunwaySample,
 } from "@/lib/beat-runway"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
-import { latestLiveFrame, subscribeLiveFrame, type TimedLiveFrame } from "@/lib/live-frame-store"
+import {
+  latestLiveFrame,
+  liveAnalysisHistory,
+  subscribeLiveFrame,
+  type TimedLiveFrame,
+} from "@/lib/live-frame-store"
 
 interface RunwayPalette {
   readonly accent: string
@@ -41,13 +47,9 @@ function readPalette(): RunwayPalette {
   }
 }
 
-function drawSignalHistory(
-  surface: CanvasSurface,
-  analysis: AudioAnalysis | undefined,
-  palette: RunwayPalette,
-) {
+function drawSignalHistory(surface: CanvasSurface, palette: RunwayPalette) {
   const { context, width, height } = surface
-  const frames = analysis?.history ?? []
+  const frames = liveAnalysisHistory()
   if (frames.length < 2) return
   const channels = [
     { color: palette.bass, value: (index: number) => frames[index]?.bass ?? 0 },
@@ -71,18 +73,13 @@ function drawSignalHistory(
   context.restore()
 }
 
-function drawRunway(
-  surface: CanvasSurface,
-  frame: BeatRunwayFrame,
-  analysis: AudioAnalysis | undefined,
-  palette: RunwayPalette,
-) {
+function drawRunway(surface: CanvasSurface, frame: BeatRunwayFrame, palette: RunwayPalette) {
   const { context, width, height } = surface
   const centerX = width / 2
   const baselineY = height * 0.58
   const spacing = width / (frame.meter * 2 + 2)
   context.clearRect(0, 0, width, height)
-  drawSignalHistory(surface, analysis, palette)
+  drawSignalHistory(surface, palette)
 
   context.save()
   context.strokeStyle = palette.border
@@ -93,12 +90,13 @@ function drawRunway(
   context.lineTo(width, baselineY)
   context.stroke()
 
-  const onset = analysis?.onsetHistory ?? []
+  const onset = liveAnalysisHistory()
   if (onset.length > 1) {
     context.strokeStyle = palette.accent
     context.globalAlpha = 0.5
     context.beginPath()
-    onset.forEach((value, index) => {
+    onset.forEach((sample, index) => {
+      const value = Math.max(sample.beatActivation, sample.downbeatActivation)
       const x = (index / (onset.length - 1)) * centerX
       const y = baselineY - Math.max(0, Math.min(1, value)) * height * 0.25
       if (index === 0) context.moveTo(x, y)
@@ -156,10 +154,11 @@ export function BeatRunway({
   readonly analysis: AudioAnalysis | undefined
   readonly effectRuntime: EffectRuntimeStatus | undefined
 }) {
+  const liveAudio = useLiveAudio()
+  const current = liveAudio ?? analysis
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
   const paletteRef = useRef<RunwayPalette | undefined>(undefined)
-  const analysisRef = useRef(analysis)
   const sampleRef = useRef<BeatRunwaySample>({
     active: false,
     beatIndex: 1,
@@ -169,14 +168,14 @@ export function BeatRunway({
     sampledAt: 0,
     tempo: 0,
   })
-  const tempo = analysis?.tempo ?? 0
+  const tempo = current?.tempo ?? 0
   const tracking = active && tempo > 0
   const [displayTempo, setDisplayTempo] = useState(0)
   const visibleTempo = displayTempo > 0 ? displayTempo : tempo
-  const meter = analysis?.meter || 4
-  const confidence = analysis?.trackingConfidence ?? 0
+  const meter = current?.meter || 4
+  const confidence = current?.trackingConfidence ?? 0
   const summary = tracking
-    ? `${Math.round(visibleTempo)} BPM, ${meter}/4, beat ${analysis?.beatIndex || 1} of ${meter}, ${Math.round(confidence * 100)} percent tracking confidence`
+    ? `${Math.round(visibleTempo)} BPM, ${meter}/4, beat ${current?.beatIndex || 1} of ${meter}, ${Math.round(confidence * 100)} percent tracking confidence`
     : active
       ? "Finding tempo and meter"
       : "Audio stopped"
@@ -193,43 +192,37 @@ export function BeatRunway({
     const surface = surfaceRef.current
     const palette = paletteRef.current
     if (!surface || !palette) return
-    drawRunway(
-      surface,
-      projectBeatRunwayFrame(sampleRef.current, now),
-      analysisRef.current,
-      palette,
-    )
+    drawRunway(surface, projectBeatRunwayFrame(sampleRef.current, now), palette)
   })
 
   const acceptLiveFrame = useEffectEvent((timed: TimedLiveFrame) => {
-    const liveAudio = timed.frame.audio
-    if (!liveAudio) return
+    const frameAudio = timed.frame.audio
+    if (!frameAudio) return
     sampleRef.current = reconcileBeatRunwaySample(sampleRef.current, {
-      active: active && liveAudio.tempo > 0,
-      beatIndex: liveAudio.beatIndex || 1,
-      beatPosition: liveAudio.beatPosition,
-      estimatedBeat: Number(liveAudio.estimatedBeat),
-      meter: liveAudio.meter || 4,
+      active: active && frameAudio.tempo > 0,
+      beatIndex: frameAudio.beatIndex || 1,
+      beatPosition: frameAudio.beatPosition,
+      estimatedBeat: Number(frameAudio.estimatedBeat),
+      meter: frameAudio.meter || 4,
       sampledAt: timed.capturedAt,
-      tempo: liveAudio.tempo,
+      tempo: frameAudio.tempo,
     })
   })
 
   useEffect(() => {
-    analysisRef.current = analysis
     if (latestLiveFrame()?.frame.audio) return
     const sampledAt = performance.now()
     sampleRef.current = reconcileBeatRunwaySample(sampleRef.current, {
       active: tracking,
-      beatIndex: analysis?.beatIndex || 1,
-      beatPosition: analysis?.beatPosition ?? 0,
-      estimatedBeat: Number(analysis?.estimatedBeat ?? 0n),
+      beatIndex: current?.beatIndex || 1,
+      beatPosition: current?.beatPosition ?? 0,
+      estimatedBeat: Number(current?.estimatedBeat ?? 0n),
       meter,
       sampledAt,
       tempo,
     })
     render(sampledAt)
-  }, [analysis, meter, tempo, tracking])
+  }, [current, meter, tempo, tracking])
 
   useEffect(() => subscribeLiveFrame(acceptLiveFrame), [])
 
@@ -294,7 +287,7 @@ export function BeatRunway({
             {tracking ? `${Math.round(confidence * 100)}% lock` : "Acquiring"}
           </Badge>
           <Badge variant="outline">
-            Bar {tracking ? Number(analysis?.estimatedBar ?? 0n) + 1 : "–"}
+            Bar {tracking ? Number(current?.estimatedBar ?? 0n) + 1 : "–"}
           </Badge>
           {effectRuntime ? (
             <Badge variant="outline">Cycle {effectRuntime.effectCyclePosition}/32</Badge>

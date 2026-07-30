@@ -254,6 +254,13 @@ message LiveAudioFrame {
   bool clipping = 23;
   float spectrum_min_hz = 24;
   float spectrum_max_hz = 25;
+  repeated float spectrogram_bins = 26;
+  repeated float chroma = 27;
+  uint32 key_pitch_class = 28;
+  Tonality tonality = 29;
+  float harmonic_confidence = 30;
+  MusicSection section = 31;
+  float section_confidence = 32;
 }
 
 message RuntimeTimingStatus {
@@ -267,8 +274,8 @@ message RuntimeTimingStatus {
 }
 
 message AudioAnalysis {
-  reserved 14, 15;
-  reserved "danceability", "valence";
+  reserved 14, 15, 18, 19, 30;
+  reserved "danceability", "history", "onset_history", "spectrogram", "valence";
 
   float energy = 1;
   float rms = 2;
@@ -285,8 +292,6 @@ message AudioAnalysis {
   uint64 estimated_bar = 13;
   repeated float waveform = 16;
   repeated float spectrum = 17;
-  repeated SpectrogramFrame spectrogram = 18;
-  repeated float onset_history = 19;
   uint32 meter = 20;
   uint32 beat_index = 21;
   float beat_activation = 22;
@@ -297,7 +302,6 @@ message AudioAnalysis {
   bool clipping = 27;
   float spectrum_min_hz = 28;
   float spectrum_max_hz = 29;
-  repeated AnalysisHistoryFrame history = 30;
   repeated float chroma = 31;
   uint32 key_pitch_class = 32;
   Tonality tonality = 33;
@@ -305,19 +309,7 @@ message AudioAnalysis {
   MusicSection section = 35;
   float section_confidence = 36;
   repeated SectionMarker section_history = 37;
-}
-
-message SpectrogramFrame {
-  repeated float bins = 1;
-}
-
-message AnalysisHistoryFrame {
-  float energy = 1;
-  float bass = 2;
-  float mid = 3;
-  float high = 4;
-  float beat_activation = 5;
-  float downbeat_activation = 6;
+  repeated float spectrogram_bins = 38;
 }
 
 enum Tonality {

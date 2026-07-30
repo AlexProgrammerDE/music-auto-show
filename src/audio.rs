@@ -18,9 +18,8 @@ use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 use crate::{
     beatnet::{BeatEstimate, BeatNetPlus},
     proto::v1::{
-        AnalysisHistoryFrame, AudioAnalysis, AudioConfig, AudioDevice, AudioInputMode,
-        AudioRuntimeStatus, BeatNetStatus, MusicSection, Recording, RecordingStatus, SectionMarker,
-        SpectrogramFrame, Tonality,
+        AudioAnalysis, AudioConfig, AudioDevice, AudioInputMode, AudioRuntimeStatus, BeatNetStatus,
+        MusicSection, Recording, RecordingStatus, SectionMarker, Tonality,
     },
     timing::PeriodicSchedule,
 };
@@ -1051,6 +1050,11 @@ fn send_mono<T: Copy>(
     }
 }
 
+#[derive(Clone, Default)]
+struct StructureAnalysisFrame {
+    energy: f32,
+}
+
 pub struct AudioAnalyzer {
     sample_rate: u32,
     gain: f32,
@@ -1062,12 +1066,10 @@ pub struct AudioAnalyzer {
     bass_envelope: f32,
     mid_envelope: f32,
     high_envelope: f32,
-    onset_history: VecDeque<f32>,
-    spectrogram: VecDeque<Vec<f32>>,
-    analysis_history: VecDeque<AnalysisHistoryFrame>,
+    structure_history: VecDeque<StructureAnalysisFrame>,
     smoothed_chroma: [f32; 12],
     structure: StructureTracker,
-    last_spectrogram: Instant,
+    last_structure_update: Instant,
     recording: Recorder,
     last_analysis: AudioAnalysis,
 }
@@ -1109,12 +1111,10 @@ impl AudioAnalyzer {
             bass_envelope: 0.0,
             mid_envelope: 0.0,
             high_envelope: 0.0,
-            onset_history: VecDeque::with_capacity(64),
-            spectrogram: VecDeque::with_capacity(50),
-            analysis_history: VecDeque::with_capacity(50),
+            structure_history: VecDeque::with_capacity(50),
             smoothed_chroma: [0.0; 12],
             structure: StructureTracker::default(),
-            last_spectrogram: Instant::now() - Duration::from_secs(1),
+            last_structure_update: Instant::now() - Duration::from_secs(1),
             recording: Recorder::new(sample_rate),
             last_analysis: silent_analysis_for(sample_rate),
         }
@@ -1171,12 +1171,6 @@ impl AudioAnalyzer {
             }
             None => fallback_beat(&self.last_analysis),
         };
-        self.onset_history
-            .push_back(beat.beat_activation.max(beat.downbeat_activation));
-        if self.onset_history.len() > 64 {
-            self.onset_history.pop_front();
-        }
-
         let gain_db = 20.0 * self.gain.max(0.0001).log10();
         let energy_target = if rms > 1e-10 {
             ((20.0 * rms.log10() + gain_db + 60.0) / 60.0).clamp(0.0, 1.0)
@@ -1192,35 +1186,21 @@ impl AudioAnalyzer {
         let mid = self.mid_envelope;
         let high = self.high_envelope;
         let raw_chroma = chroma(fft, self.sample_rate, FFT_SIZE);
+        let spectrogram_bins = spectrogram_frame(fft, self.sample_rate, FFT_SIZE, self.gain);
         for (smoothed, current) in self.smoothed_chroma.iter_mut().zip(raw_chroma) {
             *smoothed += (current - *smoothed) * 0.16;
         }
         let (key_pitch_class, tonality, harmonic_confidence) = estimate_key(&self.smoothed_chroma);
 
-        if self.last_spectrogram.elapsed() >= Duration::from_millis(100) {
-            self.spectrogram.push_back(spectrogram_frame(
-                fft,
-                self.sample_rate,
-                FFT_SIZE,
-                self.gain,
-            ));
-            if self.spectrogram.len() > 50 {
-                self.spectrogram.pop_front();
-            }
-            self.analysis_history.push_back(AnalysisHistoryFrame {
-                energy,
-                bass,
-                mid,
-                high,
-                beat_activation: beat.beat_activation,
-                downbeat_activation: beat.downbeat_activation,
-            });
-            if self.analysis_history.len() > 50 {
-                self.analysis_history.pop_front();
+        if self.last_structure_update.elapsed() >= Duration::from_millis(100) {
+            self.structure_history
+                .push_back(StructureAnalysisFrame { energy });
+            if self.structure_history.len() > 50 {
+                self.structure_history.pop_front();
             }
             self.structure
-                .update(beat.estimated_bar, energy, bass, &self.analysis_history);
-            self.last_spectrogram = Instant::now();
+                .update(beat.estimated_bar, energy, bass, &self.structure_history);
+            self.last_structure_update = Instant::now();
         }
         let spectrum_min_hz = self.sample_rate as f32 / FFT_SIZE as f32;
         self.last_analysis = AudioAnalysis {
@@ -1239,13 +1219,7 @@ impl AudioAnalyzer {
             estimated_bar: beat.estimated_bar,
             waveform: waveform(samples, self.gain),
             spectrum: spectrum(fft, self.sample_rate, FFT_SIZE, self.gain),
-            spectrogram: self
-                .spectrogram
-                .iter()
-                .cloned()
-                .map(|bins| SpectrogramFrame { bins })
-                .collect(),
-            onset_history: self.onset_history.iter().copied().collect(),
+            spectrogram_bins,
             meter: u32::from(beat.meter),
             beat_index: u32::from(beat.beat_index),
             beat_activation: beat.beat_activation,
@@ -1256,7 +1230,6 @@ impl AudioAnalyzer {
             clipping,
             spectrum_min_hz,
             spectrum_max_hz: SPECTRUM_MAX_HZ.min(self.sample_rate as f32 / 2.0),
-            history: self.analysis_history.iter().cloned().collect(),
             chroma: self.smoothed_chroma.into(),
             key_pitch_class,
             tonality: tonality as i32,
@@ -1298,8 +1271,7 @@ impl AudioAnalyzer {
             self.beatnet_status.status = "Reacquiring rhythm".into();
         }
         self.resampler.reset();
-        self.onset_history.clear();
-        self.analysis_history.clear();
+        self.structure_history.clear();
         self.structure = StructureTracker::default();
         self.last_analysis.tempo = 0.0;
         self.last_analysis.beat_detected = false;
@@ -1314,7 +1286,6 @@ impl AudioAnalyzer {
         self.last_analysis.beat_activation = 0.0;
         self.last_analysis.downbeat_activation = 0.0;
         self.last_analysis.tracking_confidence = 0.0;
-        self.last_analysis.history.clear();
         self.last_analysis.section = MusicSection::Unspecified as i32;
         self.last_analysis.section_confidence = 0.0;
         self.last_analysis.section_history.clear();
@@ -1626,7 +1597,7 @@ impl StructureTracker {
         estimated_bar: u64,
         energy: f32,
         bass: f32,
-        history: &VecDeque<AnalysisHistoryFrame>,
+        history: &VecDeque<StructureAnalysisFrame>,
     ) {
         if energy > 0.08 {
             self.active_frames = self.active_frames.saturating_add(1);
@@ -1672,7 +1643,7 @@ impl StructureTracker {
 fn classify_section(
     energy: f32,
     bass: f32,
-    history: &VecDeque<AnalysisHistoryFrame>,
+    history: &VecDeque<StructureAnalysisFrame>,
     active_frames: u64,
     current: MusicSection,
 ) -> (MusicSection, f32) {
@@ -1954,16 +1925,14 @@ mod tests {
             estimated_beat: 64,
             estimated_bar: 16,
             tracking_confidence: 0.9,
-            history: vec![AnalysisHistoryFrame::default()],
             section: MusicSection::Main as i32,
             section_confidence: 0.8,
             section_history: vec![SectionMarker::default()],
             ..silent_analysis()
         };
-        analyzer.onset_history.push_back(0.9);
         analyzer
-            .analysis_history
-            .push_back(AnalysisHistoryFrame::default());
+            .structure_history
+            .push_back(StructureAnalysisFrame::default());
 
         let reset = analyzer.reset_rhythm_tracking();
 
@@ -1973,11 +1942,9 @@ mod tests {
         assert_eq!(reset.estimated_beat, 0);
         assert_eq!(reset.estimated_bar, 0);
         assert_eq!(reset.tracking_confidence, 0.0);
-        assert!(reset.history.is_empty());
         assert_eq!(reset.section, MusicSection::Unspecified as i32);
         assert!(reset.section_history.is_empty());
-        assert!(analyzer.onset_history.is_empty());
-        assert!(analyzer.analysis_history.is_empty());
+        assert!(analyzer.structure_history.is_empty());
     }
 
     #[test]
@@ -2169,17 +2136,6 @@ mod tests {
     }
 
     #[test]
-    fn spectrogram_retains_five_seconds_at_ten_hertz() {
-        let mut analyzer = AudioAnalyzer::new(44_100, 1.0, "");
-        analyzer.spectrogram = (0..50).map(|_| vec![0.0; 64]).collect();
-        analyzer.spectrogram.push_back(vec![1.0; 64]);
-        if analyzer.spectrogram.len() > 50 {
-            analyzer.spectrogram.pop_front();
-        }
-        assert_eq!(analyzer.spectrogram.len(), 50);
-    }
-
-    #[test]
     fn fft_visualization_power_matches_signal_power() {
         let amplitude = 0.2;
         let frequency_bin = 32.0;
@@ -2212,6 +2168,19 @@ mod tests {
         assert!(spectrogram.iter().copied().fold(0.0, f32::max) < 1.0);
         assert!(spectrum.iter().any(|value| *value > 0.5));
         assert!(spectrogram.iter().any(|value| *value > 0.5));
+    }
+
+    #[test]
+    fn analyzer_publishes_the_current_spectrogram_row() {
+        let mut analyzer = AudioAnalyzer::new(48_000, 1.0, "");
+        let samples: Vec<_> = (0..FFT_SIZE)
+            .map(|index| (std::f32::consts::TAU * 32.0 * index as f32 / FFT_SIZE as f32).sin())
+            .collect();
+
+        let analysis = analyzer.process(&samples);
+
+        assert_eq!(analysis.spectrogram_bins.len(), 64);
+        assert!(analysis.spectrogram_bins.iter().any(|value| *value > 0.0));
     }
 
     #[test]
@@ -2275,17 +2244,10 @@ mod tests {
     fn structure_classifier_marks_confirmed_energy_jumps_as_drops() {
         let mut history = VecDeque::new();
         for _ in 0..20 {
-            history.push_back(AnalysisHistoryFrame {
-                energy: 0.2,
-                ..Default::default()
-            });
+            history.push_back(StructureAnalysisFrame { energy: 0.2 });
         }
         for _ in 0..15 {
-            history.push_back(AnalysisHistoryFrame {
-                energy: 0.82,
-                bass: 0.8,
-                ..Default::default()
-            });
+            history.push_back(StructureAnalysisFrame { energy: 0.82 });
         }
 
         let (section, confidence) = classify_section(0.82, 0.8, &history, 120, MusicSection::Main);
