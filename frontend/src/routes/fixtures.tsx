@@ -539,7 +539,9 @@ function FixtureTypeRow({ fixtureType }: { readonly fixtureType: GrandMa2Fixture
           ) : null}
         </div>
       </div>
-      <code className="truncate text-xs text-muted-foreground">{fixtureType.id}</code>
+      <code className="truncate text-xs text-muted-foreground" title={fixtureType.id}>
+        {fixtureType.id}
+      </code>
     </div>
   )
 }

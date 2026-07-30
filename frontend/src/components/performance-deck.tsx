@@ -115,6 +115,9 @@ export function PerformanceDeck({
   readonly effectRuntime: EffectRuntimeStatus | undefined
   readonly media: MediaInfo | undefined
 }) {
+  const trackName = media?.trackName || "No track detected"
+  const artistName = media?.artistName || "System media session"
+
   return (
     <section className="grid min-w-0 border bg-card xl:grid-cols-[20rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-4 border-b p-4 xl:border-r xl:border-b-0">
@@ -134,11 +137,11 @@ export function PerformanceDeck({
                 {active ? (media?.isPlaying ? "Playing" : "Listening") : "Idle"}
               </Badge>
             </div>
-            <p className="mt-2 truncate font-heading text-base font-semibold">
-              {media?.trackName || "No track detected"}
+            <p className="mt-2 truncate font-heading text-base font-semibold" title={trackName}>
+              {trackName}
             </p>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {media?.artistName || "System media session"}
+            <p className="mt-0.5 truncate text-xs text-muted-foreground" title={artistName}>
+              {artistName}
             </p>
           </div>
         </div>

@@ -170,6 +170,7 @@ function EnumSelectField({
     label: formatEnumLabel(optionLabel),
     value: String(optionValue),
   }))
+  const selectedLabel = formatEnumValue(options, value)
 
   return (
     <Field>
@@ -180,8 +181,8 @@ function EnumSelectField({
         value={String(value)}
         onValueChange={(next) => onChange(Number(next))}
       >
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue>{formatEnumValue(options, value)}</SelectValue>
+        <SelectTrigger id={id} className="w-full" title={selectedLabel}>
+          <SelectValue>{selectedLabel}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectGroup>

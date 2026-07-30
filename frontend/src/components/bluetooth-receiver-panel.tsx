@@ -166,6 +166,7 @@ export function BluetoothReceiverPanel() {
           {status.devices.map((device) => {
             const pendingDevice =
               deviceMutation.isPending && deviceMutation.variables.deviceId === device.id
+            const deviceName = device.name || device.id
             return (
               <div
                 key={device.id}
@@ -173,10 +174,15 @@ export function BluetoothReceiverPanel() {
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate text-sm font-medium">{device.name || device.id}</p>
+                    <p className="truncate text-sm font-medium" title={deviceName}>
+                      {deviceName}
+                    </p>
                     {device.connected ? <Badge variant="secondary">Connected</Badge> : null}
                   </div>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                  <p
+                    className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
+                    title={device.id}
+                  >
                     {device.id}
                   </p>
                 </div>

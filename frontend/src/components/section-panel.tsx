@@ -31,7 +31,9 @@ export function SectionPanel({
             <h2 className="text-sm font-semibold tracking-tight text-balance">{title}</h2>
           </CardTitle>
           {description ? (
-            <CardDescription className="truncate text-xs">{description}</CardDescription>
+            <CardDescription className="truncate text-xs" title={description}>
+              {description}
+            </CardDescription>
           ) : null}
           {action ? <CardAction>{action}</CardAction> : null}
         </CardHeader>

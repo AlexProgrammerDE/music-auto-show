@@ -41,7 +41,10 @@ function DmxUniversePage() {
         </div>
         <div className="border-r p-4">
           <p className="text-xs text-muted-foreground">Port</p>
-          <p className="mt-1 truncate font-heading text-sm font-semibold">
+          <p
+            className="mt-1 truncate font-heading text-sm font-semibold"
+            title={snapshot.dmxRuntime?.port || "Automatic"}
+          >
             {snapshot.dmxRuntime?.port || "Automatic"}
           </p>
         </div>

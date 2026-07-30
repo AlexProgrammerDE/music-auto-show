@@ -112,6 +112,8 @@ function ShowControls({
   readonly transitioning: boolean
   readonly blackout: boolean
 }) {
+  const status = statusMessage || "Ready for audio input"
+
   return (
     <section className="flex flex-col gap-4 border bg-card p-4 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex min-w-0 items-center gap-3">
@@ -128,8 +130,8 @@ function ShowControls({
             <h1 className="font-heading text-base font-semibold">Live show</h1>
             <Badge variant="outline">{formatEnumLabel(RunState[snapshotState] ?? "Stopped")}</Badge>
           </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {statusMessage || "Ready for audio input"}
+          <p className="mt-0.5 truncate text-xs text-muted-foreground" title={status}>
+            {status}
           </p>
         </div>
       </div>

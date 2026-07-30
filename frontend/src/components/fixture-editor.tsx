@@ -198,6 +198,9 @@ export function FixtureEditor({
                   const selected = fixtureTypes.find(
                     (fixtureType) => fixtureType.id === field.state.value,
                   )
+                  const selectedLabel = selected
+                    ? fixtureTypeLabel(selected)
+                    : "Choose fixture type"
                   const invalid = field.state.meta.isTouched && !field.state.meta.isValid
                   return (
                     <Field data-invalid={invalid}>
@@ -214,10 +217,9 @@ export function FixtureEditor({
                           id={`${field.name}-trigger`}
                           className="w-full"
                           aria-invalid={invalid}
+                          title={selectedLabel}
                         >
-                          <SelectValue>
-                            {selected ? fixtureTypeLabel(selected) : "Choose fixture type"}
-                          </SelectValue>
+                          <SelectValue>{selectedLabel}</SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
