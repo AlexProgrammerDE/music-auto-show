@@ -7,8 +7,9 @@ import type {
   SpectrogramFrame,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
-import { followEnvelope, interpolatedAudio, sampleLiveFrame } from "@/lib/live-frame-store"
+import { latestLiveFrame } from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
+import { followSpectrumBin, followSpectrumPeak, smoothSpectrumBins } from "@/lib/spectrum-motion"
 
 type SpectrumFocus = "spectrum" | "spectrogram"
 
@@ -190,15 +191,18 @@ export function SpectrumWaterfall({
   const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
     if (!surface) return
-    const liveAudio = interpolatedAudio(sampleLiveFrame(now))
-    const values = liveAudio?.spectrum.length ? liveAudio.spectrum : (analysis?.spectrum ?? [])
+    const liveAudio = latestLiveFrame()?.frame.audio
+    const sourceValues = liveAudio?.spectrum.length
+      ? liveAudio.spectrum
+      : (analysis?.spectrum ?? [])
+    const values = smoothSpectrumBins(sourceValues)
     const delta = lastRenderRef.current === 0 ? 16 : Math.min(100, now - lastRenderRef.current)
     lastRenderRef.current = now
     peaksRef.current = values.map((value, index) =>
-      Math.max(value, (peaksRef.current[index] ?? value) - delta * 0.00024),
+      followSpectrumPeak(peaksRef.current[index] ?? value, value, delta),
     )
     smoothedRef.current = values.map((value, index) =>
-      followEnvelope(smoothedRef.current[index] ?? value, value, delta),
+      followSpectrumBin(smoothedRef.current[index] ?? value, value, delta),
     )
     const waterfallProgress = waterfallScrollingRef.current
       ? Math.min(1, (now - waterfallStartedRef.current) / 100)
