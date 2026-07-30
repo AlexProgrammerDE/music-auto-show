@@ -16,21 +16,59 @@ export function normalizeMeter(meter: number) {
   return meter === 2 || meter === 3 || meter === 4 ? meter : 4
 }
 
+function advanceBeatIndex(beatIndex: number, beats: number, meter: number) {
+  return ((((beatIndex - 1 + beats) % meter) + meter) % meter) + 1
+}
+
+function shortestPhaseDelta(from: number, to: number) {
+  let delta = to - from
+  if (delta > 0.5) delta -= 1
+  if (delta < -0.5) delta += 1
+  return delta
+}
+
 export function reconcileBeatRunwaySample(
   previous: BeatRunwaySample,
   incoming: BeatRunwaySample,
 ): BeatRunwaySample {
-  if (!incoming.active || incoming.tempo <= 0) return incoming
-  const projected = projectBeatRunwayFrame(previous, incoming.sampledAt)
-  const phaseError = Math.abs(projected.beatPosition - incoming.beatPosition)
-  const wrappedError = Math.min(phaseError, 1 - phaseError)
-  if (previous.active && previous.estimatedBeat === incoming.estimatedBeat && wrappedError < 0.12) {
-    return {
-      ...incoming,
-      beatPosition: projected.beatPosition * 0.6 + incoming.beatPosition * 0.4,
-    }
+  const meter = normalizeMeter(incoming.meter)
+  const normalizedIncoming = {
+    ...incoming,
+    beatIndex: advanceBeatIndex(Math.max(1, incoming.beatIndex), 0, meter),
+    meter,
   }
-  return incoming
+  if (
+    !normalizedIncoming.active ||
+    normalizedIncoming.tempo <= 0 ||
+    !previous.active ||
+    previous.meter !== meter ||
+    normalizedIncoming.sampledAt <= previous.sampledAt
+  ) {
+    return normalizedIncoming
+  }
+
+  const projected = projectBeatRunwayFrame(previous, incoming.sampledAt)
+  const phaseDelta = shortestPhaseDelta(projected.beatPosition, normalizedIncoming.beatPosition)
+  const incomingCrossedBeats = Math.floor(projected.beatPosition + phaseDelta)
+  const expectedBeatIndex = advanceBeatIndex(projected.beatIndex, incomingCrossedBeats, meter)
+  const counterDiscontinuity =
+    Math.abs(projected.estimatedBeat - normalizedIncoming.estimatedBeat) > 1
+  if (
+    Math.abs(phaseDelta) >= 0.12 ||
+    normalizedIncoming.beatIndex !== expectedBeatIndex ||
+    counterDiscontinuity
+  ) {
+    return normalizedIncoming
+  }
+
+  const correctedPhase = projected.beatPosition + phaseDelta * 0.4
+  const correctedCrossedBeats = Math.floor(correctedPhase)
+  return {
+    ...normalizedIncoming,
+    beatIndex: advanceBeatIndex(projected.beatIndex, correctedCrossedBeats, meter),
+    beatPosition: ((correctedPhase % 1) + 1) % 1,
+    estimatedBeat: projected.estimatedBeat + correctedCrossedBeats,
+  }
 }
 
 export function projectBeatRunwayFrame(sample: BeatRunwaySample, now: number): BeatRunwayFrame {
@@ -43,7 +81,7 @@ export function projectBeatRunwayFrame(sample: BeatRunwaySample, now: number): B
   const crossedBeats = Math.floor(totalPhase)
   const beatPosition = totalPhase - crossedBeats
   const estimatedBeat = sample.estimatedBeat + crossedBeats
-  const beatIndex = ((Math.max(1, sample.beatIndex) - 1 + crossedBeats) % meter) + 1
+  const beatIndex = advanceBeatIndex(Math.max(1, sample.beatIndex), crossedBeats, meter)
   return {
     ...sample,
     beatIndex,
