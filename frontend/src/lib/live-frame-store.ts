@@ -158,7 +158,7 @@ export function interpolatedAudio(sample: LiveFrameSample | undefined): LiveAudi
     ),
     rmsDbfs: interpolateNumber(previous.rmsDbfs, current.rmsDbfs, alpha),
     peakDbfs: interpolateNumber(previous.peakDbfs, current.peakDbfs, alpha),
-    waveform: interpolateArray(previous.waveform, current.waveform, alpha),
+    waveform: discrete.waveform,
     spectrum: interpolateArray(previous.spectrum, current.spectrum, alpha),
   }
 }

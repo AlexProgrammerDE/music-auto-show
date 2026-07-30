@@ -8,6 +8,7 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
   followEnvelope,
+  interpolatedAudio,
   interpolateFixtureState,
   interpolatePhase,
   projectBeat,
@@ -70,6 +71,35 @@ describe("live frame timing", () => {
     expect(state.pan).toBe(0)
     expect(state.panFine).toBe(128)
     expect(state.red).toBe(100)
+  })
+
+  test("holds waveform snapshots instead of blending unrelated sample windows", () => {
+    const previous = {
+      capturedAt: 100,
+      frame: create(LiveFrameSchema, {
+        audio: create(LiveAudioFrameSchema, {
+          energy: 0,
+          waveform: [-1, 1],
+        }),
+      }),
+    }
+    const current = {
+      capturedAt: 125,
+      frame: create(LiveFrameSchema, {
+        audio: create(LiveAudioFrameSchema, {
+          energy: 1,
+          waveform: [1, -1],
+        }),
+      }),
+    }
+
+    const early = interpolatedAudio({ alpha: 0.25, current, previous })
+    const late = interpolatedAudio({ alpha: 0.75, current, previous })
+
+    expect(early?.energy).toBe(0.25)
+    expect(early?.waveform).toEqual([-1, 1])
+    expect(late?.energy).toBe(0.75)
+    expect(late?.waveform).toEqual([1, -1])
   })
 
   test("uses a faster attack than release for responsive stable envelopes", () => {

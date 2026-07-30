@@ -8,12 +8,7 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import { formatEnumLabel } from "@/lib/format"
-import {
-  interpolatedAudio,
-  latestLiveFrame,
-  projectBeat,
-  sampleLiveFrame,
-} from "@/lib/live-frame-store"
+import { latestLiveFrame, projectBeat } from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
 function themeColor(variable: string) {
@@ -60,10 +55,9 @@ function useCanvasRender(
 }
 
 export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
-  const canvasRef = useCanvasRender(({ context, width, height }, now) => {
-    const liveAudio = interpolatedAudio(sampleLiveFrame(now))
-    const values = liveAudio?.waveform.length ? liveAudio.waveform : (analysis?.waveform ?? [])
-    const clipping = liveAudio?.clipping ?? analysis?.clipping ?? false
+  const canvasRef = useCanvasRender(({ context, width, height }) => {
+    const values = analysis?.waveform ?? []
+    const clipping = analysis?.clipping ?? false
     const center = height / 2
     context.clearRect(0, 0, width, height)
     context.fillStyle = themeColor("--background")
@@ -106,7 +100,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
       context.stroke()
     }
     context.globalAlpha = 1
-  }, true)
+  })
   return (
     <figure className="relative min-h-72 overflow-hidden border bg-background">
       <canvas
