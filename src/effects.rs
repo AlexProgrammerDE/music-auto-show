@@ -19,6 +19,27 @@ use crate::{
 const REFERENCE_FRAME_SECONDS: f32 = 0.025;
 const MAX_EFFECT_STEP_SECONDS: f32 = 0.1;
 const REFERENCE_TEMPO: f32 = 120.0;
+const REFERENCE_AXIS_RANGE_DEGREES: f32 = 360.0;
+
+#[derive(Debug, Clone, Copy)]
+struct CrazyMotionState {
+    pan_phase: f32,
+    tilt_phase: f32,
+    pan_velocity: f32,
+    tilt_velocity: f32,
+}
+
+impl CrazyMotionState {
+    fn new(position: u32) -> Self {
+        let offset = position as f32 * PI * 0.7;
+        Self {
+            pan_phase: offset.rem_euclid(TAU),
+            tilt_phase: (offset + PI * 0.65).rem_euclid(TAU),
+            pan_velocity: 1.0,
+            tilt_velocity: 1.0,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EffectOutput {
@@ -34,6 +55,14 @@ pub struct EffectsEngine {
     target_tilt: HashMap<String, f32>,
     sweep_phase: HashMap<String, f32>,
     sweep_direction: HashMap<String, f32>,
+    circle_phase: HashMap<String, f32>,
+    circle_pulse: HashMap<String, f32>,
+    figure_eight_phase: HashMap<String, f32>,
+    ballyhoo_phase: HashMap<String, f32>,
+    ballyhoo_direction: HashMap<String, f32>,
+    fan_amount: HashMap<String, f32>,
+    fan_target: HashMap<String, f32>,
+    crazy_motion: HashMap<String, CrazyMotionState>,
     wall_corner_index: HashMap<String, usize>,
     elapsed_seconds: f32,
     last_beat: u64,
@@ -64,6 +93,14 @@ impl Default for EffectsEngine {
             target_tilt: HashMap::new(),
             sweep_phase: HashMap::new(),
             sweep_direction: HashMap::new(),
+            circle_phase: HashMap::new(),
+            circle_pulse: HashMap::new(),
+            figure_eight_phase: HashMap::new(),
+            ballyhoo_phase: HashMap::new(),
+            ballyhoo_direction: HashMap::new(),
+            fan_amount: HashMap::new(),
+            fan_target: HashMap::new(),
+            crazy_motion: HashMap::new(),
             wall_corner_index: HashMap::new(),
             elapsed_seconds: 0.0,
             last_beat: 0,
@@ -242,16 +279,22 @@ impl EffectsEngine {
     fn ensure_fixtures(&mut self, config: &ValidatedShowConfig) {
         for fixture in &config.fixtures {
             let key = fixture_key(fixture);
+            let fixture_type = find_fixture_type(config, fixture);
+            let pan_default = axis_default_position(fixture, fixture_type, DmxSemantic::Pan);
+            let tilt_default = axis_default_position(fixture, fixture_type, DmxSemantic::Tilt);
             self.states
                 .entry(key.clone())
-                .or_insert_with(|| default_state(fixture));
+                .or_insert_with(|| default_state(fixture, fixture_type));
             self.smoothed
                 .entry(key.clone())
-                .or_insert_with(|| default_state(fixture));
-            self.target_pan.entry(key.clone()).or_insert(128.0);
-            self.target_tilt.entry(key.clone()).or_insert(128.0);
+                .or_insert_with(|| default_state(fixture, fixture_type));
+            self.target_pan.entry(key.clone()).or_insert(pan_default);
+            self.target_tilt.entry(key.clone()).or_insert(tilt_default);
             self.sweep_phase.entry(key.clone()).or_insert(0.0);
             self.sweep_direction.entry(key.clone()).or_insert(1.0);
+            self.crazy_motion
+                .entry(key.clone())
+                .or_insert_with(|| CrazyMotionState::new(fixture.position));
             self.wall_corner_index.entry(key).or_insert(0);
         }
     }
@@ -837,10 +880,11 @@ impl EffectsEngine {
             *chase = (*chase + 1) % movement_fixture_count;
         }
 
+        let mut moved_on_beat = false;
         for (movement_index, (_, fixture, has_pan, has_tilt)) in
             movement_fixtures.into_iter().enumerate()
         {
-            self.movement_target(
+            moved_on_beat |= self.movement_target(
                 fixture,
                 audio,
                 beat,
@@ -853,7 +897,10 @@ impl EffectsEngine {
                 movement_fixture_count,
                 delta_seconds,
             );
-            self.interpolate_position(fixture, mode, speed, audio.tempo, delta_seconds);
+            self.interpolate_position(config, fixture, mode, speed, audio.tempo, delta_seconds);
+        }
+        if moved_on_beat {
+            self.beats_since_move = 0;
         }
     }
 
@@ -871,7 +918,7 @@ impl EffectsEngine {
         movement_index: usize,
         movement_fixture_count: usize,
         delta_seconds: f32,
-    ) {
+    ) -> bool {
         let key = fixture_key(fixture);
         let pan_min = fixture.movement_pan_min * 255.0;
         let pan_max = fixture.movement_pan_max * 255.0;
@@ -884,6 +931,7 @@ impl EffectsEngine {
         let energy = audio.energy;
         let bass = audio.bass;
         let phase_offset = fixture.position as f32;
+        let mut moved_on_beat = false;
 
         match mode {
             MovementMode::Subtle => {
@@ -920,7 +968,7 @@ impl EffectsEngine {
                         key,
                         tilt_center + factor * tilt_range / 2.0 * speed * (0.5 + bass * 0.5),
                     );
-                    self.beats_since_move = 0;
+                    moved_on_beat = true;
                 }
             }
             MovementMode::Dramatic => {
@@ -940,7 +988,7 @@ impl EffectsEngine {
                         key,
                         tilt_center + factor * tilt_range / 2.0 * speed * (0.7 + bass * 0.3),
                     );
-                    self.beats_since_move = 0;
+                    moved_on_beat = true;
                 }
             }
             MovementMode::WallWash => {
@@ -977,7 +1025,8 @@ impl EffectsEngine {
             }
             MovementMode::Sweep => {
                 let tempo = tempo_scale(audio.tempo);
-                let rate = 0.03 * speed * tempo;
+                let energy_boost = if energy > 0.6 { 1.3 } else { 1.0 };
+                let rate = 0.03 * speed * tempo * energy_boost;
                 let mut phase = self.sweep_phase.get(&key).copied().unwrap_or(0.0);
                 let mut direction = self.sweep_direction.get(&key).copied().unwrap_or(1.0);
                 phase += delta_seconds * rate * direction;
@@ -998,14 +1047,9 @@ impl EffectsEngine {
                     );
                 }
                 if has_tilt {
-                    let tilt_phase = (phase + phase_offset * 0.25) % 1.0;
-                    let factor = 0.3 + ease_in_out_sine(tilt_phase) * 0.5;
+                    let factor = sweep_tilt_factor(phase, phase_offset);
                     self.target_tilt
                         .insert(key.clone(), tilt_center + factor * tilt_range / 2.0);
-                }
-                if energy > 0.6 {
-                    self.sweep_phase
-                        .insert(key, phase + delta_seconds * rate * 0.3);
                 }
             }
             MovementMode::Random => {
@@ -1024,22 +1068,23 @@ impl EffectsEngine {
                                 + self.rng.random_range(-0.3..=0.9) * tilt_range / 2.0 * speed,
                         );
                     }
-                    self.beats_since_move = 0;
+                    moved_on_beat = true;
                 }
             }
             MovementMode::Circle => {
                 let rate = 0.08 * speed * tempo_scale(audio.tempo) * (0.8 + energy * 0.4);
-                let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
+                let mut phase = self.circle_phase.get(&key).copied().unwrap_or(0.0)
+                    + delta_seconds * rate * TAU;
                 phase %= TAU;
-                self.sweep_phase.insert(key.clone(), phase);
+                self.circle_phase.insert(key.clone(), phase);
                 if beat {
-                    self.sweep_direction.insert(key.clone(), 1.0);
+                    self.circle_pulse.insert(key.clone(), 1.0);
+                    moved_on_beat = true;
                 }
-                let pulse = (self.sweep_direction.get(&key).copied().unwrap_or(0.0)
+                let pulse = (self.circle_pulse.get(&key).copied().unwrap_or(0.0)
                     - delta_seconds * 3.0)
                     .max(0.0);
-                self.sweep_direction.insert(key.clone(), pulse);
+                self.circle_pulse.insert(key.clone(), pulse);
                 let angle = phase + phase_offset * PI / 3.0;
                 let size = 0.5 * speed + pulse * 0.3 * bass;
                 if has_pan {
@@ -1057,10 +1102,10 @@ impl EffectsEngine {
             }
             MovementMode::Figure8 => {
                 let rate = 0.06 * speed * tempo_scale(audio.tempo) * (0.7 + energy * 0.4);
-                let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
+                let mut phase = self.figure_eight_phase.get(&key).copied().unwrap_or(0.0)
+                    + delta_seconds * rate * TAU;
                 phase %= TAU;
-                self.sweep_phase.insert(key.clone(), phase);
+                self.figure_eight_phase.insert(key.clone(), phase);
                 let angle = phase + phase_offset * PI / 4.0;
                 let size = 0.6 * speed * (0.8 + energy * 0.2);
                 if has_pan {
@@ -1077,9 +1122,10 @@ impl EffectsEngine {
             }
             MovementMode::Ballyhoo => {
                 let rate = 0.12 * speed * tempo_scale(audio.tempo) * (0.85 + energy * 0.3);
-                let mut phase =
-                    self.sweep_phase.get(&key).copied().unwrap_or(0.0) + delta_seconds * rate * TAU;
-                phase %= TAU;
+                let mut direction = self.ballyhoo_direction.get(&key).copied().unwrap_or(1.0);
+                let mut phase = self.ballyhoo_phase.get(&key).copied().unwrap_or(0.0)
+                    + delta_seconds * rate * direction * TAU;
+                phase = phase.rem_euclid(TAU);
                 let angle = phase + phase_offset * PI / 2.0;
                 let size = 0.85 * speed;
                 if has_pan {
@@ -1094,24 +1140,26 @@ impl EffectsEngine {
                         .insert(key.clone(), tilt_center + factor * tilt_range / 2.0);
                 }
                 if beat && bass > 0.7 {
-                    phase = TAU - phase;
+                    direction = -direction;
+                    moved_on_beat = true;
                 }
-                self.sweep_phase.insert(key, phase);
+                self.ballyhoo_phase.insert(key.clone(), phase);
+                self.ballyhoo_direction.insert(key, direction);
             }
             MovementMode::Fan => {
-                let mut amount = self.sweep_phase.get(&key).copied().unwrap_or(0.5);
-                let mut target = self.sweep_direction.get(&key).copied().unwrap_or(0.5);
+                let mut amount = self.fan_amount.get(&key).copied().unwrap_or(0.5);
+                let mut target = self.fan_target.get(&key).copied().unwrap_or(0.5);
                 if bar {
                     target = if audio.estimated_bar.is_multiple_of(2) {
                         0.9
                     } else {
                         0.2
                     };
-                    self.sweep_direction.insert(key.clone(), target);
+                    self.fan_target.insert(key.clone(), target);
                 }
                 amount += (target - amount)
                     * time_adjusted_factor(0.08 * speed * tempo_scale(audio.tempo), delta_seconds);
-                self.sweep_phase.insert(key.clone(), amount);
+                self.fan_amount.insert(key.clone(), amount);
                 let normalized = if movement_fixture_count > 1 {
                     movement_index as f32 / (movement_fixture_count - 1) as f32 * 2.0 - 1.0
                 } else {
@@ -1201,52 +1249,47 @@ impl EffectsEngine {
                             tilt_center + tilt.clamp(-1.0, 1.0) * tilt_range / 2.0 * speed,
                         );
                     }
-                    self.beats_since_move = 0;
+                    moved_on_beat = true;
                 }
             }
             MovementMode::Crazy => {
                 let scale = tempo_scale(audio.tempo);
                 let boost = 0.6 + energy;
-                let mut pan_phase = self
-                    .sweep_phase
-                    .get(&key)
-                    .copied()
-                    .unwrap_or_else(|| self.rng.random::<f32>() * TAU);
-                let mut tilt_phase = self
-                    .sweep_direction
-                    .get(&key)
-                    .copied()
-                    .unwrap_or_else(|| self.rng.random::<f32>() * TAU);
-                if tilt_phase.abs() <= 1.0 {
-                    tilt_phase = self.rng.random::<f32>() * TAU;
-                }
-                pan_phase = (pan_phase + delta_seconds * 0.18 * speed * scale * boost * TAU) % TAU;
-                tilt_phase =
-                    (tilt_phase + delta_seconds * 0.23 * speed * scale * boost * TAU) % TAU;
+                let motion = self
+                    .crazy_motion
+                    .entry(key.clone())
+                    .or_insert_with(|| CrazyMotionState::new(fixture.position));
                 if beat {
                     let roll = self.rng.random::<f32>();
                     if bass > 0.7 && roll < 0.4 {
-                        pan_phase = TAU - pan_phase;
+                        motion.pan_velocity = -motion.pan_velocity;
                     }
                     if energy > 0.6 && roll < 0.5 {
-                        pan_phase += self.rng.random_range(0.5..=1.5);
-                        tilt_phase += self.rng.random_range(0.3..=1.0);
+                        motion.pan_velocity += self.rng.random_range(-0.35..=0.35) * boost;
+                        motion.tilt_velocity += self.rng.random_range(-0.3..=0.3) * boost;
                     }
                     if roll < 0.25 {
-                        pan_phase = self.rng.random::<f32>() * TAU;
-                        tilt_phase = self.rng.random::<f32>() * TAU;
+                        motion.pan_velocity += self.rng.random_range(-0.5..=0.5);
+                        motion.tilt_velocity += self.rng.random_range(-0.45..=0.45);
                     }
                 }
                 if bar && self.rng.random::<f32>() < 0.3 {
-                    tilt_phase = TAU - tilt_phase;
+                    motion.tilt_velocity = -motion.tilt_velocity;
                 }
-                self.sweep_phase.insert(key.clone(), pan_phase);
-                self.sweep_direction.insert(key.clone(), tilt_phase);
+                let velocity_recovery = time_adjusted_factor(0.025, delta_seconds);
+                motion.pan_velocity += (1.0 - motion.pan_velocity) * velocity_recovery;
+                motion.tilt_velocity += (1.0 - motion.tilt_velocity) * velocity_recovery;
+                motion.pan_velocity = motion.pan_velocity.clamp(-1.6, 1.6);
+                motion.tilt_velocity = motion.tilt_velocity.clamp(-1.6, 1.6);
+                motion.pan_phase = (motion.pan_phase
+                    + delta_seconds * 0.18 * speed * scale * boost * TAU * motion.pan_velocity)
+                    .rem_euclid(TAU);
+                motion.tilt_phase = (motion.tilt_phase
+                    + delta_seconds * 0.23 * speed * scale * boost * TAU * motion.tilt_velocity)
+                    .rem_euclid(TAU);
                 let offset = phase_offset * PI * 0.7;
-                let pan_factor =
-                    ((pan_phase + offset).sin() + (pan_phase * 2.7 + offset).sin() * 0.3) / 1.3;
-                let tilt_factor =
-                    ((tilt_phase + offset * 0.5).sin() + (tilt_phase * 1.9).cos() * 0.4) / 1.4;
+                let (pan_factor, tilt_factor) =
+                    crazy_axis_factors(motion.pan_phase, motion.tilt_phase, offset);
                 if has_pan {
                     self.target_pan.insert(
                         key.clone(),
@@ -1260,13 +1303,15 @@ impl EffectsEngine {
                             .clamp(tilt_min, tilt_max),
                     );
                 }
-                self.beats_since_move = 0;
+                moved_on_beat |= beat;
             }
         }
+        moved_on_beat
     }
 
     fn interpolate_position(
         &mut self,
+        config: &ValidatedShowConfig,
         fixture: &FixtureConfig,
         mode: MovementMode,
         speed: f32,
@@ -1295,10 +1340,45 @@ impl EffectsEngine {
         let target_pan = self.target_pan.get(&key).copied().unwrap_or(128.0);
         let target_tilt = self.target_tilt.get(&key).copied().unwrap_or(128.0);
         if let Some(state) = self.states.get_mut(&key) {
-            state.pan = (state.pan as f32 + (target_pan - state.pan as f32) * pan_rate)
-                .clamp(0.0, 255.0) as u32;
-            state.tilt = (state.tilt as f32 + (target_tilt - state.tilt as f32) * tilt_rate)
-                .clamp(0.0, 255.0) as u32;
+            let pan_min = fixture.movement_pan_min * 255.0;
+            let pan_max = fixture.movement_pan_max * 255.0;
+            let tilt_min = fixture.movement_tilt_min * 255.0;
+            let tilt_max = fixture.movement_tilt_max * 255.0;
+            let fixture_type = find_fixture_type(config, fixture);
+            let next_pan = slew_axis(
+                fine_axis_position(state.pan, state.pan_fine),
+                target_pan,
+                pan_rate,
+                axis_slew_delta(
+                    fixture_type,
+                    DmxSemantic::Pan,
+                    pan_max - pan_min,
+                    mode,
+                    speed,
+                    tempo,
+                    delta_seconds,
+                ),
+                pan_min,
+                pan_max,
+            );
+            let next_tilt = slew_axis(
+                fine_axis_position(state.tilt, state.tilt_fine),
+                target_tilt,
+                tilt_rate,
+                axis_slew_delta(
+                    fixture_type,
+                    DmxSemantic::Tilt,
+                    tilt_max - tilt_min,
+                    mode,
+                    speed,
+                    tempo,
+                    delta_seconds,
+                ),
+                tilt_min,
+                tilt_max,
+            );
+            (state.pan, state.pan_fine) = fine_axis_channels(next_pan);
+            (state.tilt, state.tilt_fine) = fine_axis_channels(next_tilt);
             let mode_offset = match mode {
                 MovementMode::Dramatic | MovementMode::StrobePosition | MovementMode::Crazy => {
                     -20.0
@@ -1486,18 +1566,61 @@ fn fixture_key(fixture: &FixtureConfig) -> String {
     }
 }
 
-fn default_state(fixture: &FixtureConfig) -> FixtureState {
+fn default_state(
+    fixture: &FixtureConfig,
+    fixture_type: Option<&ParsedFixtureType>,
+) -> FixtureState {
+    let (pan, pan_fine) = fine_axis_channels(axis_default_position(
+        fixture,
+        fixture_type,
+        DmxSemantic::Pan,
+    ));
+    let (tilt, tilt_fine) = fine_axis_channels(axis_default_position(
+        fixture,
+        fixture_type,
+        DmxSemantic::Tilt,
+    ));
     FixtureState {
         fixture_id: fixture_key(fixture),
         fixture_name: fixture.name.clone(),
         dimmer: 255,
-        pan: 128,
-        tilt: 128,
+        pan,
+        pan_fine,
+        tilt,
+        tilt_fine,
         zoom: 128,
         focus: 128,
         iris: 255,
         ..Default::default()
     }
+}
+
+fn axis_default_position(
+    fixture: &FixtureConfig,
+    fixture_type: Option<&ParsedFixtureType>,
+    semantic: DmxSemantic,
+) -> f32 {
+    let (minimum, maximum) = match semantic {
+        DmxSemantic::Pan => (
+            fixture.movement_pan_min * 255.0,
+            fixture.movement_pan_max * 255.0,
+        ),
+        DmxSemantic::Tilt => (
+            fixture.movement_tilt_min * 255.0,
+            fixture.movement_tilt_max * 255.0,
+        ),
+        _ => return 127.5,
+    };
+    fixture_type
+        .and_then(|fixture_type| {
+            fixture_type
+                .channels
+                .iter()
+                .find(|channel| channel.has_semantic(semantic))
+        })
+        .map_or((minimum + maximum) / 2.0, |channel| {
+            fine_axis_position(channel.default_value, 0).clamp(minimum, maximum)
+        })
 }
 
 fn find_fixture_type<'a>(
@@ -1533,6 +1656,86 @@ fn ease_out_cubic(value: f32) -> f32 {
 
 fn ease_in_out_sine(value: f32) -> f32 {
     -((PI * value).cos() - 1.0) / 2.0
+}
+
+fn crazy_axis_factors(pan_phase: f32, tilt_phase: f32, offset: f32) -> (f32, f32) {
+    let pan = ((pan_phase + offset).sin() + (pan_phase * 3.0 + offset).sin() * 0.3) / 1.3;
+    let tilt = ((tilt_phase + offset * 0.5).sin() + (tilt_phase * 2.0).cos() * 0.4) / 1.4;
+    (pan, tilt)
+}
+
+fn sweep_tilt_factor(phase: f32, phase_offset: f32) -> f32 {
+    0.55 - ((phase + phase_offset * 0.25) * TAU).cos() * 0.25
+}
+
+fn movement_slew_rate(mode: MovementMode) -> f32 {
+    match mode {
+        MovementMode::Subtle => 0.12,
+        MovementMode::Standard | MovementMode::Unspecified => 0.22,
+        MovementMode::Dramatic => 0.38,
+        MovementMode::WallWash => 0.16,
+        MovementMode::Sweep => 0.25,
+        MovementMode::Random => 0.32,
+        MovementMode::Circle => 0.35,
+        MovementMode::Figure8 => 0.30,
+        MovementMode::Ballyhoo => 0.45,
+        MovementMode::Fan => 0.20,
+        MovementMode::Chase => 0.40,
+        MovementMode::StrobePosition => 0.50,
+        MovementMode::Crazy => 0.55,
+    }
+}
+
+fn physical_axis_range(
+    fixture_type: Option<&ParsedFixtureType>,
+    semantic: DmxSemantic,
+) -> Option<f32> {
+    let visual = &fixture_type?.visual;
+    let range = match semantic {
+        DmxSemantic::Pan => (visual.pan_max_degrees - visual.pan_min_degrees).abs(),
+        DmxSemantic::Tilt => (visual.tilt_max_degrees - visual.tilt_min_degrees).abs(),
+        _ => return None,
+    };
+    (range > f32::EPSILON && range.is_finite()).then_some(range)
+}
+
+fn axis_slew_delta(
+    fixture_type: Option<&ParsedFixtureType>,
+    semantic: DmxSemantic,
+    configured_span: f32,
+    mode: MovementMode,
+    speed: f32,
+    tempo: f32,
+    delta_seconds: f32,
+) -> f32 {
+    let response = movement_slew_rate(mode) * (0.25 + speed * 0.75) * tempo_scale(tempo).sqrt();
+    physical_axis_range(fixture_type, semantic).map_or(configured_span * response, |degrees| {
+        255.0 * response * REFERENCE_AXIS_RANGE_DEGREES / degrees
+    }) * delta_seconds
+}
+
+fn fine_axis_position(coarse: u32, fine: u32) -> f32 {
+    let raw = coarse.min(255) * 256 + fine.min(255);
+    raw as f32 / 65_535.0 * 255.0
+}
+
+fn fine_axis_channels(position: f32) -> (u32, u32) {
+    let raw = (position.clamp(0.0, 255.0) / 255.0 * 65_535.0).round() as u32;
+    (raw / 256, raw % 256)
+}
+
+fn slew_axis(
+    current: f32,
+    target: f32,
+    response: f32,
+    max_delta: f32,
+    minimum: f32,
+    maximum: f32,
+) -> f32 {
+    let current = current.clamp(0.0, 255.0);
+    let target = target.clamp(minimum, maximum);
+    let desired_delta = (target - current) * response.clamp(0.0, 1.0);
+    (current + desired_delta.clamp(-max_delta.max(0.0), max_delta.max(0.0))).clamp(0.0, 255.0)
 }
 
 fn tempo_scale(tempo: f32) -> f32 {
@@ -2235,7 +2438,12 @@ mod tests {
             settings.movement_enabled = true;
             settings.movement_mode = MovementMode::Circle as i32;
             let config = validated(config);
-            let fixture = fixture_key(&config.fixtures[0]);
+            let fixture = config
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.fixture_type_id == PURELIGHT_MUVY_WASHQ_ID)
+                .map(fixture_key)
+                .expect("default show should contain a moving head");
             let audio = AudioAnalysis {
                 energy: 0.8,
                 tempo: 120.0,
@@ -2247,7 +2455,7 @@ mod tests {
             for _ in 0..fps {
                 engine.process(&config, &audio, &[], false, delta);
             }
-            engine.sweep_phase[&fixture]
+            engine.circle_phase[&fixture]
         }
 
         approx::assert_abs_diff_eq!(
@@ -2255,6 +2463,255 @@ mod tests {
             phase_after_one_second(40),
             epsilon = 0.0001
         );
+    }
+
+    #[test]
+    fn crazy_motion_waveform_is_continuous_across_phase_wraps() {
+        for offset in [0.0, PI * 0.7, PI * 1.4] {
+            let before_wrap = crazy_axis_factors(TAU - 0.0001, TAU - 0.0001, offset);
+            let after_wrap = crazy_axis_factors(0.0, 0.0, offset);
+            approx::assert_abs_diff_eq!(before_wrap.0, after_wrap.0, epsilon = 0.001);
+            approx::assert_abs_diff_eq!(before_wrap.1, after_wrap.1, epsilon = 0.001);
+        }
+    }
+
+    #[test]
+    fn offset_sweep_tilt_is_continuous_across_phase_wraps() {
+        for phase_offset in [0.0, 1.0, 2.0] {
+            approx::assert_abs_diff_eq!(
+                sweep_tilt_factor(1.0 - 0.0001, phase_offset),
+                sweep_tilt_factor(0.0, phase_offset),
+                epsilon = 0.001
+            );
+        }
+    }
+
+    #[test]
+    fn ballyhoo_reverses_velocity_without_flipping_position() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![test_fixture("muvy", 1, 0, PURELIGHT_MUVY_WASHQ_ID)];
+        let config = validated(config);
+        let fixture = &config.fixtures[0];
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        engine.ballyhoo_phase.insert("muvy".into(), 1.25);
+        engine.ballyhoo_direction.insert("muvy".into(), 1.0);
+
+        engine.movement_target(
+            fixture,
+            &AudioAnalysis {
+                energy: 0.8,
+                bass: 0.9,
+                tempo: 120.0,
+                ..Default::default()
+            },
+            true,
+            false,
+            MovementMode::Ballyhoo,
+            1.0,
+            true,
+            true,
+            0,
+            1,
+            REFERENCE_FRAME_SECONDS,
+        );
+
+        let expected_phase = 1.25 + 0.025 * 0.12 * 1.09 * TAU;
+        approx::assert_abs_diff_eq!(
+            engine.ballyhoo_phase["muvy"],
+            expected_phase,
+            epsilon = 0.0001
+        );
+        assert_eq!(engine.ballyhoo_direction["muvy"], -1.0);
+    }
+
+    #[test]
+    fn crazy_motion_keeps_valid_low_tilt_phases() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![test_fixture("muvy", 1, 0, PURELIGHT_MUVY_WASHQ_ID)];
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.movement_mode = MovementMode::Crazy as i32;
+        settings.movement_speed = 1.0;
+        let config = validated(config);
+        let fixture = &config.fixtures[0];
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        let motion = engine
+            .crazy_motion
+            .get_mut("muvy")
+            .expect("crazy motion state");
+        motion.tilt_phase = 0.25;
+        motion.tilt_velocity = 1.0;
+
+        engine.movement_target(
+            fixture,
+            &AudioAnalysis {
+                energy: 0.8,
+                bass: 0.4,
+                tempo: 120.0,
+                ..Default::default()
+            },
+            false,
+            false,
+            MovementMode::Crazy,
+            1.0,
+            true,
+            true,
+            0,
+            1,
+            REFERENCE_FRAME_SECONDS,
+        );
+
+        let tilt_phase = engine.crazy_motion["muvy"].tilt_phase;
+        assert!((0.25..0.5).contains(&tilt_phase));
+    }
+
+    #[test]
+    fn every_movement_mode_obeys_the_axis_slew_limit() {
+        for mode in MOVEMENT_MODES {
+            let mut config = default_show_config(true);
+            config.fixtures = vec![test_fixture("muvy", 1, 0, PURELIGHT_MUVY_WASHQ_ID)];
+            let settings = config.effects.as_mut().expect("effects configuration");
+            settings.movement_mode = mode as i32;
+            settings.movement_speed = 1.0;
+            let config = validated(config);
+            let fixture = &config.fixtures[0];
+            let mut engine = EffectsEngine::default();
+            engine.ensure_fixtures(&config);
+            engine.target_pan.insert("muvy".into(), 255.0);
+            engine.target_tilt.insert("muvy".into(), 0.0);
+            let before = engine.states["muvy"].clone();
+
+            engine.interpolate_position(
+                &config,
+                fixture,
+                mode,
+                1.0,
+                120.0,
+                REFERENCE_FRAME_SECONDS,
+            );
+
+            let after = &engine.states["muvy"];
+            let max_delta = axis_slew_delta(
+                find_fixture_type(&config, fixture),
+                DmxSemantic::Pan,
+                255.0,
+                mode,
+                1.0,
+                120.0,
+                REFERENCE_FRAME_SECONDS,
+            );
+            let max_tilt_delta = axis_slew_delta(
+                find_fixture_type(&config, fixture),
+                DmxSemantic::Tilt,
+                255.0,
+                mode,
+                1.0,
+                120.0,
+                REFERENCE_FRAME_SECONDS,
+            );
+            let pan_delta = (fine_axis_position(after.pan, after.pan_fine)
+                - fine_axis_position(before.pan, before.pan_fine))
+            .abs();
+            let tilt_delta = (fine_axis_position(after.tilt, after.tilt_fine)
+                - fine_axis_position(before.tilt, before.tilt_fine))
+            .abs();
+            assert!(pan_delta <= max_delta + 0.01, "{mode:?} pan moved too far");
+            assert!(
+                tilt_delta <= max_tilt_delta + 0.01,
+                "{mode:?} tilt moved too far"
+            );
+        }
+    }
+
+    #[test]
+    fn axis_slew_uses_grandma2_physical_ranges() {
+        let config = validated(default_show_config(true));
+        let fixture = config
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture_type_id == PURELIGHT_MUVY_WASHQ_ID)
+            .expect("default show should contain a moving head");
+        let fixture_type = find_fixture_type(&config, fixture);
+        let pan_delta = axis_slew_delta(
+            fixture_type,
+            DmxSemantic::Pan,
+            255.0,
+            MovementMode::Standard,
+            1.0,
+            120.0,
+            REFERENCE_FRAME_SECONDS,
+        );
+        let tilt_delta = axis_slew_delta(
+            fixture_type,
+            DmxSemantic::Tilt,
+            255.0,
+            MovementMode::Standard,
+            1.0,
+            120.0,
+            REFERENCE_FRAME_SECONDS,
+        );
+
+        approx::assert_abs_diff_eq!(tilt_delta, pan_delta * 2.0, epsilon = 0.0001);
+    }
+
+    #[test]
+    fn movement_uses_fine_channels_for_sub_coarse_positions() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![test_fixture("muvy", 1, 0, PURELIGHT_MUVY_WASHQ_ID)];
+        let config = validated(config);
+        let fixture = &config.fixtures[0];
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        engine.target_pan.insert("muvy".into(), 128.5);
+
+        engine.interpolate_position(
+            &config,
+            fixture,
+            MovementMode::Subtle,
+            1.0,
+            120.0,
+            REFERENCE_FRAME_SECONDS,
+        );
+
+        assert_ne!(engine.states["muvy"].pan_fine, 0);
+    }
+
+    #[test]
+    fn beat_fallback_moves_every_fixture_independent_of_show_order() {
+        let mut config = default_show_config(true);
+        config.fixtures = vec![
+            test_fixture("first-mover", 1, 0, PURELIGHT_MUVY_WASHQ_ID),
+            test_fixture("second-mover", 15, 1, PURELIGHT_MUVY_WASHQ_ID),
+        ];
+        let settings = config.effects.as_mut().expect("effects configuration");
+        settings.movement_mode = MovementMode::Standard as i32;
+        settings.movement_speed = 1.0;
+        let config = validated(config);
+        let mut engine = EffectsEngine::default();
+        engine.ensure_fixtures(&config);
+        engine.beats_since_move = 4;
+
+        engine.apply_movement(
+            &config,
+            &AudioAnalysis {
+                energy: 0.1,
+                tempo: 120.0,
+                estimated_beat: 1,
+                ..Default::default()
+            },
+            true,
+            false,
+            REFERENCE_FRAME_SECONDS,
+        );
+
+        approx::assert_abs_diff_eq!(
+            engine.target_tilt["first-mover"],
+            engine.target_tilt["second-mover"],
+            epsilon = 0.0001
+        );
+        assert_ne!(engine.target_tilt["first-mover"], 127.5);
+        assert_eq!(engine.beats_since_move, 0);
     }
 
     #[test]
