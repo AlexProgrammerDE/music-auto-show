@@ -1040,10 +1040,10 @@ pub struct AudioAnalyzer {
     beatnet_status: BeatNetStatus,
     analysis_fft: AnalysisFft,
     resampler: LinearResampler,
-    energy_history: VecDeque<f32>,
-    bass_history: VecDeque<f32>,
-    mid_history: VecDeque<f32>,
-    high_history: VecDeque<f32>,
+    energy_envelope: f32,
+    bass_envelope: f32,
+    mid_envelope: f32,
+    high_envelope: f32,
     onset_history: VecDeque<f32>,
     spectrogram: VecDeque<Vec<f32>>,
     analysis_history: VecDeque<AnalysisHistoryFrame>,
@@ -1089,10 +1089,10 @@ impl AudioAnalyzer {
             beatnet_status,
             analysis_fft: AnalysisFft::new(FFT_SIZE),
             resampler: LinearResampler::new(sample_rate, 22_050),
-            energy_history: VecDeque::with_capacity(10),
-            bass_history: VecDeque::with_capacity(5),
-            mid_history: VecDeque::with_capacity(5),
-            high_history: VecDeque::with_capacity(5),
+            energy_envelope: 0.0,
+            bass_envelope: 0.0,
+            mid_envelope: 0.0,
+            high_envelope: 0.0,
             onset_history: VecDeque::with_capacity(64),
             spectrogram: VecDeque::with_capacity(50),
             analysis_history: VecDeque::with_capacity(50),
@@ -1119,20 +1119,16 @@ impl AudioAnalyzer {
         let rms_dbfs = amplitude_dbfs(rms * self.gain);
         let peak_dbfs = amplitude_dbfs(peak * self.gain);
         let clipping = peak * self.gain >= 0.99;
-        push_bounded(&mut self.energy_history, rms, 10);
         let fft = self.analysis_fft.process(samples);
         let signal_power = rms * rms;
         let band = |low, high| band_power(fft, self.sample_rate, FFT_SIZE, low, high);
-        let (bass, mid, high) = normalize_bands(
+        let (bass_target, mid_target, high_target) = normalize_bands(
             band(20.0, 250.0),
             band(250.0, 4_000.0),
             band(4_000.0, 16_000.0),
             signal_power,
             self.gain,
         );
-        push_bounded(&mut self.bass_history, bass, 5);
-        push_bounded(&mut self.mid_history, mid, 5);
-        push_bounded(&mut self.high_history, high, 5);
 
         let resampled = self.resampler.process(samples);
         let beat_result = self
@@ -1164,16 +1160,20 @@ impl AudioAnalyzer {
             self.onset_history.pop_front();
         }
 
-        let average_rms = average(&self.energy_history);
         let gain_db = 20.0 * self.gain.max(0.0001).log10();
-        let energy = if average_rms > 1e-10 {
-            ((20.0 * average_rms.log10() + gain_db + 60.0) / 60.0).clamp(0.0, 1.0)
+        let energy_target = if rms > 1e-10 {
+            ((20.0 * rms.log10() + gain_db + 60.0) / 60.0).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let bass = average(&self.bass_history);
-        let mid = average(&self.mid_history);
-        let high = average(&self.high_history);
+        self.energy_envelope = follow_envelope(self.energy_envelope, energy_target, 0.68, 0.16);
+        self.bass_envelope = follow_envelope(self.bass_envelope, bass_target, 0.58, 0.2);
+        self.mid_envelope = follow_envelope(self.mid_envelope, mid_target, 0.58, 0.2);
+        self.high_envelope = follow_envelope(self.high_envelope, high_target, 0.58, 0.2);
+        let energy = self.energy_envelope;
+        let bass = self.bass_envelope;
+        let mid = self.mid_envelope;
+        let high = self.high_envelope;
         let raw_chroma = chroma(fft, self.sample_rate, FFT_SIZE);
         for (smoothed, current) in self.smoothed_chroma.iter_mut().zip(raw_chroma) {
             *smoothed += (current - *smoothed) * 0.16;
@@ -1467,19 +1467,9 @@ fn logarithmic_bands(count: usize, minimum: f32, maximum: f32) -> impl Iterator<
     })
 }
 
-fn push_bounded(values: &mut VecDeque<f32>, value: f32, limit: usize) {
-    values.push_back(value);
-    if values.len() > limit {
-        values.pop_front();
-    }
-}
-
-fn average(values: &VecDeque<f32>) -> f32 {
-    if values.is_empty() {
-        0.0
-    } else {
-        values.iter().sum::<f32>() / values.len() as f32
-    }
+fn follow_envelope(current: f32, target: f32, attack: f32, release: f32) -> f32 {
+    let factor = if target > current { attack } else { release }.clamp(0.0, 1.0);
+    current + (target - current) * factor
 }
 
 fn amplitude_dbfs(amplitude: f32) -> f32 {
@@ -2149,6 +2139,16 @@ mod tests {
     fn dbfs_and_clipping_metrics_follow_digital_full_scale() {
         approx::assert_abs_diff_eq!(amplitude_dbfs(0.5), -6.0206, epsilon = 0.001);
         assert_eq!(amplitude_dbfs(0.0), -120.0);
+    }
+
+    #[test]
+    fn analysis_envelopes_attack_faster_than_they_release() {
+        let attack = follow_envelope(0.0, 1.0, 0.68, 0.16);
+        let release = follow_envelope(1.0, 0.0, 0.68, 0.16);
+
+        assert!(attack > 0.5);
+        assert!(release > attack);
+        assert!(follow_envelope(release, 0.0, 0.68, 0.16) < release);
     }
 
     #[test]

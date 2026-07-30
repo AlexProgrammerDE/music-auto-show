@@ -382,14 +382,14 @@ impl EffectsEngine {
 
     fn beat_pulse_mode(&mut self, config: &ValidatedShowConfig, audio: &AudioAnalysis, beat: bool) {
         let palette = [0.0, 0.15, 0.55, 0.75, 0.9];
-        let base_hue = if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18
-        {
-            ((audio.key_pitch_class * 7) % 12) as f32 / 12.0
-        } else if self.album_hues.is_empty() {
-            palette[audio.estimated_bar as usize % palette.len()]
-        } else {
-            self.album_hues[audio.estimated_bar as usize % self.album_hues.len()]
-        };
+        let base_hue =
+            if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18 {
+                ((audio.key_pitch_class * 7) % 12) as f32 / 12.0
+            } else if self.album_hues.is_empty() {
+                palette[audio.estimated_bar as usize % palette.len()]
+            } else {
+                self.album_hues[audio.estimated_bar as usize % self.album_hues.len()]
+            };
         let settings = effects(config);
         for fixture in &config.fixtures {
             let scale = fixture.intensity_scale * settings.intensity;
@@ -422,23 +422,23 @@ impl EffectsEngine {
         audio: &AudioAnalysis,
         beat: bool,
     ) {
-        let base_hue = if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18
-        {
-            let harmonic_hue = ((audio.key_pitch_class * 7) % 12) as f32 / 12.0;
-            (harmonic_hue + audio.beat_position * 0.04).rem_euclid(1.0)
-        } else if self.album_hues.is_empty() {
-            ((audio.estimated_beat % 32) as f32 + audio.beat_position) / 32.0
-        } else {
-            let current = audio.estimated_bar as usize % self.album_hues.len();
-            let next = (current + 1) % self.album_hues.len();
-            let mut diff = self.album_hues[next] - self.album_hues[current];
-            if diff > 0.5 {
-                diff -= 1.0;
-            } else if diff < -0.5 {
-                diff += 1.0;
-            }
-            (self.album_hues[current] + diff * audio.beat_position).rem_euclid(1.0)
-        };
+        let base_hue =
+            if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18 {
+                let harmonic_hue = ((audio.key_pitch_class * 7) % 12) as f32 / 12.0;
+                (harmonic_hue + audio.beat_position * 0.04).rem_euclid(1.0)
+            } else if self.album_hues.is_empty() {
+                ((audio.estimated_beat % 32) as f32 + audio.beat_position) / 32.0
+            } else {
+                let current = audio.estimated_bar as usize % self.album_hues.len();
+                let next = (current + 1) % self.album_hues.len();
+                let mut diff = self.album_hues[next] - self.album_hues[current];
+                if diff > 0.5 {
+                    diff -= 1.0;
+                } else if diff < -0.5 {
+                    diff += 1.0;
+                }
+                (self.album_hues[current] + diff * audio.beat_position).rem_euclid(1.0)
+            };
         let settings = effects(config);
         let base_brightness = 0.4 + audio.energy * 0.4;
         let pulse = if beat {

@@ -8,13 +8,26 @@ import {
   MusicSection,
   type AudioAnalysis,
   type EffectRuntimeStatus,
+  type SpectrogramFrame,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import { ambientPresetParser } from "@/lib/dashboard-search"
 import { formatEnumLabel } from "@/lib/format"
+import {
+  interpolatedAudio,
+  latestLiveFrame,
+  projectBeat,
+  sampleLiveFrame,
+} from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
 type AmbientPreset = "radial" | "led" | "mirror" | "peak" | "luminance" | "waterfall"
+
+interface WaterfallMotion {
+  readonly frames: readonly SpectrogramFrame[]
+  readonly outgoingFrame: readonly number[] | undefined
+  readonly progress: number
+}
 
 function themeColor(variable: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(variable).trim()
@@ -148,16 +161,34 @@ function drawWaterfall(
   context: CanvasRenderingContext2D,
   width: number,
   height: number,
-  analysis: AudioAnalysis | undefined,
+  motion: WaterfallMotion,
 ) {
-  const frames = analysis?.spectrogram ?? []
+  const { frames, outgoingFrame, progress } = motion
   if (frames.length === 0) return
   const rowHeight = height / frames.length
+  const offset = (1 - progress) * rowHeight
+  if (outgoingFrame) {
+    const binWidth = width / Math.max(1, outgoingFrame.length)
+    outgoingFrame.forEach((value, bin) => {
+      context.fillStyle = magmaColor(value)
+      context.fillRect(
+        bin * binWidth,
+        -progress * rowHeight,
+        Math.ceil(binWidth),
+        Math.ceil(rowHeight),
+      )
+    })
+  }
   frames.forEach((frame, row) => {
     const binWidth = width / Math.max(1, frame.bins.length)
     frame.bins.forEach((value, bin) => {
       context.fillStyle = magmaColor(value)
-      context.fillRect(bin * binWidth, row * rowHeight, Math.ceil(binWidth), Math.ceil(rowHeight))
+      context.fillRect(
+        bin * binWidth,
+        row * rowHeight + offset,
+        Math.ceil(binWidth),
+        Math.ceil(rowHeight),
+      )
     })
   })
 }
@@ -166,9 +197,12 @@ function drawAmbient(
   surface: CanvasSurface,
   analysis: AudioAnalysis | undefined,
   preset: AmbientPreset,
+  liveSpectrum: readonly number[],
+  beatPosition: number,
+  waterfall: WaterfallMotion,
 ) {
   const { context, width, height } = surface
-  const values = analysis?.spectrum ?? []
+  const values = liveSpectrum.length > 0 ? liveSpectrum : (analysis?.spectrum ?? [])
   clear(context, width, height)
   switch (preset) {
     case "led":
@@ -184,10 +218,10 @@ function drawAmbient(
       drawLuminance(context, width, height, values)
       break
     case "waterfall":
-      drawWaterfall(context, width, height, analysis)
+      drawWaterfall(context, width, height, waterfall)
       break
     default:
-      drawRadial(context, width, height, values, analysis?.beatPosition ?? 0)
+      drawRadial(context, width, height, values, beatPosition)
   }
 }
 
@@ -205,24 +239,62 @@ export default function AmbientVisualizer({
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
+  const spectrogramRef = useRef<readonly SpectrogramFrame[]>(analysis?.spectrogram ?? [])
+  const outgoingFrameRef = useRef<readonly number[] | undefined>(undefined)
+  const waterfallStartedRef = useRef(0)
+  const waterfallScrollingRef = useRef(false)
   const [fullscreen, setFullscreen] = useState(false)
-  const render = useEffectEvent(() => {
+  const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
-    if (surface) drawAmbient(surface, analysis, preset)
+    if (!surface) return
+    const liveAudio = interpolatedAudio(sampleLiveFrame(now))
+    const latest = latestLiveFrame()
+    const beat =
+      latest?.frame.audio === undefined
+        ? undefined
+        : projectBeat(latest.frame.audio, latest.capturedAt, now)
+    drawAmbient(
+      surface,
+      analysis,
+      preset,
+      liveAudio?.spectrum ?? [],
+      beat?.beatPosition ?? analysis?.beatPosition ?? 0,
+      {
+        frames: spectrogramRef.current,
+        outgoingFrame: outgoingFrameRef.current,
+        progress: waterfallScrollingRef.current
+          ? Math.min(1, (now - waterfallStartedRef.current) / 100)
+          : 1,
+      },
+    )
   })
-  useEffect(() => render(), [analysis, preset])
+  useEffect(() => {
+    const previous = spectrogramRef.current
+    const current = analysis?.spectrogram ?? []
+    waterfallScrollingRef.current = previous.length > 1 && previous.length === current.length
+    outgoingFrameRef.current = waterfallScrollingRef.current ? previous[0]?.bins : undefined
+    spectrogramRef.current = current
+    waterfallStartedRef.current = performance.now()
+  }, [analysis, preset])
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    let animationFrame = 0
+    const animate = (now: number) => {
+      render(now)
+      animationFrame = window.requestAnimationFrame(animate)
+    }
     const resizeObserver = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
-      render()
+      render(performance.now())
     })
-    const themeObserver = new MutationObserver(render)
+    const themeObserver = new MutationObserver(() => render(performance.now()))
     resizeObserver.observe(canvas)
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
+    animationFrame = window.requestAnimationFrame(animate)
     return () => {
+      window.cancelAnimationFrame(animationFrame)
       resizeObserver.disconnect()
       themeObserver.disconnect()
     }

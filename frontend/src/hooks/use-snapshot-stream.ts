@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { useEffect } from "react"
 
 import type { ShowSnapshot } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { publishLiveFrame, resetLiveFrameStore } from "@/lib/live-frame-store"
 import { showQueryKeys } from "@/lib/queries"
 import { ShowApi, runShowApi } from "@/lib/show-api"
 import { reconnectSnapshotStream } from "@/lib/snapshot-stream"
@@ -12,19 +13,23 @@ export function useSnapshotStream() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const program = Effect.flatMap(ShowApi, (api) =>
+    resetLiveFrameStore()
+    const snapshotProgram = Effect.flatMap(ShowApi, (api) =>
       reconnectSnapshotStream(
         api.watchSnapshots((snapshot) => {
           queryClient.setQueryData<ShowSnapshot>(showQueryKeys.snapshot, snapshot)
         }),
       ),
     )
-
-    void runShowApi(program, { signal: controller.signal }).catch(() => {
+    const liveFrameProgram = Effect.flatMap(ShowApi, (api) =>
+      reconnectSnapshotStream(api.watchLiveFrames(publishLiveFrame)),
+    )
+    void runShowApi(snapshotProgram, { signal: controller.signal }).catch(() => {
       if (!controller.signal.aborted) {
         void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
       }
     })
+    void runShowApi(liveFrameProgram, { signal: controller.signal }).catch(() => undefined)
 
     return () => controller.abort()
   }, [queryClient])

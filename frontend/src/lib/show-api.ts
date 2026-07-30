@@ -7,6 +7,7 @@ import type {
   BluetoothReceiverStatus,
   CommandResult,
   GrandMa2FixtureType,
+  LiveFrame,
   Recording,
   RecordingStatus,
   ShowConfig,
@@ -62,6 +63,7 @@ type ShowApiShape = {
   readonly watchSnapshots: (
     onSnapshot: (snapshot: ShowSnapshot) => void,
   ) => Effect.Effect<void, RpcFailure>
+  readonly watchLiveFrames: (onFrame: (frame: LiveFrame) => void) => Effect.Effect<void, RpcFailure>
 }
 
 export class ShowApi extends Context.Service<ShowApi, ShowApiShape>()("music-auto-show/ShowApi") {}
@@ -215,13 +217,24 @@ const liveApi: ShowApiShape = {
   watchSnapshots: (onSnapshot) =>
     Effect.tryPromise({
       try: async (signal) => {
-        for await (const response of client.watchSnapshots({ intervalMs: 50 }, { signal })) {
+        for await (const response of client.watchSnapshots({ intervalMs: 100 }, { signal })) {
           if (response.snapshot !== undefined) {
             onSnapshot(response.snapshot)
           }
         }
       },
       catch: (cause) => rpcFailure("WatchSnapshots", cause),
+    }),
+  watchLiveFrames: (onFrame) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        for await (const response of client.watchLiveFrames({ intervalMs: 25 }, { signal })) {
+          if (response.frame !== undefined) {
+            onFrame(response.frame)
+          }
+        }
+      },
+      catch: (cause) => rpcFailure("WatchLiveFrames", cause),
     }),
 }
 

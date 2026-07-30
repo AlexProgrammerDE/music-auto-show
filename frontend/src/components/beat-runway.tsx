@@ -12,6 +12,7 @@ import {
   type BeatRunwaySample,
 } from "@/lib/beat-runway"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
+import { latestLiveFrame, subscribeLiveFrame, type TimedLiveFrame } from "@/lib/live-frame-store"
 
 interface RunwayPalette {
   readonly accent: string
@@ -189,8 +190,23 @@ export function BeatRunway({
     )
   })
 
+  const acceptLiveFrame = useEffectEvent((timed: TimedLiveFrame) => {
+    const liveAudio = timed.frame.audio
+    if (!liveAudio) return
+    sampleRef.current = reconcileBeatRunwaySample(sampleRef.current, {
+      active: active && liveAudio.tempo > 0,
+      beatIndex: liveAudio.beatIndex || 1,
+      beatPosition: liveAudio.beatPosition,
+      estimatedBeat: Number(liveAudio.estimatedBeat),
+      meter: liveAudio.meter || 4,
+      sampledAt: timed.capturedAt,
+      tempo: liveAudio.tempo,
+    })
+  })
+
   useEffect(() => {
     analysisRef.current = analysis
+    if (latestLiveFrame()?.frame.audio) return
     const sampledAt = performance.now()
     sampleRef.current = reconcileBeatRunwaySample(sampleRef.current, {
       active: tracking,
@@ -203,6 +219,8 @@ export function BeatRunway({
     })
     render(sampledAt)
   }, [analysis, meter, tempo, tracking])
+
+  useEffect(() => subscribeLiveFrame(acceptLiveFrame), [])
 
   useEffect(() => {
     const canvas = canvasRef.current

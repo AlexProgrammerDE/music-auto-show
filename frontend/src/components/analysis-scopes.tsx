@@ -8,42 +8,62 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import { formatEnumLabel } from "@/lib/format"
+import {
+  interpolatedAudio,
+  latestLiveFrame,
+  projectBeat,
+  sampleLiveFrame,
+} from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
 function themeColor(variable: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(variable).trim()
 }
 
-function useCanvasRender(renderCanvas: (surface: CanvasSurface) => void) {
+function useCanvasRender(
+  renderCanvas: (surface: CanvasSurface, now: number) => void,
+  animate = false,
+) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
-  const render = useEffectEvent(() => {
+  const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
-    if (surface) renderCanvas(surface)
+    if (surface) renderCanvas(surface, now)
   })
-  useEffect(() => render())
+  useEffect(() => {
+    if (!animate) render(performance.now())
+  })
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    let animationFrame = 0
+    const drawFrame = (now: number) => {
+      render(now)
+      animationFrame = window.requestAnimationFrame(drawFrame)
+    }
     const resizeObserver = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
-      render()
+      render(performance.now())
     })
-    const themeObserver = new MutationObserver(render)
+    const themeObserver = new MutationObserver(() => render(performance.now()))
     resizeObserver.observe(canvas)
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
+    if (animate) animationFrame = window.requestAnimationFrame(drawFrame)
     return () => {
+      window.cancelAnimationFrame(animationFrame)
       resizeObserver.disconnect()
       themeObserver.disconnect()
     }
-  }, [])
+  }, [animate])
   return canvasRef
 }
 
 export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
-  const canvasRef = useCanvasRender(({ context, width, height }) => {
-    const values = analysis?.waveform ?? []
+  const canvasRef = useCanvasRender(({ context, width, height }, now) => {
+    const liveAudio = interpolatedAudio(sampleLiveFrame(now))
+    const values = liveAudio?.waveform.length ? liveAudio.waveform : (analysis?.waveform ?? [])
+    const clipping = liveAudio?.clipping ?? analysis?.clipping ?? false
     const center = height / 2
     context.clearRect(0, 0, width, height)
     context.fillStyle = themeColor("--background")
@@ -58,7 +78,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
     }
     if (values.length > 1) {
       context.globalAlpha = 0.22
-      context.fillStyle = analysis?.clipping ? themeColor("--destructive") : themeColor("--chart-1")
+      context.fillStyle = clipping ? themeColor("--destructive") : themeColor("--chart-1")
       context.beginPath()
       values.forEach((value, index) => {
         const x = (index / (values.length - 1)) * width
@@ -74,9 +94,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
       context.closePath()
       context.fill()
       context.globalAlpha = 1
-      context.strokeStyle = analysis?.clipping
-        ? themeColor("--destructive")
-        : themeColor("--chart-2")
+      context.strokeStyle = clipping ? themeColor("--destructive") : themeColor("--chart-2")
       context.lineWidth = 1.5
       context.beginPath()
       values.forEach((value, index) => {
@@ -88,7 +106,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
       context.stroke()
     }
     context.globalAlpha = 1
-  })
+  }, true)
   return (
     <figure className="relative min-h-72 overflow-hidden border bg-background">
       <canvas
@@ -109,7 +127,7 @@ export function WaveformScope({ analysis }: { readonly analysis: AudioAnalysis |
 }
 
 export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis | undefined }) {
-  const canvasRef = useCanvasRender(({ context, width, height }) => {
+  const canvasRef = useCanvasRender(({ context, width, height }, now) => {
     const frames = analysis?.history ?? []
     const foreground = themeColor("--foreground")
     const border = themeColor("--border")
@@ -149,7 +167,12 @@ export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis
         context.stroke()
       }
     }
-    const barX = (analysis?.barPosition ?? 0) * width
+    const latest = latestLiveFrame()
+    const projected =
+      latest?.frame.audio === undefined
+        ? undefined
+        : projectBeat(latest.frame.audio, latest.capturedAt, now)
+    const barX = (projected?.barPosition ?? analysis?.barPosition ?? 0) * width
     context.globalAlpha = 0.8
     context.strokeStyle = themeColor("--chart-1")
     context.lineWidth = 2
@@ -158,7 +181,7 @@ export function BeatSignalScope({ analysis }: { readonly analysis: AudioAnalysis
     context.lineTo(barX, height)
     context.stroke()
     context.globalAlpha = 1
-  })
+  }, true)
   return (
     <figure className="relative min-h-72 overflow-hidden border bg-background">
       <canvas

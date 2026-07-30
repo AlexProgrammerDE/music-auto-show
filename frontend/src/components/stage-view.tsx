@@ -42,6 +42,7 @@ import {
   type FixtureState,
   type GrandMa2FixtureType,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import { interpolatedFixtureStates, sampleLiveFrame } from "@/lib/live-frame-store"
 import {
   beamAngleFromZoom,
   beamTargetFromDirection,
@@ -1038,7 +1039,11 @@ export function StageView({
 
     let animationFrame = 0
     const render = (time: number) => {
-      updateFixtureVisuals(runtime, latestStatesRef.current, time / 1000)
+      const renderedStates = interpolatedFixtureStates(
+        sampleLiveFrame(time),
+        latestStatesRef.current,
+      )
+      updateFixtureVisuals(runtime, renderedStates, time / 1000)
       animationFrame = requestAnimationFrame(render)
     }
     animationFrame = requestAnimationFrame(render)

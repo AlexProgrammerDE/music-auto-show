@@ -7,19 +7,20 @@ use tonic::{Request, Response, Status};
 use crate::{
     app::{App, AppError},
     proto::v1::{
-        ClearRecordingRequest, ClearRecordingResponse, ConnectBluetoothReceiverDeviceRequest,
-        ConnectBluetoothReceiverDeviceResponse, ControlShowRequest, ControlShowResponse,
-        DisconnectBluetoothReceiverDeviceRequest, DisconnectBluetoothReceiverDeviceResponse,
-        ExportConfigRequest, ExportConfigResponse, ForgetBluetoothReceiverDeviceRequest,
-        ForgetBluetoothReceiverDeviceResponse, GetBluetoothReceiverStatusRequest,
-        GetBluetoothReceiverStatusResponse, GetConfigRequest, GetConfigResponse,
-        GetSnapshotRequest, GetSnapshotResponse, ImportConfigRequest, ImportConfigResponse,
-        ImportGrandMa2FixtureRequest, ImportGrandMa2FixtureResponse, ListAudioDevicesRequest,
-        ListAudioDevicesResponse, ListGrandMa2FixtureTypesRequest,
-        ListGrandMa2FixtureTypesResponse, ResetConfigRequest, ResetConfigResponse,
-        SetBlackoutRequest, SetBlackoutResponse, SetBluetoothReceiverPairingRequest,
-        SetBluetoothReceiverPairingResponse, StartRecordingRequest, StartRecordingResponse,
-        StopRecordingRequest, StopRecordingResponse, UpdateConfigRequest, UpdateConfigResponse,
+        AudioAnalysis, ClearRecordingRequest, ClearRecordingResponse,
+        ConnectBluetoothReceiverDeviceRequest, ConnectBluetoothReceiverDeviceResponse,
+        ControlShowRequest, ControlShowResponse, DisconnectBluetoothReceiverDeviceRequest,
+        DisconnectBluetoothReceiverDeviceResponse, ExportConfigRequest, ExportConfigResponse,
+        ForgetBluetoothReceiverDeviceRequest, ForgetBluetoothReceiverDeviceResponse,
+        GetBluetoothReceiverStatusRequest, GetBluetoothReceiverStatusResponse, GetConfigRequest,
+        GetConfigResponse, GetSnapshotRequest, GetSnapshotResponse, ImportConfigRequest,
+        ImportConfigResponse, ImportGrandMa2FixtureRequest, ImportGrandMa2FixtureResponse,
+        ListAudioDevicesRequest, ListAudioDevicesResponse, ListGrandMa2FixtureTypesRequest,
+        ListGrandMa2FixtureTypesResponse, LiveAudioFrame, LiveFrame, ResetConfigRequest,
+        ResetConfigResponse, SetBlackoutRequest, SetBlackoutResponse,
+        SetBluetoothReceiverPairingRequest, SetBluetoothReceiverPairingResponse, ShowSnapshot,
+        StartRecordingRequest, StartRecordingResponse, StopRecordingRequest, StopRecordingResponse,
+        UpdateConfigRequest, UpdateConfigResponse, WatchLiveFramesRequest, WatchLiveFramesResponse,
         WatchSnapshotsRequest, WatchSnapshotsResponse,
         music_auto_show_service_server::MusicAutoShowService,
     },
@@ -36,10 +37,52 @@ impl GrpcApi {
 }
 
 type SnapshotStream = Pin<Box<dyn Stream<Item = Result<WatchSnapshotsResponse, Status>> + Send>>;
+type LiveFrameStream = Pin<Box<dyn Stream<Item = Result<WatchLiveFramesResponse, Status>> + Send>>;
+
+fn live_frame(snapshot: &ShowSnapshot) -> LiveFrame {
+    LiveFrame {
+        sequence: snapshot.sequence,
+        captured_at_unix_ms: snapshot.captured_at_unix_ms,
+        audio: snapshot.audio.as_ref().map(live_audio_frame),
+        fixture_states: snapshot.fixture_states.clone(),
+        effect_runtime: snapshot.effect_runtime.clone(),
+    }
+}
+
+fn live_audio_frame(audio: &AudioAnalysis) -> LiveAudioFrame {
+    LiveAudioFrame {
+        energy: audio.energy,
+        rms: audio.rms,
+        bass: audio.bass,
+        mid: audio.mid,
+        high: audio.high,
+        tempo: audio.tempo,
+        beat_detected: audio.beat_detected,
+        downbeat_detected: audio.downbeat_detected,
+        beat_confidence: audio.beat_confidence,
+        beat_position: audio.beat_position,
+        bar_position: audio.bar_position,
+        estimated_beat: audio.estimated_beat,
+        estimated_bar: audio.estimated_bar,
+        waveform: audio.waveform.clone(),
+        spectrum: audio.spectrum.clone(),
+        meter: audio.meter,
+        beat_index: audio.beat_index,
+        beat_activation: audio.beat_activation,
+        downbeat_activation: audio.downbeat_activation,
+        tracking_confidence: audio.tracking_confidence,
+        rms_dbfs: audio.rms_dbfs,
+        peak_dbfs: audio.peak_dbfs,
+        clipping: audio.clipping,
+        spectrum_min_hz: audio.spectrum_min_hz,
+        spectrum_max_hz: audio.spectrum_max_hz,
+    }
+}
 
 #[tonic::async_trait]
 impl MusicAutoShowService for GrpcApi {
     type WatchSnapshotsStream = SnapshotStream;
+    type WatchLiveFramesStream = LiveFrameStream;
 
     async fn get_snapshot(
         &self,
@@ -59,8 +102,8 @@ impl MusicAutoShowService for GrpcApi {
         let mut receiver = self.app.subscribe();
         let app = Arc::clone(&self.app);
         let stream = async_stream::stream! {
-            let initial = receiver.borrow_and_update().snapshot.as_ref().clone();
-            yield Ok(WatchSnapshotsResponse { snapshot: Some(initial) });
+            let initial = Arc::clone(&receiver.borrow_and_update().snapshot);
+            yield Ok(WatchSnapshotsResponse { snapshot: Some(initial.as_ref().clone()) });
             let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut pending = None;
@@ -72,11 +115,50 @@ impl MusicAutoShowService for GrpcApi {
                             yield Err(Status::unavailable("show state stream closed"));
                             break;
                         }
-                        pending = Some(receiver.borrow_and_update().snapshot.as_ref().clone());
+                        pending = Some(Arc::clone(&receiver.borrow_and_update().snapshot));
                     }
                     _ = ticker.tick(), if pending.is_some() => {
                         if let Some(snapshot) = pending.take() {
-                            yield Ok(WatchSnapshotsResponse { snapshot: Some(snapshot) });
+                            yield Ok(WatchSnapshotsResponse {
+                                snapshot: Some(snapshot.as_ref().clone()),
+                            });
+                        }
+                    }
+                }
+            }
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn watch_live_frames(
+        &self,
+        request: Request<WatchLiveFramesRequest>,
+    ) -> Result<Response<Self::WatchLiveFramesStream>, Status> {
+        let interval =
+            Duration::from_millis(request.into_inner().interval_ms.clamp(16, 1_000) as u64);
+        let mut receiver = self.app.subscribe();
+        let app = Arc::clone(&self.app);
+        let stream = async_stream::stream! {
+            let initial = Arc::clone(&receiver.borrow_and_update().snapshot);
+            yield Ok(WatchLiveFramesResponse { frame: Some(live_frame(&initial)) });
+            let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut pending = None;
+            loop {
+                tokio::select! {
+                    () = app.wait_for_shutdown() => break,
+                    changed = receiver.changed() => {
+                        if changed.is_err() {
+                            yield Err(Status::unavailable("show state stream closed"));
+                            break;
+                        }
+                        pending = Some(Arc::clone(&receiver.borrow_and_update().snapshot));
+                    }
+                    _ = ticker.tick(), if pending.is_some() => {
+                        if let Some(snapshot) = pending.take() {
+                            yield Ok(WatchLiveFramesResponse {
+                                frame: Some(live_frame(&snapshot)),
+                            });
                         }
                     }
                 }
@@ -321,6 +403,8 @@ fn app_status(error: AppError) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::v1::{AnalysisHistoryFrame, SpectrogramFrame};
+    use prost::Message;
     use tokio_stream::StreamExt;
 
     const IMPORTED_FIXTURE: &[u8] = br#"<?xml version="1.0"?>
@@ -365,6 +449,40 @@ mod tests {
             .await
             .expect("snapshot stream should stop promptly");
         assert!(next.is_none());
+    }
+
+    #[test]
+    fn live_frame_keeps_current_signals_without_repeating_heavy_history() {
+        let snapshot = ShowSnapshot {
+            sequence: 42,
+            captured_at_unix_ms: 1_234,
+            audio: Some(AudioAnalysis {
+                energy: 0.8,
+                waveform: vec![0.25; 100],
+                spectrum: vec![0.5; 32],
+                spectrogram: vec![
+                    SpectrogramFrame {
+                        bins: vec![0.75; 64],
+                    };
+                    50
+                ],
+                history: vec![AnalysisHistoryFrame::default(); 50],
+                onset_history: vec![0.5; 64],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let frame = live_frame(&snapshot);
+        let audio = frame.audio.as_ref().expect("live audio should be present");
+
+        assert_eq!(frame.sequence, snapshot.sequence);
+        assert_eq!(audio.waveform.len(), 100);
+        assert_eq!(audio.spectrum.len(), 32);
+        assert!(
+            frame.encoded_len() * 4 < snapshot.encoded_len(),
+            "the high-rate live frame must stay substantially smaller than a history snapshot"
+        );
     }
 
     #[tokio::test]

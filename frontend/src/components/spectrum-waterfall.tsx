@@ -1,8 +1,13 @@
 import { useEffect, useEffectEvent, useRef } from "react"
 
 import { Badge } from "@/components/ui/badge"
-import type { AudioAnalysis } from "@/gen/music_auto_show/v1/music_auto_show_pb"
+import type {
+  AudioAnalysis,
+  LiveAudioFrame,
+  SpectrogramFrame,
+} from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
+import { followEnvelope, interpolatedAudio, sampleLiveFrame } from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
 type SpectrumFocus = "spectrum" | "spectrogram"
@@ -52,9 +57,13 @@ function drawFrequencyLabels(
 function draw(
   surface: CanvasSurface,
   analysis: AudioAnalysis | undefined,
+  liveAudio: LiveAudioFrame | undefined,
   peaks: number[],
   smoothed: number[],
   focus: SpectrumFocus,
+  frames: readonly SpectrogramFrame[],
+  outgoingFrame: readonly number[] | undefined,
+  waterfallProgress: number,
 ) {
   const { context, width, height } = surface
   const foreground = themeColor("--foreground")
@@ -66,9 +75,12 @@ function draw(
   const spectrumRatio = focus === "spectrum" ? 0.58 : 0.32
   const spectrumHeight = height * spectrumRatio
   const axisY = spectrumHeight - 18
-  const minimum = Math.max(20, analysis?.spectrumMinHz || 43)
-  const maximum = Math.max(minimum + 1, analysis?.spectrumMaxHz || 16_000)
-  const values = analysis?.spectrum ?? []
+  const minimum = Math.max(20, liveAudio?.spectrumMinHz || analysis?.spectrumMinHz || 43)
+  const maximum = Math.max(
+    minimum + 1,
+    liveAudio?.spectrumMaxHz || analysis?.spectrumMaxHz || 16_000,
+  )
+  const values = liveAudio?.spectrum.length ? liveAudio.spectrum : (analysis?.spectrum ?? [])
 
   context.save()
   context.strokeStyle = border
@@ -116,21 +128,38 @@ function draw(
   drawFrequencyLabels(context, width, axisY, minimum, maximum, muted)
   const waterfallTop = spectrumHeight + 2
   const waterfallHeight = height - waterfallTop
-  const frames = analysis?.spectrogram ?? []
   if (frames.length > 0) {
     const rowHeight = waterfallHeight / frames.length
+    const offset = (1 - waterfallProgress) * rowHeight
+    context.save()
+    context.beginPath()
+    context.rect(0, waterfallTop, width, waterfallHeight)
+    context.clip()
+    if (outgoingFrame) {
+      const binWidth = width / Math.max(1, outgoingFrame.length)
+      outgoingFrame.forEach((value, binIndex) => {
+        context.fillStyle = magmaColor(value)
+        context.fillRect(
+          binIndex * binWidth,
+          waterfallTop - waterfallProgress * rowHeight,
+          Math.ceil(binWidth),
+          Math.ceil(rowHeight),
+        )
+      })
+    }
     frames.forEach((frame, frameIndex) => {
       const binWidth = width / Math.max(1, frame.bins.length)
       frame.bins.forEach((value, binIndex) => {
         context.fillStyle = magmaColor(value)
         context.fillRect(
           binIndex * binWidth,
-          waterfallTop + frameIndex * rowHeight,
+          waterfallTop + frameIndex * rowHeight + offset,
           Math.ceil(binWidth),
           Math.ceil(rowHeight),
         )
       })
     })
+    context.restore()
   } else {
     context.strokeStyle = border
     context.strokeRect(0.5, waterfallTop + 0.5, width - 1, waterfallHeight - 1)
@@ -153,33 +182,66 @@ export function SpectrumWaterfall({
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
   const peaksRef = useRef<number[]>([])
   const smoothedRef = useRef<number[]>([])
-  const render = useEffectEvent(() => {
+  const lastRenderRef = useRef(0)
+  const spectrogramRef = useRef<readonly SpectrogramFrame[]>(analysis?.spectrogram ?? [])
+  const outgoingFrameRef = useRef<readonly number[] | undefined>(undefined)
+  const waterfallStartedRef = useRef(0)
+  const waterfallScrollingRef = useRef(false)
+  const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
     if (!surface) return
-    draw(surface, analysis, peaksRef.current, smoothedRef.current, focus)
+    const liveAudio = interpolatedAudio(sampleLiveFrame(now))
+    const values = liveAudio?.spectrum.length ? liveAudio.spectrum : (analysis?.spectrum ?? [])
+    const delta = lastRenderRef.current === 0 ? 16 : Math.min(100, now - lastRenderRef.current)
+    lastRenderRef.current = now
+    peaksRef.current = values.map((value, index) =>
+      Math.max(value, (peaksRef.current[index] ?? value) - delta * 0.00024),
+    )
+    smoothedRef.current = values.map((value, index) =>
+      followEnvelope(smoothedRef.current[index] ?? value, value, delta),
+    )
+    const waterfallProgress = waterfallScrollingRef.current
+      ? Math.min(1, (now - waterfallStartedRef.current) / 100)
+      : 1
+    draw(
+      surface,
+      analysis,
+      liveAudio,
+      peaksRef.current,
+      smoothedRef.current,
+      focus,
+      spectrogramRef.current,
+      outgoingFrameRef.current,
+      waterfallProgress,
+    )
   })
   useEffect(() => {
-    const values = analysis?.spectrum ?? []
-    peaksRef.current = values.map((value, index) =>
-      Math.max(value, (peaksRef.current[index] ?? 0) - 0.012),
-    )
-    smoothedRef.current = values.map(
-      (value, index) => (smoothedRef.current[index] ?? value) * 0.72 + value * 0.28,
-    )
-    render()
+    const previous = spectrogramRef.current
+    const current = analysis?.spectrogram ?? []
+    waterfallScrollingRef.current = previous.length > 1 && previous.length === current.length
+    outgoingFrameRef.current = waterfallScrollingRef.current ? previous[0]?.bins : undefined
+    spectrogramRef.current = current
+    waterfallStartedRef.current = performance.now()
   }, [analysis, focus])
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    let animationFrame = 0
+    const animate = (now: number) => {
+      render(now)
+      animationFrame = window.requestAnimationFrame(animate)
+    }
     const resizeObserver = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
-      render()
+      render(performance.now())
     })
-    const themeObserver = new MutationObserver(render)
+    const themeObserver = new MutationObserver(() => render(performance.now()))
     resizeObserver.observe(canvas)
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
+    animationFrame = window.requestAnimationFrame(animate)
     return () => {
+      window.cancelAnimationFrame(animationFrame)
       resizeObserver.disconnect()
       themeObserver.disconnect()
     }

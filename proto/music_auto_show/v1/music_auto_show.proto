@@ -5,6 +5,7 @@ package music_auto_show.v1;
 service MusicAutoShowService {
   rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
   rpc WatchSnapshots(WatchSnapshotsRequest) returns (stream WatchSnapshotsResponse);
+  rpc WatchLiveFrames(WatchLiveFramesRequest) returns (stream WatchLiveFramesResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
   rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
   rpc ExportConfig(ExportConfigRequest) returns (ExportConfigResponse);
@@ -37,6 +38,14 @@ message WatchSnapshotsRequest {
 
 message WatchSnapshotsResponse {
   ShowSnapshot snapshot = 1;
+}
+
+message WatchLiveFramesRequest {
+  uint32 interval_ms = 1;
+}
+
+message WatchLiveFramesResponse {
+  LiveFrame frame = 1;
 }
 
 message GetConfigRequest {}
@@ -209,6 +218,42 @@ message ShowSnapshot {
   RuntimeTimingStatus timing = 15;
   uint64 config_generation = 16;
   EffectRuntimeStatus effect_runtime = 17;
+}
+
+message LiveFrame {
+  uint64 sequence = 1;
+  uint64 captured_at_unix_ms = 2;
+  LiveAudioFrame audio = 3;
+  repeated FixtureState fixture_states = 4;
+  EffectRuntimeStatus effect_runtime = 5;
+}
+
+message LiveAudioFrame {
+  float energy = 1;
+  float rms = 2;
+  float bass = 3;
+  float mid = 4;
+  float high = 5;
+  float tempo = 6;
+  bool beat_detected = 7;
+  bool downbeat_detected = 8;
+  float beat_confidence = 9;
+  float beat_position = 10;
+  float bar_position = 11;
+  uint64 estimated_beat = 12;
+  uint64 estimated_bar = 13;
+  repeated float waveform = 14;
+  repeated float spectrum = 15;
+  uint32 meter = 16;
+  uint32 beat_index = 17;
+  float beat_activation = 18;
+  float downbeat_activation = 19;
+  float tracking_confidence = 20;
+  float rms_dbfs = 21;
+  float peak_dbfs = 22;
+  bool clipping = 23;
+  float spectrum_min_hz = 24;
+  float spectrum_max_hz = 25;
 }
 
 message RuntimeTimingStatus {
