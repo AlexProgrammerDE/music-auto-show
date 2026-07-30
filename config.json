@@ -17,7 +17,7 @@
     "mode": 1,
     "intensity": 0.7,
     "force_max_brightness": true,
-    "color_speed": 3.35,
+    "color_speed": 3.4,
     "beat_sensitivity": 1.0,
     "smooth_factor": 0.3,
     "strobe_on_drop": false,
