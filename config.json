@@ -23,12 +23,13 @@
     "strobe_on_drop": false,
     "movement_enabled": true,
     "movement_speed": 0.9,
-    "movement_mode": 13,
+    "movement_mode": 11,
     "effect_fixture_mode": 1,
     "rotation_mode": 4,
     "strobe_effect_enabled": true,
     "strobe_effect_mode": 2,
-    "strobe_effect_speed": 1.0
+    "strobe_effect_speed": 1.0,
+    "harmony_palette_enabled": false
   },
   "imported_fixture_files": [],
   "fixtures": [
@@ -42,7 +43,19 @@
       "movement_pan_min": 0.0,
       "movement_pan_max": 1.0,
       "movement_tilt_min": 0.0,
-      "movement_tilt_max": 1.0
+      "movement_tilt_max": 1.0,
+      "stage_placement": {
+        "x_m": -3.0,
+        "y_m": 3.35,
+        "z_m": 0.0,
+        "rotation_x_degrees": 0.0,
+        "rotation_y_degrees": 0.0,
+        "rotation_z_degrees": 0.0,
+        "focus_target_enabled": true,
+        "focus_target_x_m": -3.0,
+        "focus_target_y_m": 0.0,
+        "focus_target_z_m": 4.2
+      }
     },
     {
       "id": "802aab28-2e36-42e0-aadd-df6e0f44752b",
@@ -54,7 +67,19 @@
       "movement_pan_min": 0.0,
       "movement_pan_max": 1.0,
       "movement_tilt_min": 0.0,
-      "movement_tilt_max": 1.0
+      "movement_tilt_max": 1.0,
+      "stage_placement": {
+        "x_m": 0.0,
+        "y_m": 3.35,
+        "z_m": 0.0,
+        "rotation_x_degrees": 0.0,
+        "rotation_y_degrees": 0.0,
+        "rotation_z_degrees": 0.0,
+        "focus_target_enabled": true,
+        "focus_target_x_m": 0.0,
+        "focus_target_y_m": 0.0,
+        "focus_target_z_m": 4.2
+      }
     },
     {
       "id": "a9f88134-395b-404e-82ae-b1f273f601fd",
@@ -66,7 +91,19 @@
       "movement_pan_min": 0.0,
       "movement_pan_max": 1.0,
       "movement_tilt_min": 0.0,
-      "movement_tilt_max": 1.0
+      "movement_tilt_max": 1.0,
+      "stage_placement": {
+        "x_m": 3.0,
+        "y_m": 3.35,
+        "z_m": 0.0,
+        "rotation_x_degrees": 0.0,
+        "rotation_y_degrees": 0.0,
+        "rotation_z_degrees": 0.0,
+        "focus_target_enabled": true,
+        "focus_target_x_m": 3.0,
+        "focus_target_y_m": 0.0,
+        "focus_target_z_m": 4.2
+      }
     }
   ],
   "allow_dmx_overlaps": false
