@@ -221,7 +221,7 @@ pub fn to_json(config: &ValidatedShowConfig) -> Result<String, ConfigError> {
 }
 
 pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = configuration_directory(path);
     fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
         operation: "create configuration directory for",
         path: path.to_owned(),
@@ -249,6 +249,12 @@ pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError
     })?;
     sync_directory(parent)?;
     Ok(())
+}
+
+fn configuration_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(unix)]
@@ -689,6 +695,14 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_config_filename_uses_current_directory() {
+        assert_eq!(
+            configuration_directory(Path::new("config.json")),
+            Path::new(".")
+        );
+    }
 
     #[test]
     fn defaults_use_only_bundled_grandma2_fixture_types() {
