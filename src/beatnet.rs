@@ -54,20 +54,17 @@ pub struct BeatEstimate {
 /// Fully causal BeatNet+ inference pipeline.
 ///
 /// The neural network topology and 288-dimensional log-spectrogram features
-/// match the official model. A causal particle filter tracks tempo and phase,
-/// while bounded rolling estimators track tempo and meter from recent model
-/// activations without requiring Python or madmom.
+/// match the official model. A two-stage causal particle filter jointly tracks
+/// beat phase, tempo, bar position, and meter without requiring Python or
+/// madmom.
 pub struct BeatNetPlus {
     model_path: PathBuf,
     feature_extractor: FeatureExtractor,
     network: BeatNetNetwork,
     decoder: ParticleDecoder,
-    rolling_tempo: RollingTempoEstimator,
 }
 
 impl BeatNetPlus {
-    pub const TEMPO_WINDOW_SECONDS: f32 = 8.0;
-
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BeatNetError> {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
@@ -81,7 +78,6 @@ impl BeatNetPlus {
             feature_extractor: FeatureExtractor::new()?,
             network: BeatNetNetwork::load(path)?,
             decoder: ParticleDecoder::new(),
-            rolling_tempo: RollingTempoEstimator::new(),
         })
     }
 
@@ -96,13 +92,7 @@ impl BeatNetPlus {
         let mut latest = None;
         for features in self.feature_extractor.push(samples_22khz)? {
             let activations = self.network.infer(&features);
-            if let Some(tempo) = self.rolling_tempo.push(activations) {
-                self.decoder.align_tempo(tempo);
-            }
-            let mut estimate = self.decoder.update(activations[0], activations[1]);
-            if self.rolling_tempo.has_refreshed() {
-                estimate.tempo = self.rolling_tempo.tempo().unwrap_or(0.0);
-            }
+            let estimate = self.decoder.update(activations[0], activations[1]);
             latest = Some(merge_frame_estimate(latest, estimate));
         }
         Ok(latest)
@@ -112,7 +102,6 @@ impl BeatNetPlus {
         self.feature_extractor.reset();
         self.network.reset();
         self.decoder.reset();
-        self.rolling_tempo.reset();
     }
 }
 
@@ -529,282 +518,370 @@ struct Particle {
     wrapped: bool,
 }
 
+#[derive(Clone, Copy)]
+struct MeterParticle {
+    beat_in_bar: u8,
+    meter: u8,
+    weight: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TempoCluster {
+    bpm: f32,
+    confidence: f32,
+}
+
+#[derive(Clone, Copy)]
+struct MeterPosterior {
+    beat_probabilities: [[f32; 4]; 3],
+    probabilities: [f32; 3],
+}
+
+impl MeterPosterior {
+    fn meter_probability(&self, meter: u8) -> f32 {
+        self.probabilities[usize::from(meter.clamp(2, 4) - 2)]
+    }
+
+    fn strongest_meter(&self) -> u8 {
+        self.probabilities
+            .iter()
+            .enumerate()
+            .max_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map_or(4, |(index, _)| index as u8 + 2)
+    }
+
+    fn strongest_beat(&self, meter: u8) -> u8 {
+        let meter = meter.clamp(2, 4);
+        self.beat_probabilities[usize::from(meter - 2)][..usize::from(meter)]
+            .iter()
+            .enumerate()
+            .max_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map_or(0, |(index, _)| index as u8)
+    }
+
+    fn beat_confidence(&self, meter: u8) -> f32 {
+        let meter = meter.clamp(2, 4);
+        let meter_probability = self.meter_probability(meter);
+        if meter_probability <= f32::EPSILON {
+            return 0.0;
+        }
+        self.beat_probabilities[usize::from(meter - 2)][..usize::from(meter)]
+            .iter()
+            .copied()
+            .fold(0.0, f32::max)
+            / meter_probability
+    }
+}
+
+struct TempoCommitment {
+    candidate: Option<f32>,
+    candidate_beats: u8,
+    published: Option<f32>,
+}
+
+impl TempoCommitment {
+    fn new() -> Self {
+        Self {
+            candidate: None,
+            candidate_beats: 0,
+            published: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.candidate = None;
+        self.candidate_beats = 0;
+        self.published = None;
+    }
+
+    fn update(&mut self, cluster: TempoCluster) {
+        const MIN_ACQUISITION_CONFIDENCE: f32 = 0.18;
+        const LARGE_CHANGE_RATIO: f32 = 0.08;
+        const LARGE_CHANGE_CONFIDENCE: f32 = 0.52;
+        const LARGE_CHANGE_CONFIRMATION_BEATS: u8 = 4;
+        const CANDIDATE_MATCH_RATIO: f32 = 0.04;
+        const MAX_CHANGE_PER_BEAT: f32 = 0.02;
+        const SMALL_CHANGE_GAIN: f32 = 0.35;
+        const TEMPO_DEADBAND_RATIO: f32 = 0.0035;
+
+        if cluster.bpm <= 0.0 || cluster.confidence < MIN_ACQUISITION_CONFIDENCE {
+            return;
+        }
+        let Some(current) = self.published else {
+            self.published = Some(cluster.bpm);
+            return;
+        };
+        let relative_change = ((cluster.bpm / current) - 1.0).abs();
+        if relative_change <= LARGE_CHANGE_RATIO {
+            self.candidate = None;
+            self.candidate_beats = 0;
+            if relative_change <= TEMPO_DEADBAND_RATIO {
+                return;
+            }
+            let maximum_step = (current * MAX_CHANGE_PER_BEAT).max(0.25);
+            self.published = Some(
+                current
+                    + ((cluster.bpm - current) * SMALL_CHANGE_GAIN)
+                        .clamp(-maximum_step, maximum_step),
+            );
+            return;
+        }
+        if cluster.confidence < LARGE_CHANGE_CONFIDENCE {
+            self.candidate = None;
+            self.candidate_beats = 0;
+            return;
+        }
+        let matches_candidate = self.candidate.is_some_and(|candidate| {
+            ((cluster.bpm / candidate) - 1.0).abs() <= CANDIDATE_MATCH_RATIO
+        });
+        if matches_candidate {
+            self.candidate_beats = self.candidate_beats.saturating_add(1);
+            self.candidate = Some(self.candidate.map_or(cluster.bpm, |candidate| {
+                candidate + (cluster.bpm - candidate) * 0.25
+            }));
+        } else {
+            self.candidate = Some(cluster.bpm);
+            self.candidate_beats = 1;
+        }
+        if self.candidate_beats >= LARGE_CHANGE_CONFIRMATION_BEATS {
+            self.published = self.candidate;
+            self.candidate = None;
+            self.candidate_beats = 0;
+        }
+    }
+
+    fn tempo(&self) -> f32 {
+        self.published.unwrap_or(0.0)
+    }
+}
+
+struct MeterCommitment {
+    beat_in_bar: u8,
+    candidate: Option<u8>,
+    candidate_beats: u8,
+    locked: bool,
+    meter: u8,
+    observed_beats: u16,
+}
+
+impl MeterCommitment {
+    fn new() -> Self {
+        Self {
+            beat_in_bar: 0,
+            candidate: None,
+            candidate_beats: 0,
+            locked: false,
+            meter: 4,
+            observed_beats: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn advance(&mut self, posterior: MeterPosterior) {
+        const ALIGNMENT_CONFIDENCE: f32 = 0.8;
+        const SWITCH_PROBABILITY: f32 = 0.65;
+        const SWITCH_ODDS: f32 = 4.0;
+
+        self.observed_beats = self.observed_beats.saturating_add(1);
+        self.beat_in_bar = (self.beat_in_bar + 1) % self.meter;
+        if posterior.meter_probability(self.meter) >= 0.2
+            && posterior.beat_confidence(self.meter) >= ALIGNMENT_CONFIDENCE
+        {
+            self.beat_in_bar = posterior.strongest_beat(self.meter);
+        }
+
+        let strongest = posterior.strongest_meter();
+        let strongest_probability = posterior.meter_probability(strongest);
+        let current_probability = posterior.meter_probability(self.meter);
+        if strongest == self.meter {
+            self.candidate = None;
+            self.candidate_beats = 0;
+            if !self.locked
+                && strongest_probability >= SWITCH_PROBABILITY
+                && self.observed_beats >= u16::from(self.meter) * 2
+            {
+                self.locked = true;
+            }
+            return;
+        }
+
+        let has_switch_evidence = strongest_probability >= SWITCH_PROBABILITY
+            && strongest_probability >= current_probability.max(f32::EPSILON) * SWITCH_ODDS;
+        if !has_switch_evidence {
+            self.candidate = None;
+            self.candidate_beats = 0;
+            return;
+        }
+        if self.candidate == Some(strongest) {
+            self.candidate_beats = self.candidate_beats.saturating_add(1);
+        } else {
+            self.candidate = Some(strongest);
+            self.candidate_beats = 1;
+        }
+        if self.candidate_beats < strongest * 2 || posterior.strongest_beat(strongest) != 0 {
+            return;
+        }
+
+        self.meter = strongest;
+        self.beat_in_bar = posterior.strongest_beat(strongest);
+        self.candidate = None;
+        self.candidate_beats = 0;
+        self.locked = true;
+    }
+
+    fn confidence(&self, posterior: MeterPosterior) -> f32 {
+        let confidence = posterior.meter_probability(self.meter);
+        if self.locked {
+            confidence
+        } else {
+            confidence * 0.5
+        }
+    }
+}
+
 struct ParticleDecoder {
     particles: Vec<Particle>,
+    meter_particles: Vec<MeterParticle>,
     rng: StdRng,
-    meter: RollingMeterEstimator,
+    tempo: TempoCommitment,
+    meter: MeterCommitment,
     beat_count: u64,
     bar_count: u64,
+    contradictory_onsets: u8,
+    frames_since_grid_boundary: usize,
+    frames_without_activation: usize,
     last_beat_probability: f32,
-}
-
-#[derive(Clone, Copy)]
-struct ActivationFrame {
-    beat: f32,
-    downbeat: f32,
-}
-
-struct RollingTempoEstimator {
-    activations: VecDeque<ActivationFrame>,
-    frames_since_refresh: usize,
-    has_refreshed: bool,
-    tempo: Option<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct MeterEvidenceFrame {
-    beat: f32,
-    boundary: f32,
-    downbeat: f32,
-    grid_beat: i64,
-}
-
-#[derive(Clone, Copy)]
-struct MeterEstimate {
-    beat_in_bar: u8,
-    confidence: f32,
-    meter: u8,
-}
-
-struct RollingMeterEstimator {
-    evidence: VecDeque<MeterEvidenceFrame>,
-    frames_since_wrap: usize,
-    grid_beat: i64,
     last_phase: Option<f32>,
-}
-
-impl RollingTempoEstimator {
-    const REFRESH_FRAMES: usize = ParticleDecoder::FPS as usize * 2;
-    const ANALYSIS_FRAMES: usize =
-        ParticleDecoder::FPS as usize * BeatNetPlus::TEMPO_WINDOW_SECONDS as usize;
-    const RETENTION_FRAMES: usize = ParticleDecoder::FPS as usize * 10;
-    const MIN_PEAK_DISTANCE: f32 = 14.0;
-    const MAX_PEAK_DISTANCE: f32 = 55.0;
-
-    fn new() -> Self {
-        Self {
-            activations: VecDeque::with_capacity(Self::RETENTION_FRAMES),
-            frames_since_refresh: 0,
-            has_refreshed: false,
-            tempo: None,
-        }
-    }
-
-    fn push(&mut self, activations: [f32; 3]) -> Option<f32> {
-        self.activations.push_back(ActivationFrame {
-            beat: activations[0],
-            downbeat: activations[1],
-        });
-        while self.activations.len() > Self::RETENTION_FRAMES {
-            self.activations.pop_front();
-        }
-
-        self.frames_since_refresh += 1;
-        if self.frames_since_refresh < Self::REFRESH_FRAMES {
-            return None;
-        }
-        self.frames_since_refresh = 0;
-        self.has_refreshed = true;
-
-        let window: Vec<_> = self
-            .activations
-            .iter()
-            .skip(self.activations.len().saturating_sub(Self::ANALYSIS_FRAMES))
-            .copied()
-            .collect();
-        self.tempo = estimate_window_tempo(&window);
-        self.tempo
-    }
-
-    fn has_refreshed(&self) -> bool {
-        self.has_refreshed
-    }
-
-    fn tempo(&self) -> Option<f32> {
-        self.tempo
-    }
-
-    fn reset(&mut self) {
-        self.activations.clear();
-        self.frames_since_refresh = 0;
-        self.has_refreshed = false;
-        self.tempo = None;
-    }
-}
-
-impl RollingMeterEstimator {
-    const RETENTION_FRAMES: usize =
-        ParticleDecoder::FPS as usize * BeatNetPlus::TEMPO_WINDOW_SECONDS as usize;
-    const MIN_WRAP_INTERVAL_FRAMES: usize = 6;
-
-    fn new() -> Self {
-        Self {
-            evidence: VecDeque::with_capacity(Self::RETENTION_FRAMES),
-            frames_since_wrap: Self::MIN_WRAP_INTERVAL_FRAMES,
-            grid_beat: 0,
-            last_phase: None,
-        }
-    }
-
-    fn push(
-        &mut self,
-        beat_activation: f32,
-        downbeat_activation: f32,
-        phase: f32,
-    ) -> MeterEstimate {
-        self.frames_since_wrap = self.frames_since_wrap.saturating_add(1);
-        if self
-            .last_phase
-            .is_some_and(|previous| previous > 0.75 && phase < 0.25)
-            && self.frames_since_wrap >= Self::MIN_WRAP_INTERVAL_FRAMES
-        {
-            self.grid_beat += 1;
-            self.frames_since_wrap = 0;
-        }
-        self.last_phase = Some(phase);
-        let distance = phase.min(1.0 - phase);
-        self.evidence.push_back(MeterEvidenceFrame {
-            beat: beat_activation,
-            boundary: (-0.5 * (distance / 0.055).powi(2)).exp(),
-            downbeat: downbeat_activation,
-            grid_beat: self.grid_beat,
-        });
-        while self.evidence.len() > Self::RETENTION_FRAMES {
-            self.evidence.pop_front();
-        }
-        estimate_meter(&self.evidence, self.grid_beat)
-    }
-
-    fn reset(&mut self) {
-        self.evidence.clear();
-        self.frames_since_wrap = Self::MIN_WRAP_INTERVAL_FRAMES;
-        self.grid_beat = 0;
-        self.last_phase = None;
-    }
-}
-
-fn estimate_window_tempo(activations: &[ActivationFrame]) -> Option<f32> {
-    if activations.len() < RollingTempoEstimator::REFRESH_FRAMES {
-        return None;
-    }
-
-    let strongest = activations
-        .iter()
-        .map(|activation| activation.beat.max(activation.downbeat))
-        .fold(0.0_f32, f32::max);
-    let threshold = (strongest * 0.4).max(0.1);
-    let mut peaks: Vec<(f32, f32)> = Vec::new();
-    for index in 1..activations.len().saturating_sub(1) {
-        let previous = activations[index - 1]
-            .beat
-            .max(activations[index - 1].downbeat);
-        let current = activations[index].beat.max(activations[index].downbeat);
-        let next = activations[index + 1]
-            .beat
-            .max(activations[index + 1].downbeat);
-        if current < threshold || current < previous || current <= next {
-            continue;
-        }
-
-        let curvature = previous - 2.0 * current + next;
-        let offset = if curvature.abs() > f32::EPSILON {
-            (0.5 * (previous - next) / curvature).clamp(-0.5, 0.5)
-        } else {
-            0.0
-        };
-        let position = index as f32 + offset;
-
-        if let Some((last_position, last_strength)) = peaks.last_mut()
-            && position - *last_position < RollingTempoEstimator::MIN_PEAK_DISTANCE
-        {
-            if current > *last_strength {
-                *last_position = position;
-                *last_strength = current;
-            }
-            continue;
-        }
-        peaks.push((position, current));
-    }
-
-    let mut intervals: Vec<f32> = peaks
-        .windows(2)
-        .filter_map(|peaks| {
-            let interval = peaks[1].0 - peaks[0].0;
-            (RollingTempoEstimator::MIN_PEAK_DISTANCE..=RollingTempoEstimator::MAX_PEAK_DISTANCE)
-                .contains(&interval)
-                .then_some(interval)
-        })
-        .collect();
-    if intervals.is_empty() {
-        return None;
-    }
-    intervals.sort_by(f32::total_cmp);
-    let middle = intervals.len() / 2;
-    let median_interval = if intervals.len().is_multiple_of(2) {
-        (intervals[middle - 1] + intervals[middle]) * 0.5
-    } else {
-        intervals[middle]
-    };
-    Some(
-        (60.0 * ParticleDecoder::FPS / median_interval)
-            .clamp(ParticleDecoder::MIN_TEMPO, ParticleDecoder::MAX_TEMPO),
-    )
+    recent_beat_peak: f32,
+    recent_downbeat_peak: f32,
 }
 
 impl ParticleDecoder {
     const PARTICLES: usize = 1_500;
+    const METER_PARTICLES: usize = 250;
     const FPS: f32 = 50.0;
     const MIN_TEMPO: f32 = 55.0;
     const MAX_TEMPO: f32 = 215.0;
+    const MIN_GRID_BOUNDARY_FRAMES: usize = 6;
+    const SILENCE_RESET_FRAMES: usize = Self::FPS as usize * 3;
 
     fn new() -> Self {
         let mut decoder = Self {
             particles: Vec::with_capacity(Self::PARTICLES),
+            meter_particles: Vec::with_capacity(Self::METER_PARTICLES),
             rng: StdRng::seed_from_u64(0x4245_4154_4e45_542b),
-            meter: RollingMeterEstimator::new(),
+            tempo: TempoCommitment::new(),
+            meter: MeterCommitment::new(),
             beat_count: 0,
             bar_count: 0,
+            contradictory_onsets: 0,
+            frames_since_grid_boundary: Self::MIN_GRID_BOUNDARY_FRAMES,
+            frames_without_activation: 0,
             last_beat_probability: 0.0,
+            last_phase: None,
+            recent_beat_peak: 0.0,
+            recent_downbeat_peak: 0.0,
         };
         decoder.reset();
         decoder
     }
 
     fn reset(&mut self) {
+        self.reset_tracking_state();
+    }
+
+    fn reset_tracking_state(&mut self) {
         self.particles.clear();
         for _ in 0..Self::PARTICLES {
             self.particles.push(Particle {
-                tempo: self.rng.random_range(Self::MIN_TEMPO..=Self::MAX_TEMPO),
+                tempo: random_log_tempo(&mut self.rng),
                 phase: self.rng.random(),
                 weight: 1.0 / Self::PARTICLES as f32,
                 wrapped: false,
             });
         }
+        self.meter_particles.clear();
+        let meter_counts = [
+            (0..Self::METER_PARTICLES)
+                .filter(|index| index % 3 == 0)
+                .count(),
+            (0..Self::METER_PARTICLES)
+                .filter(|index| index % 3 == 1)
+                .count(),
+            (0..Self::METER_PARTICLES)
+                .filter(|index| index % 3 == 2)
+                .count(),
+        ];
+        for index in 0..Self::METER_PARTICLES {
+            let meter_index = index % 3;
+            let meter = meter_index as u8 + 2;
+            self.meter_particles.push(MeterParticle {
+                beat_in_bar: self.rng.random_range(0..meter),
+                meter,
+                weight: 1.0 / 3.0 / meter_counts[meter_index] as f32,
+            });
+        }
+        self.tempo.reset();
         self.meter.reset();
         self.beat_count = 0;
         self.bar_count = 0;
+        self.contradictory_onsets = 0;
+        self.frames_since_grid_boundary = Self::MIN_GRID_BOUNDARY_FRAMES;
+        self.frames_without_activation = 0;
         self.last_beat_probability = 0.0;
+        self.last_phase = None;
+        self.recent_beat_peak = 0.0;
+        self.recent_downbeat_peak = 0.0;
     }
 
-    fn align_tempo(&mut self, tempo: f32) {
+    #[cfg(test)]
+    fn seed_tempo(&mut self, tempo: f32) {
         let tempo = tempo.clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
         for particle in &mut self.particles {
             particle.tempo =
-                (tempo + self.rng.random_range(-2.0..=2.0)).clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
+                (tempo + self.rng.random_range(-0.5..=0.5)).clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
         }
     }
 
     fn update(&mut self, beat_activation: f32, downbeat_activation: f32) -> BeatEstimate {
+        let event_activation = beat_activation.max(downbeat_activation);
+        if event_activation > 0.1 {
+            self.frames_without_activation = 0;
+        } else {
+            self.frames_without_activation = self.frames_without_activation.saturating_add(1);
+            if self.frames_without_activation >= Self::SILENCE_RESET_FRAMES {
+                self.reset_tracking_state();
+            }
+        }
+
+        self.propagate_beat_particles();
+        let predictive_boundary = self
+            .particles
+            .iter()
+            .map(|particle| {
+                let distance = particle.phase.min(1.0 - particle.phase);
+                particle.weight * (-0.5 * (distance / 0.055).powi(2)).exp()
+            })
+            .sum::<f32>();
+        if event_activation > 0.45
+            && phase_consistency(&self.particles) > 0.55
+            && predictive_boundary < 0.04
+        {
+            self.contradictory_onsets = self.contradictory_onsets.saturating_add(1);
+            if self.contradictory_onsets >= 3 {
+                self.reset_tracking_state();
+                self.propagate_beat_particles();
+            }
+        } else if event_activation > 0.25 && predictive_boundary >= 0.1 {
+            self.contradictory_onsets = 0;
+        }
+
         let mut weight_sum = 0.0;
         let mut wrapped_weight = 0.0;
         for particle in &mut self.particles {
-            particle.tempo = (particle.tempo + self.rng.random_range(-0.35..=0.35))
-                .clamp(Self::MIN_TEMPO, Self::MAX_TEMPO);
-            particle.phase += particle.tempo / 60.0 / Self::FPS;
-            particle.wrapped = particle.phase >= 1.0;
-            if particle.wrapped {
-                particle.phase -= 1.0;
-            }
             let distance = particle.phase.min(1.0 - particle.phase);
             let boundary = (-0.5 * (distance / 0.055).powi(2)).exp();
             let likelihood =
@@ -813,8 +890,8 @@ impl ParticleDecoder {
             weight_sum += particle.weight;
         }
         if weight_sum <= f32::EPSILON {
-            self.reset();
-            weight_sum = 1.0;
+            self.reset_tracking_state();
+            return BeatEstimate::default();
         }
         for particle in &mut self.particles {
             particle.weight /= weight_sum;
@@ -837,39 +914,67 @@ impl ParticleDecoder {
             self.systematic_resample();
         }
 
-        let tempo = self
-            .particles
-            .iter()
-            .map(|particle| particle.tempo * particle.weight)
-            .sum::<f32>();
         let phase = circular_phase(&self.particles);
-        let meter = self.meter.push(beat_activation, downbeat_activation, phase);
+        let phase_lock = phase_consistency(&self.particles);
+        self.frames_since_grid_boundary = self.frames_since_grid_boundary.saturating_add(1);
+        let grid_boundary = self
+            .last_phase
+            .is_some_and(|previous| previous > 0.75 && phase < 0.25)
+            && self.frames_since_grid_boundary >= Self::MIN_GRID_BOUNDARY_FRAMES
+            && phase_lock > 0.35;
+        self.last_phase = Some(phase);
+        self.recent_beat_peak = beat_activation.max(self.recent_beat_peak * 0.82);
+        self.recent_downbeat_peak = downbeat_activation.max(self.recent_downbeat_peak * 0.82);
+        if grid_boundary {
+            self.frames_since_grid_boundary = 0;
+            let meter_posterior =
+                self.advance_meter_particles(self.recent_beat_peak, self.recent_downbeat_peak);
+            self.meter.advance(meter_posterior);
+            self.tempo.update(dominant_tempo_cluster(&self.particles));
+            self.beat_count = self.beat_count.saturating_add(1);
+            if self.meter.beat_in_bar == 0 {
+                self.bar_count = self.bar_count.saturating_add(1);
+            }
+            self.recent_beat_peak = beat_activation;
+            self.recent_downbeat_peak = downbeat_activation;
+        }
+
+        let meter_posterior = meter_posterior(&self.meter_particles);
         let downbeat = beat
-            && meter.beat_in_bar == 0
+            && self.meter.beat_in_bar == 0
             && downbeat_activation > beat_activation
             && downbeat_activation > 0.1;
-        if beat {
-            self.beat_count += 1;
-            if meter.beat_in_bar == 0 || self.beat_count == 1 {
-                self.bar_count += 1;
-            }
-        }
+        let tempo = self.tempo.tempo();
+        let tempo_confidence = tempo_cluster_confidence(&self.particles, tempo);
+        let meter_confidence = self.meter.confidence(meter_posterior);
         let tracking_confidence =
-            (phase_consistency(&self.particles) * meter.confidence).clamp(0.0, 1.0);
+            (phase_lock * (tempo_confidence * 0.4 + meter_confidence * 0.6)).clamp(0.0, 1.0);
         BeatEstimate {
             tempo,
             beat,
             downbeat,
             confidence: event_probability.clamp(0.0, 1.0),
             beat_position: phase,
-            bar_position: (meter.beat_in_bar as f32 + phase) / meter.meter as f32,
-            meter: meter.meter,
-            beat_index: meter.beat_in_bar + 1,
+            bar_position: (self.meter.beat_in_bar as f32 + phase) / self.meter.meter as f32,
+            meter: self.meter.meter,
+            beat_index: self.meter.beat_in_bar + 1,
             estimated_beat: self.beat_count,
             estimated_bar: self.bar_count.saturating_sub(1),
             beat_activation,
             downbeat_activation,
             tracking_confidence,
+        }
+    }
+
+    fn propagate_beat_particles(&mut self) {
+        let rng = &mut self.rng;
+        for particle in &mut self.particles {
+            particle.phase += particle.tempo / 60.0 / Self::FPS;
+            particle.wrapped = particle.phase >= 1.0;
+            if particle.wrapped {
+                particle.phase -= 1.0;
+                transition_tempo(particle, rng);
+            }
         }
     }
 
@@ -891,6 +996,77 @@ impl ParticleDecoder {
             resampled.push(particle);
         }
         self.particles = resampled;
+    }
+
+    fn advance_meter_particles(
+        &mut self,
+        beat_activation: f32,
+        downbeat_activation: f32,
+    ) -> MeterPosterior {
+        const METER_CHANGE_PROBABILITY: f32 = 0.005;
+        let mut weight_sum = 0.0;
+        for particle in &mut self.meter_particles {
+            particle.beat_in_bar = (particle.beat_in_bar + 1) % particle.meter;
+            if particle.beat_in_bar == 0 && self.rng.random::<f32>() < METER_CHANGE_PROBABILITY {
+                let alternative = self.rng.random_range(0..2);
+                particle.meter = match (particle.meter, alternative) {
+                    (2, 0) | (3, 0) => 4,
+                    (2, _) | (4, 0) => 3,
+                    (3, _) | (4, _) => 2,
+                    _ => 4,
+                };
+                particle.beat_in_bar = 0;
+            }
+            let likelihood = meter_observation_likelihood(
+                beat_activation,
+                downbeat_activation,
+                1.0,
+                particle.beat_in_bar == 0,
+            )
+            .max(0.003);
+            particle.weight *= likelihood;
+            weight_sum += particle.weight;
+        }
+        if weight_sum <= f32::EPSILON {
+            let weight = 1.0 / Self::METER_PARTICLES as f32;
+            for particle in &mut self.meter_particles {
+                particle.weight = weight;
+            }
+        } else {
+            for particle in &mut self.meter_particles {
+                particle.weight /= weight_sum;
+            }
+        }
+
+        let effective = 1.0
+            / self
+                .meter_particles
+                .iter()
+                .map(|particle| particle.weight.powi(2))
+                .sum::<f32>();
+        if effective < Self::METER_PARTICLES as f32 * 0.65 {
+            self.systematic_meter_resample();
+        }
+        meter_posterior(&self.meter_particles)
+    }
+
+    fn systematic_meter_resample(&mut self) {
+        let step = 1.0 / Self::METER_PARTICLES as f32;
+        let start = self.rng.random::<f32>() * step;
+        let mut cumulative = self.meter_particles[0].weight;
+        let mut source = 0;
+        let mut resampled = Vec::with_capacity(Self::METER_PARTICLES);
+        for index in 0..Self::METER_PARTICLES {
+            let target = start + index as f32 * step;
+            while target > cumulative && source + 1 < self.meter_particles.len() {
+                source += 1;
+                cumulative += self.meter_particles[source].weight;
+            }
+            let mut particle = self.meter_particles[source];
+            particle.weight = step;
+            resampled.push(particle);
+        }
+        self.meter_particles = resampled;
     }
 }
 
@@ -919,64 +1095,111 @@ fn meter_observation_likelihood(
     non_beat * (1.0 - boundary) + boundary_activation * boundary + 1e-6
 }
 
-fn estimate_meter(
-    evidence: &VecDeque<MeterEvidenceFrame>,
-    current_grid_beat: i64,
-) -> MeterEstimate {
-    let mut meter_scores = [f32::NEG_INFINITY; 3];
-    let mut offset_scores = [[f32::NEG_INFINITY; 4]; 3];
-    for meter in 2_u8..=4 {
-        let meter_index = usize::from(meter - 2);
-        for offset in 0..meter {
-            let score = evidence
-                .iter()
-                .map(|frame| {
-                    let beat_in_bar =
-                        (frame.grid_beat + i64::from(offset)).rem_euclid(i64::from(meter));
-                    meter_observation_likelihood(
-                        frame.beat,
-                        frame.downbeat,
-                        frame.boundary,
-                        beat_in_bar == 0,
-                    )
-                    .ln()
-                })
-                .sum();
-            offset_scores[meter_index][usize::from(offset)] = score;
+fn random_log_tempo(rng: &mut StdRng) -> f32 {
+    let minimum = ParticleDecoder::MIN_TEMPO.ln();
+    let maximum = ParticleDecoder::MAX_TEMPO.ln();
+    rng.random_range(minimum..=maximum).exp()
+}
+
+fn transition_tempo(particle: &mut Particle, rng: &mut StdRng) {
+    const LOCAL_TRANSITION_LAMBDA: f32 = 100.0;
+    const MAX_LOCAL_LOG_CHANGE: f32 = 0.05;
+    const HARMONIC_PROPOSAL_PROBABILITY: f32 = 0.003;
+    const GLOBAL_PROPOSAL_PROBABILITY: f32 = 0.001;
+
+    let proposal = rng.random::<f32>();
+    if proposal < GLOBAL_PROPOSAL_PROBABILITY {
+        particle.tempo = random_log_tempo(rng);
+        return;
+    }
+    if proposal < GLOBAL_PROPOSAL_PROBABILITY + HARMONIC_PROPOSAL_PROBABILITY {
+        let harmonic = if rng.random::<bool>() {
+            particle.tempo * 2.0
+        } else {
+            particle.tempo * 0.5
+        };
+        if (ParticleDecoder::MIN_TEMPO..=ParticleDecoder::MAX_TEMPO).contains(&harmonic) {
+            particle.tempo = harmonic;
+            return;
         }
-        let maximum = offset_scores[meter_index][..usize::from(meter)]
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let sum = offset_scores[meter_index][..usize::from(meter)]
-            .iter()
-            .map(|score| (*score - maximum).exp())
-            .sum::<f32>();
-        meter_scores[meter_index] = maximum + sum.ln() - f32::from(meter).ln();
     }
 
-    let maximum = meter_scores
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
-    let probabilities = meter_scores.map(|score| (score - maximum).exp());
-    let probability_sum = probabilities.iter().sum::<f32>();
-    let meter_index = meter_scores
-        .iter()
-        .enumerate()
-        .max_by(|(_, first), (_, second)| first.total_cmp(second))
-        .map_or(2, |(index, _)| index);
-    let meter = meter_index as u8 + 2;
-    let offset = offset_scores[meter_index][..usize::from(meter)]
-        .iter()
-        .enumerate()
-        .max_by(|(_, first), (_, second)| first.total_cmp(second))
-        .map_or(0, |(index, _)| index) as i64;
-    MeterEstimate {
-        beat_in_bar: (current_grid_beat + offset).rem_euclid(i64::from(meter)) as u8,
-        confidence: probabilities[meter_index] / probability_sum.max(f32::EPSILON),
-        meter,
+    let uniform = rng.random_range(-0.5_f32..0.5_f32);
+    let log_change = -uniform.signum() * (1.0 - 2.0 * uniform.abs()).max(f32::EPSILON).ln()
+        / LOCAL_TRANSITION_LAMBDA;
+    particle.tempo = (particle.tempo
+        * log_change
+            .clamp(-MAX_LOCAL_LOG_CHANGE, MAX_LOCAL_LOG_CHANGE)
+            .exp())
+    .clamp(ParticleDecoder::MIN_TEMPO, ParticleDecoder::MAX_TEMPO);
+}
+
+fn dominant_tempo_cluster(particles: &[Particle]) -> TempoCluster {
+    const BINS: usize = 100;
+    const CLUSTER_RADIUS: usize = 2;
+    let minimum = ParticleDecoder::MIN_TEMPO.ln();
+    let span = ParticleDecoder::MAX_TEMPO.ln() - minimum;
+    let mut weights = [0.0_f32; BINS];
+    for particle in particles {
+        let normalized = ((particle.tempo.ln() - minimum) / span).clamp(0.0, 1.0);
+        let index = ((normalized * BINS as f32) as usize).min(BINS - 1);
+        weights[index] += particle.weight;
     }
+    let winning_bin = (0..BINS)
+        .max_by(|first, second| {
+            let cluster_weight = |index: usize| {
+                let start = index.saturating_sub(CLUSTER_RADIUS);
+                let end = (index + CLUSTER_RADIUS + 1).min(BINS);
+                weights[start..end].iter().sum::<f32>()
+            };
+            cluster_weight(*first).total_cmp(&cluster_weight(*second))
+        })
+        .unwrap_or(0);
+    let start = winning_bin.saturating_sub(CLUSTER_RADIUS);
+    let end = (winning_bin + CLUSTER_RADIUS + 1).min(BINS);
+    let mut weighted_tempo = 0.0;
+    let mut cluster_weight = 0.0;
+    for particle in particles {
+        let normalized = ((particle.tempo.ln() - minimum) / span).clamp(0.0, 1.0);
+        let index = ((normalized * BINS as f32) as usize).min(BINS - 1);
+        if (start..end).contains(&index) {
+            weighted_tempo += particle.tempo * particle.weight;
+            cluster_weight += particle.weight;
+        }
+    }
+    TempoCluster {
+        bpm: if cluster_weight > f32::EPSILON {
+            weighted_tempo / cluster_weight
+        } else {
+            0.0
+        },
+        confidence: cluster_weight,
+    }
+}
+
+fn tempo_cluster_confidence(particles: &[Particle], tempo: f32) -> f32 {
+    if tempo <= 0.0 {
+        return 0.0;
+    }
+    particles
+        .iter()
+        .filter(|particle| ((particle.tempo / tempo) - 1.0).abs() <= 0.05)
+        .map(|particle| particle.weight)
+        .sum()
+}
+
+fn meter_posterior(particles: &[MeterParticle]) -> MeterPosterior {
+    let mut posterior = MeterPosterior {
+        beat_probabilities: [[0.0; 4]; 3],
+        probabilities: [0.0; 3],
+    };
+    for particle in particles {
+        let meter_index = usize::from(particle.meter - 2);
+        posterior.probabilities[meter_index] += particle.weight;
+        posterior.beat_probabilities[meter_index][usize::from(particle.beat_in_bar)] +=
+            particle.weight;
+    }
+    posterior
 }
 
 fn circular_phase(particles: &[Particle]) -> f32 {
@@ -1065,66 +1288,9 @@ mod tests {
     }
 
     #[test]
-    fn rolling_window_relearns_a_changed_tempo() {
-        let mut rolling = RollingTempoEstimator::new();
-        let mut phase = 0.0;
-        let mut beat_count = 0_u64;
-
-        let initial = feed_synthetic_tempo(
-            &mut rolling,
-            &mut phase,
-            &mut beat_count,
-            80.0,
-            ParticleDecoder::FPS as usize * 16,
-        );
-        let initial_tempo = *initial
-            .last()
-            .expect("the initial rolling window should produce an estimate");
-        approx::assert_abs_diff_eq!(initial_tempo, 80.0, epsilon = 5.0);
-
-        let changed = feed_synthetic_tempo(
-            &mut rolling,
-            &mut phase,
-            &mut beat_count,
-            120.0,
-            ParticleDecoder::FPS as usize * 10,
-        );
-        let changed_tempo = *changed
-            .last()
-            .expect("the changed rolling window should produce an estimate");
-        approx::assert_abs_diff_eq!(changed_tempo, 120.0, epsilon = 5.0);
-        assert!(rolling.activations.len() <= RollingTempoEstimator::RETENTION_FRAMES);
-    }
-
-    #[test]
-    fn rolling_window_refreshes_every_two_seconds_and_forgets_silence() {
-        let mut rolling = RollingTempoEstimator::new();
-        let mut phase = 0.0;
-        let mut beat_count = 0_u64;
-
-        feed_synthetic_tempo(
-            &mut rolling,
-            &mut phase,
-            &mut beat_count,
-            120.0,
-            RollingTempoEstimator::REFRESH_FRAMES - 1,
-        );
-        assert!(!rolling.has_refreshed());
-
-        rolling.push([0.01, 0.01, 0.98]);
-        assert!(rolling.has_refreshed());
-        assert!(rolling.tempo().is_some());
-
-        for _ in 0..RollingTempoEstimator::RETENTION_FRAMES {
-            rolling.push([0.01, 0.01, 0.98]);
-        }
-        assert_eq!(rolling.tempo(), None);
-    }
-
-    #[test]
-    fn rolling_tempo_recenters_live_particles() {
+    fn seeded_tempo_initializes_a_narrow_live_hypothesis() {
         let mut decoder = ParticleDecoder::new();
-        decoder.align_tempo(120.0);
+        decoder.seed_tempo(120.0);
 
         let tempo = decoder
             .particles
@@ -1132,6 +1298,125 @@ mod tests {
             .map(|particle| particle.tempo * particle.weight)
             .sum::<f32>();
         approx::assert_abs_diff_eq!(tempo, 120.0, epsilon = 0.2);
+    }
+
+    #[test]
+    fn tempo_cluster_does_not_average_half_and_double_time_hypotheses() {
+        let mut particles = Vec::new();
+        for _ in 0..750 {
+            particles.push(Particle {
+                tempo: 75.0,
+                phase: 0.0,
+                weight: 1.0 / 1_500.0,
+                wrapped: false,
+            });
+            particles.push(Particle {
+                tempo: 150.0,
+                phase: 0.0,
+                weight: 1.0 / 1_500.0,
+                wrapped: false,
+            });
+        }
+
+        let cluster = dominant_tempo_cluster(&particles);
+
+        assert!(
+            (cluster.bpm - 75.0).abs() < 2.0 || (cluster.bpm - 150.0).abs() < 2.0,
+            "tempo cluster should preserve a harmonic hypothesis, got {}",
+            cluster.bpm
+        );
+        assert!((cluster.bpm - 112.5).abs() > 20.0);
+    }
+
+    #[test]
+    fn tempo_commitment_slews_small_changes_and_confirms_large_ones() {
+        let mut commitment = TempoCommitment::new();
+        commitment.update(TempoCluster {
+            bpm: 100.0,
+            confidence: 0.9,
+        });
+        commitment.update(TempoCluster {
+            bpm: 105.0,
+            confidence: 0.9,
+        });
+        approx::assert_abs_diff_eq!(commitment.tempo(), 101.75, epsilon = 0.001);
+        commitment.update(TempoCluster {
+            bpm: 101.9,
+            confidence: 0.9,
+        });
+        approx::assert_abs_diff_eq!(commitment.tempo(), 101.75, epsilon = 0.001);
+
+        for _ in 0..3 {
+            commitment.update(TempoCluster {
+                bpm: 140.0,
+                confidence: 0.9,
+            });
+            approx::assert_abs_diff_eq!(commitment.tempo(), 101.75, epsilon = 0.001);
+        }
+        commitment.update(TempoCluster {
+            bpm: 140.0,
+            confidence: 0.9,
+        });
+        approx::assert_abs_diff_eq!(commitment.tempo(), 140.0, epsilon = 0.001);
+    }
+
+    #[test]
+    fn published_tempo_changes_only_on_inferred_beat_boundaries() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        let estimates = feed_synthetic_rhythm(&mut decoder, 120.0, 4, 12, 0);
+
+        for estimates in estimates.windows(2) {
+            if (estimates[1].tempo - estimates[0].tempo).abs() > f32::EPSILON {
+                assert!(
+                    estimates[1].estimated_beat > estimates[0].estimated_beat,
+                    "tempo changed between beat boundaries"
+                );
+            }
+        }
+        approx::assert_abs_diff_eq!(
+            estimates.last().expect("estimate").tempo,
+            120.0,
+            epsilon = 2.0
+        );
+    }
+
+    #[test]
+    fn abrupt_tempo_change_relocks_without_averaging_the_songs() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(80.0);
+        let initial = feed_synthetic_rhythm(&mut decoder, 80.0, 4, 12, 0);
+        approx::assert_abs_diff_eq!(
+            initial.last().expect("initial estimate").tempo,
+            80.0,
+            epsilon = 3.0
+        );
+
+        let changed = feed_synthetic_rhythm(&mut decoder, 120.0, 4, 6, 0);
+        let relocked_frame = changed
+            .iter()
+            .position(|estimate| (estimate.tempo - 120.0).abs() <= 4.0)
+            .expect("changed tempo should relock");
+        assert!(
+            relocked_frame <= ParticleDecoder::FPS as usize * 8,
+            "tempo took more than eight seconds to relock"
+        );
+        approx::assert_abs_diff_eq!(
+            changed.last().expect("changed estimate").tempo,
+            120.0,
+            epsilon = 4.0
+        );
+        assert!(
+            changed
+                .iter()
+                .skip(
+                    changed
+                        .len()
+                        .saturating_sub(ParticleDecoder::FPS as usize * 2)
+                )
+                .all(|estimate| (estimate.tempo - 100.0).abs() > 8.0),
+            "tracker should commit to a tempo cluster instead of averaging tracks"
+        );
     }
 
     #[test]
@@ -1158,85 +1443,157 @@ mod tests {
     }
 
     #[test]
-    fn downbeat_patterns_select_the_matching_meter() {
-        for expected_meter in 2_u8..=4 {
-            let mut decoder = ParticleDecoder::new();
-            decoder.align_tempo(120.0);
+    fn meter_particles_begin_with_equal_meter_priors() {
+        let decoder = ParticleDecoder::new();
+        let posterior = meter_posterior(&decoder.meter_particles);
 
-            let frames_per_beat = (ParticleDecoder::FPS * 0.5) as usize;
-            let mut estimate = BeatEstimate::default();
-            for frame in 0..frames_per_beat * usize::from(expected_meter) * 12 {
-                let beat = frame % frames_per_beat == 0;
-                let downbeat =
-                    beat && (frame / frames_per_beat).is_multiple_of(usize::from(expected_meter));
-                estimate = decoder.update(
-                    if beat && !downbeat { 0.95 } else { 0.01 },
-                    if downbeat { 0.95 } else { 0.01 },
-                );
-            }
-
-            assert_eq!(estimate.meter, expected_meter);
-            assert!(estimate.tracking_confidence > 0.8);
+        for probability in posterior.probabilities {
+            approx::assert_abs_diff_eq!(probability, 1.0 / 3.0, epsilon = 0.0001);
         }
     }
 
     #[test]
-    fn a_new_song_meter_outweighs_the_previous_song() {
-        let mut decoder = ParticleDecoder::new();
-        decoder.align_tempo(120.0);
-
-        let frames_per_beat = (ParticleDecoder::FPS * 0.5) as usize;
-        let previous_song_beats = 3 * 32;
-        let new_song_beats = 4 * 4;
-        let total_beats = previous_song_beats + new_song_beats;
-        let mut estimate = BeatEstimate::default();
-        for frame in 0..frames_per_beat * total_beats {
-            let beat = frame % frames_per_beat == 0;
-            let beat_number = frame / frames_per_beat;
-            let downbeat = beat
-                && if beat_number < previous_song_beats {
-                    beat_number.is_multiple_of(3)
-                } else {
-                    (beat_number - previous_song_beats).is_multiple_of(4)
-                };
-            estimate = decoder.update(
-                if beat && !downbeat { 0.95 } else { 0.01 },
-                if downbeat { 0.95 } else { 0.01 },
-            );
+    fn meter_commitment_changes_only_on_the_challenger_downbeat() {
+        let mut commitment = MeterCommitment::new();
+        for _ in 0..8 {
+            commitment.advance(certain_meter_posterior(3, 1));
         }
+        assert_eq!(commitment.meter, 4);
 
-        assert_eq!(estimate.meter, 4);
-        assert!(estimate.tracking_confidence > 0.8);
-        assert_eq!(
-            decoder.meter.evidence.len(),
-            RollingMeterEstimator::RETENTION_FRAMES
-        );
+        commitment.advance(certain_meter_posterior(3, 0));
+        assert_eq!(commitment.meter, 3);
+        assert_eq!(commitment.beat_in_bar, 0);
     }
 
-    fn feed_synthetic_tempo(
-        rolling: &mut RollingTempoEstimator,
-        phase: &mut f32,
-        beat_count: &mut u64,
+    #[test]
+    fn downbeat_patterns_select_the_matching_meter() {
+        for expected_meter in 2_u8..=4 {
+            let mut decoder = ParticleDecoder::new();
+            decoder.seed_tempo(120.0);
+            let estimates = feed_synthetic_rhythm(&mut decoder, 120.0, expected_meter, 16, 0);
+            let estimate = estimates.last().expect("meter estimate");
+
+            assert_eq!(estimate.meter, expected_meter);
+            assert!(estimate.tracking_confidence > 0.6);
+        }
+    }
+
+    #[test]
+    fn ambiguous_downbeats_do_not_flip_a_locked_meter() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        feed_synthetic_rhythm(&mut decoder, 120.0, 4, 16, 0);
+        assert_eq!(decoder.meter.meter, 4);
+        assert!(decoder.meter.locked);
+
+        let frames_per_beat = (ParticleDecoder::FPS * 0.5) as usize;
+        let mut meters = Vec::new();
+        for frame in 0..frames_per_beat * 32 {
+            let beat = frame % frames_per_beat == 0;
+            let beat_number = frame / frames_per_beat;
+            let ambiguous_downbeat =
+                beat && (beat_number.is_multiple_of(3) || beat_number.is_multiple_of(4));
+            let estimate = decoder.update(
+                if beat { 0.52 } else { 0.01 },
+                if ambiguous_downbeat { 0.42 } else { 0.01 },
+            );
+            meters.push(estimate.meter);
+        }
+
+        assert!(meters.into_iter().all(|meter| meter == 4));
+    }
+
+    #[test]
+    fn sustained_new_meter_evidence_switches_only_after_commitment() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        feed_synthetic_rhythm(&mut decoder, 120.0, 3, 16, 0);
+        assert_eq!(decoder.meter.meter, 3);
+
+        let changed = feed_synthetic_rhythm(&mut decoder, 120.0, 4, 8, 0);
+        let switched_frame = changed
+            .iter()
+            .position(|estimate| estimate.meter == 4)
+            .expect("new meter should commit");
+        let switches = changed
+            .windows(2)
+            .filter(|estimates| estimates[0].meter != estimates[1].meter)
+            .count();
+
+        assert!(
+            switched_frame <= ParticleDecoder::FPS as usize * 8,
+            "meter took more than eight seconds to commit"
+        );
+        assert_eq!(changed.last().expect("changed meter").meter, 4);
+        assert_eq!(switches, 1);
+    }
+
+    #[test]
+    fn reset_discards_previous_song_tempo_and_meter_state() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(90.0);
+        feed_synthetic_rhythm(&mut decoder, 90.0, 3, 12, 0);
+        assert_eq!(decoder.meter.meter, 3);
+
+        decoder.reset();
+        decoder.seed_tempo(128.0);
+        let estimates = feed_synthetic_rhythm(&mut decoder, 128.0, 4, 6, 0);
+        let estimate = estimates.last().expect("new song estimate");
+
+        assert_eq!(estimate.meter, 4);
+        approx::assert_abs_diff_eq!(estimate.tempo, 128.0, epsilon = 3.0);
+        assert!(estimate.estimated_beat < 4 * 8);
+    }
+
+    #[test]
+    fn contradictory_beat_evidence_soft_resets_the_tracker() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        decoder.tempo.published = Some(120.0);
+        let weight = 1.0 / decoder.particles.len() as f32;
+        for particle in &mut decoder.particles {
+            particle.phase = 0.45;
+            particle.weight = weight;
+        }
+
+        for _ in 0..3 {
+            decoder.update(0.95, 0.01);
+        }
+
+        assert_eq!(decoder.tempo.tempo(), 0.0);
+        assert_eq!(decoder.beat_count, 0);
+        assert!(!decoder.meter.locked);
+    }
+
+    fn certain_meter_posterior(meter: u8, beat_in_bar: u8) -> MeterPosterior {
+        let mut posterior = MeterPosterior {
+            beat_probabilities: [[0.0; 4]; 3],
+            probabilities: [0.025, 0.025, 0.025],
+        };
+        let meter_index = usize::from(meter - 2);
+        posterior.probabilities[meter_index] = 0.95;
+        posterior.beat_probabilities[meter_index][usize::from(beat_in_bar)] = 0.95;
+        posterior
+    }
+
+    fn feed_synthetic_rhythm(
+        decoder: &mut ParticleDecoder,
         tempo: f32,
-        frames: usize,
-    ) -> Vec<f32> {
+        meter: u8,
+        bars: usize,
+        starting_beat: usize,
+    ) -> Vec<BeatEstimate> {
+        let frames_per_beat = (ParticleDecoder::FPS * 60.0 / tempo).round() as usize;
+        let frames = frames_per_beat * usize::from(meter) * bars;
         let mut estimates = Vec::new();
-        for _ in 0..frames {
-            *phase += tempo / 60.0 / ParticleDecoder::FPS;
-            let beat = *phase >= 1.0;
-            if beat {
-                *phase -= 1.0;
-                *beat_count += 1;
-            }
-            let downbeat = beat && (*beat_count - 1).is_multiple_of(4);
-            let activations = [
-                if beat { 0.95 } else { 0.02 },
-                if downbeat { 0.9 } else { 0.01 },
-                if beat { 0.04 } else { 0.97 },
-            ];
-            if let Some(tempo) = rolling.push(activations) {
-                estimates.push(tempo);
-            }
+        for frame in 0..frames {
+            let beat = frame.is_multiple_of(frames_per_beat);
+            let beat_number = starting_beat + frame / frames_per_beat;
+            let downbeat = beat && beat_number.is_multiple_of(usize::from(meter));
+            estimates.push(decoder.update(
+                if beat && !downbeat { 0.95 } else { 0.01 },
+                if downbeat { 0.95 } else { 0.01 },
+            ));
         }
         estimates
     }

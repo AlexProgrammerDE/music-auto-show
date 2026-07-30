@@ -225,10 +225,8 @@ export function AnalyzerView({
             <AccordionTrigger>Detector and decoder details</AccordionTrigger>
             <AccordionContent>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs md:grid-cols-4">
-                <dt className="text-muted-foreground">Model buffer</dt>
-                <dd className="text-right tabular-nums">
-                  {(beatnet?.bufferDurationSeconds ?? 0).toFixed(2)} s
-                </dd>
+                <dt className="text-muted-foreground">Decoder</dt>
+                <dd className="text-right">Cascade PF</dd>
                 <dt className="text-muted-foreground">Beat phase</dt>
                 <dd className="text-right tabular-nums">
                   {formatPercent(analysis?.beatPosition ?? 0)}

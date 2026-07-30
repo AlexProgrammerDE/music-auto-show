@@ -38,6 +38,7 @@ struct ArtworkImage {
 pub struct MediaState {
     info: MediaInfo,
     artwork: Option<ArtworkImage>,
+    track_key: String,
 }
 
 impl MediaState {
@@ -51,12 +52,66 @@ impl MediaState {
             .filter(|artwork| artwork.revision == revision)
             .map(|artwork| Arc::clone(&artwork.bytes))
     }
+
+    pub fn track_key(&self) -> &str {
+        &self.track_key
+    }
 }
 
 #[derive(Default)]
 struct ProcessedArtwork {
     colors: Vec<RgbColor>,
     image: Option<ArtworkImage>,
+}
+
+#[derive(Default)]
+struct TrackRevision {
+    generation: u64,
+    identity: String,
+    position: Option<Duration>,
+    was_playing: bool,
+}
+
+impl TrackRevision {
+    fn update(
+        &mut self,
+        identity: &str,
+        position: Option<Duration>,
+        playback_state: PlaybackState,
+    ) -> String {
+        const REWIND_TOLERANCE: Duration = Duration::from_secs(2);
+        const RESTART_POSITION: Duration = Duration::from_secs(1);
+
+        if identity.is_empty() {
+            self.identity.clear();
+            self.position = None;
+            self.was_playing = false;
+            return String::new();
+        }
+        let identity_changed = identity != self.identity;
+        let rewound = !identity_changed
+            && self
+                .position
+                .zip(position)
+                .is_some_and(|(previous, current)| {
+                    current.saturating_add(REWIND_TOLERANCE) < previous
+                });
+        let restarted = !identity_changed
+            && playback_state == PlaybackState::Playing
+            && !self.was_playing
+            && position.is_some_and(|position| position <= RESTART_POSITION)
+            && self
+                .position
+                .is_some_and(|position| position > REWIND_TOLERANCE);
+        if identity_changed || rewound || restarted {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.identity.clear();
+        self.identity.push_str(identity);
+        self.position = position;
+        self.was_playing = playback_state == PlaybackState::Playing;
+        format!("{identity}|session:{}", self.generation)
+    }
 }
 
 pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: CancellationToken) {
@@ -71,11 +126,12 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
             return;
         }
     };
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_track_key = String::new();
+    let mut last_artwork_key = String::new();
     let mut cached_colors = Vec::new();
     let mut cached_artwork = None;
+    let mut track_revision = TrackRevision::default();
 
     loop {
         tokio::select! {
@@ -103,6 +159,19 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
                     .as_ref()
                     .map_or_else(String::new, |track| {
                         format!(
+                            "{}|{}|{}",
+                            track.artist.join(", "),
+                            track.title,
+                            track.album.as_deref().unwrap_or_default(),
+                        )
+                    });
+                let track_session_key =
+                    track_revision.update(&track_key, player.position, player.playback_state);
+                let artwork_key = player
+                    .current_track
+                    .as_ref()
+                    .map_or_else(String::new, |track| {
+                        format!(
                             "{}|{}|{}|{}",
                             track.artist.join(", "),
                             track.title,
@@ -112,8 +181,13 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
                                 .map_or_else(String::new, artwork_source_key),
                         )
                     });
-                if track_key != last_track_key {
-                    last_track_key = track_key;
+                if artwork_key != last_artwork_key {
+                    last_artwork_key = artwork_key;
+                    target.send_replace(Arc::new(MediaState {
+                        info: player_to_proto(player.clone(), Vec::new(), None),
+                        artwork: None,
+                        track_key: track_session_key.clone(),
+                    }));
                     let processed = tokio::select! {
                         biased;
                         () = shutdown.cancelled() => return,
@@ -139,9 +213,11 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
                 target.send_replace(Arc::new(MediaState {
                     info,
                     artwork: cached_artwork.clone(),
+                    track_key: track_session_key,
                 }));
             }
             Ok(None) => {
+                track_revision.update("", None, PlaybackState::Stopped);
                 target.send_replace(Arc::new(MediaState::default()));
             }
             Err(error) => debug!(%error, "could not read active media session"),
@@ -361,9 +437,52 @@ mod tests {
                 revision: "current".into(),
                 bytes: Arc::clone(&bytes),
             }),
+            track_key: "artist|track|album|art".into(),
         };
 
         assert_eq!(state.artwork("current").as_deref(), Some(bytes.as_ref()));
         assert!(state.artwork("stale").is_none());
+        assert_eq!(state.track_key(), "artist|track|album|art");
+    }
+
+    #[test]
+    fn track_revision_changes_for_new_tracks_and_restarts_only() {
+        let mut revision = TrackRevision::default();
+        let first = revision.update(
+            "artist|track|album",
+            Some(Duration::from_secs(1)),
+            PlaybackState::Playing,
+        );
+        let continued = revision.update(
+            "artist|track|album",
+            Some(Duration::from_secs(8)),
+            PlaybackState::Playing,
+        );
+        let paused = revision.update(
+            "artist|track|album",
+            Some(Duration::from_secs(8)),
+            PlaybackState::Paused,
+        );
+        let resumed = revision.update(
+            "artist|track|album",
+            Some(Duration::from_secs(8)),
+            PlaybackState::Playing,
+        );
+        let restarted = revision.update(
+            "artist|track|album",
+            Some(Duration::ZERO),
+            PlaybackState::Playing,
+        );
+        let next = revision.update(
+            "artist|next|album",
+            Some(Duration::ZERO),
+            PlaybackState::Playing,
+        );
+
+        assert_eq!(continued, first);
+        assert_eq!(paused, first);
+        assert_eq!(resumed, first);
+        assert_ne!(restarted, first);
+        assert_ne!(next, restarted);
     }
 }

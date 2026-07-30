@@ -358,13 +358,14 @@ message MediaInfo {
 }
 
 message BeatNetStatus {
+  reserved 7;
+
   bool available = 1;
   bool processing = 2;
   string model_name = 3;
   string model_path = 4;
   string status = 5;
   string last_error = 6;
-  float buffer_duration_seconds = 7;
 }
 
 message RecordingStatus {

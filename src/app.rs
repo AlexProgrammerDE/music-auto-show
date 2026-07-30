@@ -74,6 +74,7 @@ struct Runtime {
     effects_deadlines_skipped: u64,
     audio_deadlines_skipped: u64,
     recoverable_audio_events: u64,
+    last_media_track_key: String,
     last_effect_tick_ms: f32,
     max_effect_tick_ms: f32,
 }
@@ -91,6 +92,7 @@ impl Runtime {
             effects_deadlines_skipped: 0,
             audio_deadlines_skipped: 0,
             recoverable_audio_events: 0,
+            last_media_track_key: String::new(),
             last_effect_tick_ms: 0.0,
             max_effect_tick_ms: 0.0,
         }
@@ -648,6 +650,7 @@ impl RuntimeLoop {
         )
         .map_err(AppError::from)?;
         self.runtime.mode = RuntimeMode::Running(audio);
+        self.runtime.last_media_track_key = self.app.media_tx.borrow().track_key().to_owned();
         self.runtime.frame_count = 0;
         self.runtime.fps_started = Instant::now();
         let now = Instant::now();
@@ -700,6 +703,7 @@ impl RuntimeLoop {
         };
         let simulate_audio = audio.snapshot().runtime.simulated;
         self.runtime.mode = RuntimeMode::Running(audio);
+        self.runtime.last_media_track_key = self.app.media_tx.borrow().track_key().to_owned();
         self.runtime.effects = EffectsEngine::default();
         self.runtime.frame_count = 0;
         self.runtime.fps_started = Instant::now();
@@ -768,6 +772,8 @@ impl RuntimeLoop {
                 )?;
                 let status = audio.start_recording()?;
                 self.runtime.mode = RuntimeMode::Monitoring(audio);
+                self.runtime.last_media_track_key =
+                    self.app.media_tx.borrow().track_key().to_owned();
                 self.snapshot.status_message = "Recording input check".into();
                 status
             }
@@ -851,6 +857,7 @@ impl RuntimeLoop {
     }
 
     fn tick_frame(&mut self) -> Result<(), AppError> {
+        self.reconcile_media_track();
         let running_audio = match &self.runtime.mode {
             RuntimeMode::Running(audio) => Some(audio.snapshot()),
             _ => None,
@@ -875,6 +882,26 @@ impl RuntimeLoop {
             self.publish();
         }
         Ok(())
+    }
+
+    fn reconcile_media_track(&mut self) {
+        let track_key = self.app.media_tx.borrow().track_key().to_owned();
+        if track_key.is_empty() || track_key == self.runtime.last_media_track_key {
+            return;
+        }
+        self.runtime.last_media_track_key = track_key;
+        let audio = match &self.runtime.mode {
+            RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => audio,
+            _ => return,
+        };
+        if audio.snapshot().runtime.simulated {
+            return;
+        }
+        if let Err(error) = audio.reset_rhythm_tracking() {
+            warn!(%error, "could not reset rhythm tracking after a media change");
+        } else {
+            info!("reset rhythm tracking for a new media track");
+        }
     }
 
     fn tick_show(&mut self, audio_frame: AudioWorkerSnapshot) -> Result<(), AppError> {

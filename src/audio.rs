@@ -175,6 +175,16 @@ impl AudioWorker {
             .context("audio analysis worker stopped while clearing a recording")?
     }
 
+    pub fn reset_rhythm_tracking(&self) -> Result<()> {
+        let (reply, response) = mpsc::sync_channel(0);
+        self.commands
+            .send(AudioWorkerCommand::ResetRhythmTracking { reply })
+            .context("audio analysis worker is unavailable")?;
+        response
+            .recv()
+            .context("audio analysis worker stopped while resetting rhythm tracking")
+    }
+
     fn shutdown(&mut self) {
         let Some(thread) = self.thread.take() else {
             return;
@@ -206,6 +216,9 @@ enum AudioWorkerCommand {
     },
     ClearRecording {
         reply: SyncSender<Result<RecordingStatus>>,
+    },
+    ResetRhythmTracking {
+        reply: SyncSender<()>,
     },
     Shutdown {
         reply: SyncSender<()>,
@@ -299,6 +312,11 @@ impl AudioWorkerState {
                     self.analyzer.clear_recording();
                     let status = self.analyzer.recording_status();
                     let _ = reply.send(Ok(status));
+                    self.publish(latest);
+                }
+                Ok(AudioWorkerCommand::ResetRhythmTracking { reply }) => {
+                    self.analysis = self.analyzer.reset_rhythm_tracking();
+                    let _ = reply.send(());
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::Shutdown { reply }) => {
@@ -1066,7 +1084,6 @@ impl AudioAnalyzer {
                     model_path: model_path.into(),
                     status: "Ready".into(),
                     last_error: String::new(),
-                    buffer_duration_seconds: BeatNetPlus::TEMPO_WINDOW_SECONDS,
                 },
             ),
             Err(error) => (
@@ -1078,7 +1095,6 @@ impl AudioAnalyzer {
                     model_path: model_path.into(),
                     status: "Model unavailable".into(),
                     last_error: error.to_string(),
-                    buffer_duration_seconds: 0.0,
                 },
             ),
         };
@@ -1138,6 +1154,7 @@ impl AudioAnalyzer {
         let beat = match beat_result {
             Some(Ok(Some(beat))) => {
                 self.beatnet_status.processing = true;
+                self.beatnet_status.status = "Tracking".into();
                 beat
             }
             Some(Ok(None)) => {
@@ -1273,6 +1290,37 @@ impl AudioAnalyzer {
     pub fn beatnet_status(&self) -> BeatNetStatus {
         self.beatnet_status.clone()
     }
+
+    fn reset_rhythm_tracking(&mut self) -> AudioAnalysis {
+        if let Some(beatnet) = &mut self.beatnet {
+            beatnet.reset();
+            self.beatnet_status.processing = false;
+            self.beatnet_status.status = "Reacquiring rhythm".into();
+        }
+        self.resampler.reset();
+        self.onset_history.clear();
+        self.analysis_history.clear();
+        self.structure = StructureTracker::default();
+        self.last_analysis.tempo = 0.0;
+        self.last_analysis.beat_detected = false;
+        self.last_analysis.downbeat_detected = false;
+        self.last_analysis.beat_confidence = 0.0;
+        self.last_analysis.beat_position = 0.0;
+        self.last_analysis.bar_position = 0.0;
+        self.last_analysis.estimated_beat = 0;
+        self.last_analysis.estimated_bar = 0;
+        self.last_analysis.meter = 4;
+        self.last_analysis.beat_index = 1;
+        self.last_analysis.beat_activation = 0.0;
+        self.last_analysis.downbeat_activation = 0.0;
+        self.last_analysis.tracking_confidence = 0.0;
+        self.last_analysis.history.clear();
+        self.last_analysis.section = MusicSection::Unspecified as i32;
+        self.last_analysis.section_confidence = 0.0;
+        self.last_analysis.section_history.clear();
+        self.last_analysis.clone()
+    }
+
     pub fn start_recording(&mut self) -> bool {
         self.recording.start()
     }
@@ -1693,6 +1741,12 @@ impl LinearResampler {
         }
     }
 
+    fn reset(&mut self) {
+        self.position = 0.0;
+        self.previous = 0.0;
+        self.initialized = false;
+    }
+
     fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if input.is_empty() {
             return Vec::new();
@@ -1888,6 +1942,42 @@ mod tests {
     fn capture_handle_is_sendable_between_runtime_threads() {
         fn assert_send<T: Send>() {}
         assert_send::<AudioCapture>();
+    }
+
+    #[test]
+    fn track_change_reset_clears_all_song_scoped_analysis() {
+        let mut analyzer = AudioAnalyzer::new(ANALYSIS_RATE, 1.0, "");
+        analyzer.last_analysis = AudioAnalysis {
+            tempo: 128.0,
+            meter: 3,
+            beat_index: 2,
+            estimated_beat: 64,
+            estimated_bar: 16,
+            tracking_confidence: 0.9,
+            history: vec![AnalysisHistoryFrame::default()],
+            section: MusicSection::Main as i32,
+            section_confidence: 0.8,
+            section_history: vec![SectionMarker::default()],
+            ..silent_analysis()
+        };
+        analyzer.onset_history.push_back(0.9);
+        analyzer
+            .analysis_history
+            .push_back(AnalysisHistoryFrame::default());
+
+        let reset = analyzer.reset_rhythm_tracking();
+
+        assert_eq!(reset.tempo, 0.0);
+        assert_eq!(reset.meter, 4);
+        assert_eq!(reset.beat_index, 1);
+        assert_eq!(reset.estimated_beat, 0);
+        assert_eq!(reset.estimated_bar, 0);
+        assert_eq!(reset.tracking_confidence, 0.0);
+        assert!(reset.history.is_empty());
+        assert_eq!(reset.section, MusicSection::Unspecified as i32);
+        assert!(reset.section_history.is_empty());
+        assert!(analyzer.onset_history.is_empty());
+        assert!(analyzer.analysis_history.is_empty());
     }
 
     #[test]
