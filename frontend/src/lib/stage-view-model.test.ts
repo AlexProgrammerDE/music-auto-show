@@ -9,6 +9,7 @@ import {
   fixtureColor,
   physicalAxisValue,
   rotatedEffectDirection,
+  stageLightProjection,
   strobePatternLevel,
 } from "@/lib/stage-view-model"
 
@@ -41,6 +42,23 @@ describe("stage view model", () => {
     expect(beamAngleFromZoom(25, 0, 50, 10)).toBe(50)
     expect(beamAngleFromZoom(25, 255, 50, 10)).toBe(10)
     expect(beamAngleFromZoom(25, 128, 0, 0)).toBe(25)
+  })
+
+  it("derives bounded spotlight optics from grandMA2 emitter metadata", () => {
+    const projection = stageLightProjection(45, 1_200, 0.1, 0.75, 6)
+    expect(projection.angleRadians).toBeCloseTo(Math.PI / 8)
+    expect(projection.distance).toBeCloseTo(6.9)
+    expect(projection.intensity).toBe(900)
+    expect(projection.penumbra).toBeCloseTo(0.555)
+    expect(projection.priority).toBe(900)
+  })
+
+  it("uses a generic photometric fallback when grandMA2 omits intensity", () => {
+    const projection = stageLightProjection(0, 0, 0.08, 1, 20)
+    expect(projection.angleRadians).toBeCloseTo((25 * Math.PI) / 360)
+    expect(projection.distance).toBe(12)
+    expect(projection.intensity).toBe(280)
+    expect(projection.priority).toBe(280)
   })
 
   it("rotates an effect fan around its forward optical axis", () => {

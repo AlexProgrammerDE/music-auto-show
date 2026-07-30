@@ -17,12 +17,13 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
-  type Object3D,
+  Object3D,
   PerspectiveCamera,
   PlaneGeometry,
   Quaternion,
   Scene,
   SphereGeometry,
+  SpotLight,
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
@@ -50,6 +51,7 @@ import {
   fixtureColor,
   physicalAxisValue,
   rotatedEffectDirection,
+  stageLightProjection,
   strobePatternLevel,
   type StagePoint,
 } from "@/lib/stage-view-model"
@@ -90,6 +92,22 @@ type FixtureVisual = {
   rotationPhase: number
 }
 
+type StageSpotLight = {
+  readonly light: SpotLight
+  readonly target: Object3D
+}
+
+type StageLightCandidate = {
+  readonly angleDegrees: number
+  readonly apertureMeters: number
+  readonly beamIntensity: number
+  readonly brightness: number
+  readonly color: Color
+  readonly direction: Vector3
+  readonly origin: Vector3
+  readonly reachMeters: number
+}
+
 type StageRuntime = {
   readonly renderer: WebGLRenderer
   readonly scene: Scene
@@ -99,6 +117,8 @@ type StageRuntime = {
   readonly floorMaterial: MeshStandardMaterial
   readonly trussMaterial: MeshStandardMaterial
   readonly grid: GridHelper
+  readonly spotLights: readonly StageSpotLight[]
+  readonly spotLightCookie: CanvasTexture
   reducedMotion: boolean
 }
 
@@ -112,6 +132,9 @@ const FIXTURE_LABEL_HEIGHT = 52
 const FIXTURE_LABEL_MAX_TEXT_WIDTH = 400
 const FIXTURE_LABEL_WORLD_HEIGHT = 0.3
 const DEGREES_TO_RADIANS = Math.PI / 180
+const MAX_STAGE_SPOT_LIGHTS = 8
+const MAX_STAGE_SHADOW_LIGHTS = 2
+const STAGE_SHADOW_MAP_SIZE = 512
 
 function stageTheme() {
   const dark = document.documentElement.classList.contains("dark")
@@ -134,6 +157,80 @@ function stageTheme() {
         labelBorder: "rgba(104, 113, 116, 0.36)",
         labelText: "#252b2d",
       }
+}
+
+function createSpotLightCookie() {
+  const canvas = document.createElement("canvas")
+  canvas.width = 128
+  canvas.height = 128
+  const context = canvas.getContext("2d")
+  if (context) {
+    const gradient = context.createRadialGradient(64, 64, 4, 64, 64, 64)
+    gradient.addColorStop(0, "rgba(255, 255, 255, 1)")
+    gradient.addColorStop(0.58, "rgba(255, 255, 255, 0.96)")
+    gradient.addColorStop(0.84, "rgba(210, 210, 210, 0.72)")
+    gradient.addColorStop(1, "rgba(0, 0, 0, 0)")
+    context.fillStyle = gradient
+    context.fillRect(0, 0, canvas.width, canvas.height)
+  }
+  return new CanvasTexture(canvas)
+}
+
+function createStageSpotLights(scene: Scene, cookie: CanvasTexture) {
+  return Array.from({ length: MAX_STAGE_SPOT_LIGHTS }, (_, lightIndex) => {
+    const target = new Object3D()
+    const light = new SpotLight(0xffffff, 0, 8, Math.PI / 8, 0.45, 2)
+    light.target = target
+    light.castShadow = lightIndex < MAX_STAGE_SHADOW_LIGHTS
+    if (light.castShadow) {
+      light.map = cookie
+      light.shadow.mapSize.set(STAGE_SHADOW_MAP_SIZE, STAGE_SHADOW_MAP_SIZE)
+      light.shadow.camera.near = 0.05
+      light.shadow.camera.far = 12
+      light.shadow.focus = 0.88
+      light.shadow.bias = -0.0002
+      light.shadow.normalBias = 0.015
+      light.shadow.radius = 1.5
+    }
+    scene.add(light, target)
+    return { light, target } satisfies StageSpotLight
+  })
+}
+
+function updateStageSpotLights(
+  spotLights: readonly StageSpotLight[],
+  candidates: readonly StageLightCandidate[],
+) {
+  const selected = candidates
+    .map((candidate) => ({
+      candidate,
+      projection: stageLightProjection(
+        candidate.angleDegrees,
+        candidate.beamIntensity,
+        candidate.apertureMeters,
+        candidate.brightness,
+        candidate.reachMeters,
+      ),
+    }))
+    .toSorted((left, right) => right.projection.priority - left.projection.priority)
+    .slice(0, spotLights.length)
+
+  spotLights.forEach(({ light, target }, lightIndex) => {
+    const assignment = selected[lightIndex]
+    if (!assignment) {
+      light.intensity = 0
+      return
+    }
+    const { candidate, projection } = assignment
+    light.color.copy(candidate.color)
+    light.intensity = projection.intensity
+    light.distance = projection.distance
+    light.angle = projection.angleRadians
+    light.penumbra = projection.penumbra
+    light.position.copy(candidate.origin)
+    target.position.copy(candidate.origin).addScaledVector(candidate.direction, projection.distance)
+    target.updateMatrixWorld()
+  })
 }
 
 function fitFixtureLabel(context: CanvasRenderingContext2D, name: string, maxWidth: number) {
@@ -305,6 +402,7 @@ function disposeScene(runtime: StageRuntime) {
     ? runtime.grid.material
     : [runtime.grid.material]
   gridMaterials.forEach((material) => material.dispose())
+  runtime.spotLightCookie.dispose()
   runtime.renderer.dispose()
 }
 
@@ -722,6 +820,19 @@ function createFixedFixture(
   } satisfies FixtureVisual
 }
 
+function configureFixtureShadows(visual: FixtureVisual) {
+  visual.root.traverse((object) => {
+    if (!(object instanceof Mesh)) return
+    object.castShadow = true
+    object.receiveShadow = true
+  })
+  visual.emitters.forEach((emitter) => {
+    emitter.lenses.forEach((lens) => {
+      lens.castShadow = false
+    })
+  })
+}
+
 function createStageRuntime(
   canvas: HTMLCanvasElement,
   fixtures: readonly FixtureConfig[],
@@ -735,6 +846,7 @@ function createStageRuntime(
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = ACESFilmicToneMapping
   renderer.toneMappingExposure = 1.05
+  renderer.shadowMap.enabled = true
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(42, 1, 0.1, 40)
@@ -759,6 +871,7 @@ function createStageRuntime(
   const floor = new Mesh(new PlaneGeometry(11, 9), floorMaterial)
   floor.rotation.x = -Math.PI / 2
   floor.position.z = 0.8
+  floor.receiveShadow = true
   scene.add(floor)
   const grid = new GridHelper(10, 10)
   grid.position.set(0, 0.015, 0.8)
@@ -769,13 +882,19 @@ function createStageRuntime(
   const trussWidth = 7.4
   const crossbar = new Mesh(new BoxGeometry(trussWidth, 0.1, 0.1), trussMaterial)
   crossbar.position.y = 3.45
+  crossbar.castShadow = true
+  crossbar.receiveShadow = true
   truss.add(crossbar)
   for (const x of [-trussWidth / 2, trussWidth / 2]) {
     const upright = new Mesh(new BoxGeometry(0.1, 3.45, 0.1), trussMaterial)
     upright.position.set(x, 1.72, 0)
+    upright.castShadow = true
+    upright.receiveShadow = true
     truss.add(upright)
   }
   scene.add(truss)
+  const spotLightCookie = createSpotLightCookie()
+  const spotLights = createStageSpotLights(scene, spotLightCookie)
 
   const typeById = new Map(fixtureTypes.map((fixtureType) => [fixtureType.id, fixtureType]))
   const fixtureVisuals = new Map<string, FixtureVisual>()
@@ -788,6 +907,7 @@ function createStageRuntime(
       fixtureType.visual.kind === FixtureVisualKind.MOVING_HEAD
         ? createMovingHead(fixture, fixtureType, mount, scene)
         : createFixedFixture(fixture, fixtureType, mount, scene)
+    configureFixtureShadows(visual)
     fixtureVisuals.set(fixture.id || fixture.name, visual)
   })
 
@@ -800,6 +920,8 @@ function createStageRuntime(
     floorMaterial,
     trussMaterial,
     grid,
+    spotLights,
+    spotLightCookie,
     reducedMotion: false,
   }
   applyTheme(runtime)
@@ -819,6 +941,7 @@ function updateFixtureVisuals(
   elapsedSeconds: number,
 ) {
   const stateById = new Map(states.map((state) => [state.fixtureId, state]))
+  const lightCandidates: StageLightCandidate[] = []
   const axisRotation = new Quaternion()
   const directionRotation = new Quaternion()
   runtime.fixtures.forEach((visual, fixtureId) => {
@@ -915,8 +1038,8 @@ function updateFixtureVisuals(
       emitter.beam.visible = Boolean(state && emitterBrightness > 0.02)
       emitter.beam.material.color.copy(emitterColor)
       emitter.beam.material.opacity = Math.min(
-        0.34,
-        (0.035 + emitterBrightness * 0.22) * photometricGain,
+        0.18,
+        (0.015 + emitterBrightness * 0.1) * photometricGain,
       )
       if (!state || !emitter.beam.visible || !visual.fixtureType.visual) return
 
@@ -938,6 +1061,16 @@ function updateFixtureVisuals(
         visual.fixtureType.visual.zoomPhysicalFromDegrees,
         visual.fixtureType.visual.zoomPhysicalToDegrees,
       )
+      lightCandidates.push({
+        angleDegrees: beamAngleDegrees,
+        apertureMeters: emitter.apertureMeters,
+        beamIntensity: emitter.metadata.beamIntensity,
+        brightness: emitterBrightness,
+        color: emitterColor.clone(),
+        direction: worldDirection.clone(),
+        origin: origin.clone(),
+        reachMeters: Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z),
+      })
       setBeamTransform(
         emitter.beam,
         origin,
@@ -948,6 +1081,7 @@ function updateFixtureVisuals(
       )
     })
   })
+  updateStageSpotLights(runtime.spotLights, lightCandidates)
   runtime.controls.update()
   runtime.renderer.render(runtime.scene, runtime.camera)
 }

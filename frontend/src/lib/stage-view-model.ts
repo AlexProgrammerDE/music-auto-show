@@ -12,6 +12,14 @@ export type StagePoint = {
   readonly z: number
 }
 
+export type StageLightProjection = {
+  readonly angleRadians: number
+  readonly distance: number
+  readonly intensity: number
+  readonly penumbra: number
+  readonly priority: number
+}
+
 function clampChannel(value: number) {
   return Math.max(0, Math.min(255, value))
 }
@@ -37,6 +45,30 @@ export function physicalAxisValue(coarse: number, fine: number, minimum: number,
   const fineValue = Math.max(0, Math.min(255, Math.round(fine)))
   const normalized = (coarseValue * 256 + fineValue) / 65_535
   return minimum + (maximum - minimum) * normalized
+}
+
+export function stageLightProjection(
+  beamAngleDegrees: number,
+  beamIntensity: number,
+  apertureMeters: number,
+  brightness: number,
+  reachMeters: number,
+): StageLightProjection {
+  const angleDegrees = Math.max(1, Math.min(178, beamAngleDegrees > 0 ? beamAngleDegrees : 25))
+  const normalizedBrightness = Math.max(0, Math.min(1, brightness))
+  const normalizedAperture = Math.max(0, Math.min(0.5, apertureMeters))
+  const candela =
+    beamIntensity > 0
+      ? Math.max(40, Math.min(4_000, beamIntensity))
+      : 200 + normalizedAperture * 1_000
+
+  return {
+    angleRadians: (angleDegrees * Math.PI) / 360,
+    distance: Math.max(0.5, Math.min(12, reachMeters * 1.15)),
+    intensity: candela * normalizedBrightness,
+    penumbra: Math.max(0.18, Math.min(0.72, 0.18 + angleDegrees / 120)),
+    priority: normalizedBrightness * candela,
+  }
 }
 
 export function beamAngleFromZoom(
