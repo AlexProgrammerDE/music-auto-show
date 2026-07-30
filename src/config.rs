@@ -351,6 +351,7 @@ fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<Gr
     )?;
     validate_range("effects intensity", effects.intensity, 0.0, 1.0)?;
     validate_range("color speed", effects.color_speed, 0.1, 10.0)?;
+    validate_increment("color speed", effects.color_speed, 0.1)?;
     validate_range("beat sensitivity", effects.beat_sensitivity, 0.0, 1.0)?;
     validate_range("smooth factor", effects.smooth_factor, 0.0, 1.0)?;
     validate_range("movement speed", effects.movement_speed, 0.0, 1.0)?;
@@ -585,6 +586,14 @@ fn validate_range(name: &str, value: f32, minimum: f32, maximum: f32) -> AnyResu
     Ok(())
 }
 
+fn validate_increment(name: &str, value: f32, increment: f32) -> AnyResult<()> {
+    let steps = value / increment;
+    if !steps.is_finite() || (steps - steps.round()).abs() > 0.0001 {
+        bail!("{name} must use increments of {increment}");
+    }
+    Ok(())
+}
+
 fn stable_fixture_id(name: &str, channel: u32, index: usize) -> String {
     let slug = name
         .chars()
@@ -788,5 +797,33 @@ mod tests {
         assert!(!json.contains("\"profiles\""));
         let parsed = parse_json(&json, true).expect("configuration parses");
         assert_eq!(parsed.fixtures, config.fixtures);
+    }
+
+    #[test]
+    fn color_speed_requires_one_decimal_increments() {
+        for color_speed in [3.3, 3.4] {
+            let mut config = default_show_config(true);
+            config
+                .effects
+                .as_mut()
+                .expect("effects configuration")
+                .color_speed = color_speed;
+            ValidatedShowConfig::new(config, true)
+                .expect("one-decimal color speed should validate");
+        }
+
+        let mut config = default_show_config(true);
+        config
+            .effects
+            .as_mut()
+            .expect("effects configuration")
+            .color_speed = 3.35;
+        let error =
+            ValidatedShowConfig::new(config, true).expect_err("fractional step must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("color speed must use increments of 0.1")
+        );
     }
 }

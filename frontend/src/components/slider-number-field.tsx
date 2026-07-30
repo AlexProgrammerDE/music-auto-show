@@ -19,6 +19,12 @@ type SliderNumberFieldProps = {
   readonly onChange: (value: number) => void
 }
 
+export function snapSliderValue(value: number, minimum: number, maximum: number, step: number) {
+  const clamped = Math.max(minimum, Math.min(maximum, value))
+  const steps = Math.round((clamped - minimum) / step)
+  return Number((minimum + steps * step).toFixed(10))
+}
+
 export function SliderNumberField({
   id,
   label,
@@ -38,6 +44,10 @@ export function SliderNumberField({
   const displayMin = min * displayScale
   const displayMax = max * displayScale
   const displayStep = step * displayScale
+  const commitDisplayValue = (nextValue: number) => {
+    if (!Number.isFinite(nextValue)) return
+    onChange(snapSliderValue(nextValue, displayMin, displayMax, displayStep) / displayScale)
+  }
 
   useEffect(() => {
     const sliderInputs =
@@ -58,7 +68,7 @@ export function SliderNumberField({
           value={[displayValue]}
           onValueChange={(next) => {
             const nextValue = Array.isArray(next) ? next[0] : next
-            if (nextValue !== undefined) onChange(nextValue / displayScale)
+            if (nextValue !== undefined) commitDisplayValue(nextValue)
           }}
         />
         <InputGroup>
@@ -73,7 +83,7 @@ export function SliderNumberField({
             step={displayStep}
             value={displayValue}
             onBlur={onBlur}
-            onChange={(event) => onChange(event.target.valueAsNumber / displayScale)}
+            onChange={(event) => commitDisplayValue(event.target.valueAsNumber)}
           />
           <InputGroupAddon align="inline-end">{unit}</InputGroupAddon>
         </InputGroup>
