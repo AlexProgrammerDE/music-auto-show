@@ -751,10 +751,11 @@ struct ParticleDecoder {
     beat_count: u64,
     bar_count: u64,
     contradictory_onsets: u8,
+    frames_since_contradictory_onset: usize,
     frames_since_grid_boundary: usize,
-    frames_without_activation: usize,
     last_beat_probability: f32,
     last_phase: Option<f32>,
+    onset_armed: bool,
     recent_beat_peak: f32,
     recent_downbeat_peak: f32,
 }
@@ -765,8 +766,10 @@ impl ParticleDecoder {
     const FPS: f32 = 50.0;
     const MIN_TEMPO: f32 = 55.0;
     const MAX_TEMPO: f32 = 215.0;
+    const CONTRADICTORY_ONSETS_TO_REACQUIRE: u8 = 3;
+    const CONTRADICTION_RETENTION_FRAMES: usize = Self::FPS as usize * 4;
+    const MIN_CONTRADICTORY_ONSET_FRAMES: usize = 8;
     const MIN_GRID_BOUNDARY_FRAMES: usize = 6;
-    const SILENCE_RESET_FRAMES: usize = Self::FPS as usize * 3;
 
     fn new() -> Self {
         let mut decoder = Self {
@@ -778,10 +781,11 @@ impl ParticleDecoder {
             beat_count: 0,
             bar_count: 0,
             contradictory_onsets: 0,
+            frames_since_contradictory_onset: Self::MIN_CONTRADICTORY_ONSET_FRAMES,
             frames_since_grid_boundary: Self::MIN_GRID_BOUNDARY_FRAMES,
-            frames_without_activation: 0,
             last_beat_probability: 0.0,
             last_phase: None,
+            onset_armed: true,
             recent_beat_peak: 0.0,
             recent_downbeat_peak: 0.0,
         };
@@ -794,15 +798,7 @@ impl ParticleDecoder {
     }
 
     fn reset_tracking_state(&mut self) {
-        self.particles.clear();
-        for _ in 0..Self::PARTICLES {
-            self.particles.push(Particle {
-                tempo: random_log_tempo(&mut self.rng),
-                phase: self.rng.random(),
-                weight: 1.0 / Self::PARTICLES as f32,
-                wrapped: false,
-            });
-        }
+        self.seed_beat_hypotheses(None, None);
         self.meter_particles.clear();
         let meter_counts = [
             (0..Self::METER_PARTICLES)
@@ -829,8 +825,59 @@ impl ParticleDecoder {
         self.beat_count = 0;
         self.bar_count = 0;
         self.contradictory_onsets = 0;
+        self.frames_since_contradictory_onset = Self::MIN_CONTRADICTORY_ONSET_FRAMES;
         self.frames_since_grid_boundary = Self::MIN_GRID_BOUNDARY_FRAMES;
-        self.frames_without_activation = 0;
+        self.last_beat_probability = 0.0;
+        self.last_phase = None;
+        self.onset_armed = true;
+        self.recent_beat_peak = 0.0;
+        self.recent_downbeat_peak = 0.0;
+    }
+
+    fn seed_beat_hypotheses(&mut self, retained_tempo: Option<f32>, phase_anchor: Option<f32>) {
+        const RETAINED_TEMPO_FRACTION: f32 = 0.8;
+        const RETAINED_TEMPO_JITTER: f32 = 0.035;
+        const PHASE_JITTER: f32 = 0.03;
+
+        self.particles.clear();
+        let retained_particles = (Self::PARTICLES as f32 * RETAINED_TEMPO_FRACTION) as usize;
+        for index in 0..Self::PARTICLES {
+            let tempo = if index < retained_particles {
+                retained_tempo
+                    .filter(|tempo| *tempo > 0.0 && tempo.is_finite())
+                    .map(|tempo| {
+                        (tempo
+                            * (1.0
+                                + self
+                                    .rng
+                                    .random_range(-RETAINED_TEMPO_JITTER..=RETAINED_TEMPO_JITTER)))
+                        .clamp(Self::MIN_TEMPO, Self::MAX_TEMPO)
+                    })
+                    .unwrap_or_else(|| random_log_tempo(&mut self.rng))
+            } else {
+                random_log_tempo(&mut self.rng)
+            };
+            let phase = phase_anchor
+                .filter(|phase| phase.is_finite())
+                .map(|phase| {
+                    (phase + self.rng.random_range(-PHASE_JITTER..=PHASE_JITTER)).rem_euclid(1.0)
+                })
+                .unwrap_or_else(|| self.rng.random());
+            self.particles.push(Particle {
+                tempo,
+                phase,
+                weight: 1.0 / Self::PARTICLES as f32,
+                wrapped: false,
+            });
+        }
+    }
+
+    fn reacquire_beat_hypotheses(&mut self, phase_anchor: f32) {
+        let retained_tempo = (self.tempo.tempo() > 0.0).then(|| self.tempo.tempo());
+        self.seed_beat_hypotheses(retained_tempo, Some(phase_anchor));
+        self.contradictory_onsets = 0;
+        self.frames_since_contradictory_onset = 0;
+        self.frames_since_grid_boundary = 0;
         self.last_beat_probability = 0.0;
         self.last_phase = None;
         self.recent_beat_peak = 0.0;
@@ -847,15 +894,17 @@ impl ParticleDecoder {
     }
 
     fn update(&mut self, beat_activation: f32, downbeat_activation: f32) -> BeatEstimate {
+        let beat_activation = finite_activation(beat_activation);
+        let downbeat_activation = finite_activation(downbeat_activation);
         let event_activation = beat_activation.max(downbeat_activation);
-        if event_activation > 0.1 {
-            self.frames_without_activation = 0;
-        } else {
-            self.frames_without_activation = self.frames_without_activation.saturating_add(1);
-            if self.frames_without_activation >= Self::SILENCE_RESET_FRAMES {
-                self.reset_tracking_state();
-            }
+        let strong_onset = self.onset_armed && event_activation > 0.45;
+        if event_activation <= 0.2 {
+            self.onset_armed = true;
+        } else if strong_onset {
+            self.onset_armed = false;
         }
+        self.frames_since_contradictory_onset =
+            self.frames_since_contradictory_onset.saturating_add(1);
 
         self.propagate_beat_particles();
         let predictive_boundary = self
@@ -866,16 +915,20 @@ impl ParticleDecoder {
                 particle.weight * (-0.5 * (distance / 0.055).powi(2)).exp()
             })
             .sum::<f32>();
-        if event_activation > 0.45
+        if strong_onset
             && phase_consistency(&self.particles) > 0.55
             && predictive_boundary < 0.04
+            && self.frames_since_contradictory_onset >= Self::MIN_CONTRADICTORY_ONSET_FRAMES
         {
-            self.contradictory_onsets = self.contradictory_onsets.saturating_add(1);
-            if self.contradictory_onsets >= 3 {
-                self.reset_tracking_state();
-                self.propagate_beat_particles();
+            if self.frames_since_contradictory_onset > Self::CONTRADICTION_RETENTION_FRAMES {
+                self.contradictory_onsets = 0;
             }
-        } else if event_activation > 0.25 && predictive_boundary >= 0.1 {
+            self.contradictory_onsets = self.contradictory_onsets.saturating_add(1);
+            self.frames_since_contradictory_onset = 0;
+            if self.contradictory_onsets >= Self::CONTRADICTORY_ONSETS_TO_REACQUIRE {
+                self.reacquire_beat_hypotheses(0.0);
+            }
+        } else if strong_onset && predictive_boundary >= 0.1 {
             self.contradictory_onsets = 0;
         }
 
@@ -889,9 +942,9 @@ impl ParticleDecoder {
             particle.weight *= likelihood;
             weight_sum += particle.weight;
         }
-        if weight_sum <= f32::EPSILON {
-            self.reset_tracking_state();
-            return BeatEstimate::default();
+        if !weight_sum.is_finite() || weight_sum <= f32::EPSILON {
+            self.reacquire_beat_hypotheses(self.last_phase.unwrap_or(0.0));
+            weight_sum = 1.0;
         }
         for particle in &mut self.particles {
             particle.weight /= weight_sum;
@@ -1093,6 +1146,14 @@ fn meter_observation_likelihood(
         beat_activation
     };
     non_beat * (1.0 - boundary) + boundary_activation * boundary + 1e-6
+}
+
+fn finite_activation(activation: f32) -> f32 {
+    if activation.is_finite() {
+        activation.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 fn random_log_tempo(rng: &mut StdRng) -> f32 {
@@ -1546,23 +1607,76 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_beat_evidence_soft_resets_the_tracker() {
+    fn a_wide_off_grid_activation_does_not_count_as_multiple_onsets() {
         let mut decoder = ParticleDecoder::new();
         decoder.seed_tempo(120.0);
         decoder.tempo.published = Some(120.0);
+        decoder.beat_count = 32;
+        decoder.bar_count = 8;
         let weight = 1.0 / decoder.particles.len() as f32;
         for particle in &mut decoder.particles {
             particle.phase = 0.45;
             particle.weight = weight;
         }
 
-        for _ in 0..3 {
-            decoder.update(0.95, 0.01);
+        let estimates = (0..6)
+            .map(|_| decoder.update(0.95, 0.01))
+            .collect::<Vec<_>>();
+
+        assert!(estimates.iter().all(|estimate| estimate.tempo > 0.0));
+        assert_eq!(decoder.contradictory_onsets, 1);
+        assert!(decoder.beat_count >= 32);
+        assert!(decoder.bar_count >= 8);
+    }
+
+    #[test]
+    fn distinct_off_grid_onsets_reanchor_without_clearing_the_live_clock() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        decoder.tempo.published = Some(120.0);
+        decoder.meter.locked = true;
+        decoder.beat_count = 32;
+        decoder.bar_count = 8;
+        let weight = 1.0 / decoder.particles.len() as f32;
+        let mut estimate = BeatEstimate::default();
+
+        for _ in 0..ParticleDecoder::CONTRADICTORY_ONSETS_TO_REACQUIRE {
+            for particle in &mut decoder.particles {
+                particle.phase = 0.45;
+                particle.weight = weight;
+            }
+            estimate = decoder.update(0.95, 0.01);
+            for _ in 0..ParticleDecoder::MIN_CONTRADICTORY_ONSET_FRAMES {
+                decoder.update(0.01, 0.01);
+            }
         }
 
-        assert_eq!(decoder.tempo.tempo(), 0.0);
-        assert_eq!(decoder.beat_count, 0);
-        assert!(!decoder.meter.locked);
+        approx::assert_abs_diff_eq!(estimate.tempo, 120.0, epsilon = 0.001);
+        assert!(estimate.beat_position < 0.1 || estimate.beat_position > 0.9);
+        assert!(decoder.beat_count >= 32);
+        assert!(decoder.bar_count >= 8);
+        assert!(decoder.meter.locked);
+        assert_eq!(decoder.contradictory_onsets, 0);
+    }
+
+    #[test]
+    fn a_quiet_breakdown_does_not_unpublish_the_live_tempo() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(128.0);
+        decoder.tempo.published = Some(128.0);
+        decoder.beat_count = 48;
+
+        let estimates = (0..ParticleDecoder::FPS as usize * 5)
+            .map(|_| decoder.update(0.01, 0.01))
+            .collect::<Vec<_>>();
+
+        assert!(estimates.iter().all(|estimate| estimate.tempo > 0.0));
+        assert!(
+            estimates
+                .windows(2)
+                .all(|estimates| estimates[1].estimated_beat >= estimates[0].estimated_beat)
+        );
+        assert!(decoder.beat_count >= 48);
     }
 
     fn certain_meter_posterior(meter: u8, beat_in_bar: u8) -> MeterPosterior {

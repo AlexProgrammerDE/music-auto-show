@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef } from "react"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import type {
@@ -8,6 +8,7 @@ import type {
 import {
   projectBeatRunwayFrame,
   reconcileBeatRunwaySample,
+  stabilizeBeatTempo,
   type BeatRunwayFrame,
   type BeatRunwaySample,
 } from "@/lib/beat-runway"
@@ -170,13 +171,23 @@ export function BeatRunway({
   })
   const tempo = analysis?.tempo ?? 0
   const tracking = active && tempo > 0
+  const [displayTempo, setDisplayTempo] = useState(0)
+  const visibleTempo = displayTempo > 0 ? displayTempo : tempo
   const meter = analysis?.meter || 4
   const confidence = analysis?.trackingConfidence ?? 0
   const summary = tracking
-    ? `${Math.round(tempo)} BPM, ${meter}/4, beat ${analysis?.beatIndex || 1} of ${meter}, ${Math.round(confidence * 100)} percent tracking confidence`
+    ? `${Math.round(visibleTempo)} BPM, ${meter}/4, beat ${analysis?.beatIndex || 1} of ${meter}, ${Math.round(confidence * 100)} percent tracking confidence`
     : active
       ? "Finding tempo and meter"
       : "Audio stopped"
+
+  useEffect(() => {
+    if (!tracking) {
+      setDisplayTempo(0)
+      return
+    }
+    setDisplayTempo((previous) => stabilizeBeatTempo(previous, tempo))
+  }, [tempo, tracking])
 
   const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
@@ -271,7 +282,7 @@ export function BeatRunway({
       <div className="flex flex-wrap items-end justify-between gap-3 border-b px-4 py-3">
         <div className="flex items-baseline gap-3">
           <span className="font-heading text-3xl font-semibold tabular-nums">
-            {tracking ? Math.round(tempo) : "–"}
+            {tracking ? Math.round(visibleTempo) : "–"}
           </span>
           <span className="text-xs text-muted-foreground">BPM</span>
           <span className="font-heading text-sm font-semibold tabular-nums">
