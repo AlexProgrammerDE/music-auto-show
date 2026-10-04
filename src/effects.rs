@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::IndexedRandom};
+use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 
 use crate::{
     config::ValidatedShowConfig,
@@ -578,7 +578,7 @@ impl EffectsEngine {
             let count = (config.fixtures.len() / 3).max(1);
             flash_names = config
                 .fixtures
-                .choose_multiple(&mut self.rng, count.min(config.fixtures.len()))
+                .sample(&mut self.rng, count.min(config.fixtures.len()))
                 .map(fixture_key)
                 .collect();
             self.album_hues
