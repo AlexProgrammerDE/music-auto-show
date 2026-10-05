@@ -554,7 +554,7 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                 }
             }
             Event::Text(text) => {
-                let value = text.decode()?.into_owned();
+                let value = text.into_inner().into_owned();
                 match capture {
                     Some(TextCapture::Manufacturer) => {
                         if let Some(fixture) = &mut fixture {
@@ -579,7 +579,7 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                 }
             }
             Event::End(element) => {
-                let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                let name = element.local_name().as_ref().to_owned();
                 match name.as_str() {
                     "manufacturer" | "Info" => capture = None,
                     "ChannelFunction" => {
@@ -633,16 +633,16 @@ fn raw_vector(
 }
 
 fn local_name(element: &BytesStart<'_>) -> String {
-    String::from_utf8_lossy(element.local_name().as_ref()).into_owned()
+    element.local_name().as_ref().to_owned()
 }
 
-fn attr(reader: &Reader<&[u8]>, element: &BytesStart<'_>, key: &str) -> Result<Option<String>> {
+fn attr(_reader: &Reader<&[u8]>, element: &BytesStart<'_>, key: &str) -> Result<Option<String>> {
     for attribute in element.attributes().with_checks(false) {
         let attribute = attribute?;
-        if attribute.key.local_name().as_ref() == key.as_bytes() {
+        if attribute.key.local_name().as_ref() == key {
             return Ok(Some(
                 attribute
-                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+                    .normalized_value(XmlVersion::Implicit1_0)?
                     .into_owned(),
             ));
         }
