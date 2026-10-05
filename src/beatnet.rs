@@ -8,7 +8,7 @@ use std::{
 
 use candle_core::{DType, Device, Shape};
 use candle_nn::VarBuilder;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 use thiserror::Error;
 
