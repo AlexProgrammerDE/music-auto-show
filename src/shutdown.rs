@@ -3,8 +3,10 @@ use std::{fmt, io};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownEvent {
     Interrupt,
+    #[cfg(unix)]
     Terminate,
     Quit,
+    #[cfg(unix)]
     Hangup,
     #[cfg(windows)]
     ConsoleClose,
@@ -18,8 +20,10 @@ impl fmt::Display for ShutdownEvent {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::Interrupt => "interrupt",
+            #[cfg(unix)]
             Self::Terminate => "termination request",
             Self::Quit => "quit request",
+            #[cfg(unix)]
             Self::Hangup => "terminal hangup",
             #[cfg(windows)]
             Self::ConsoleClose => "console close",
@@ -125,8 +129,17 @@ mod tests {
     #[test]
     fn shutdown_events_have_human_readable_names() {
         assert_eq!(ShutdownEvent::Interrupt.to_string(), "interrupt");
-        assert_eq!(ShutdownEvent::Terminate.to_string(), "termination request");
         assert_eq!(ShutdownEvent::Quit.to_string(), "quit request");
-        assert_eq!(ShutdownEvent::Hangup.to_string(), "terminal hangup");
+        #[cfg(unix)]
+        {
+            assert_eq!(ShutdownEvent::Terminate.to_string(), "termination request");
+            assert_eq!(ShutdownEvent::Hangup.to_string(), "terminal hangup");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(ShutdownEvent::ConsoleClose.to_string(), "console close");
+            assert_eq!(ShutdownEvent::ConsoleLogoff.to_string(), "console logoff");
+            assert_eq!(ShutdownEvent::SystemShutdown.to_string(), "system shutdown");
+        }
     }
 }
