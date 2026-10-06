@@ -177,3 +177,8 @@ See [the migration notes](docs/migration.md) for the parity contract and design 
 ## License
 
 The application is MIT licensed. BeatNet+ code and checkpoint terms are governed by their upstream project. The checkpoint is downloaded directly from upstream at runtime and is not redistributed with this application.
+
+## Contributing and support
+
+Read [the contribution guide](CONTRIBUTING.md) for development and review.
+Use [the support guide](SUPPORT.md) for questions and issue routing.
