@@ -247,7 +247,7 @@ export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis |
         />
       </figure>
       <div className="grid content-center gap-3 p-5">
-        <span className="font-heading text-[10px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+        <span className="font-heading text-micro font-semibold tracking-label-wide text-muted-foreground uppercase">
           Harmonic estimate
         </span>
         <div className="flex items-baseline gap-2">
@@ -283,10 +283,10 @@ export function SectionTimeline({ analysis }: { readonly analysis: AudioAnalysis
               key={marker.sequence.toString()}
               className="grid min-w-28 content-center border-r px-3 py-2 last:border-r-0"
             >
-              <span className="font-heading text-[10px] font-semibold uppercase">
+              <span className="font-heading text-micro font-semibold uppercase">
                 {formatEnumLabel(MusicSection[marker.section] ?? "Unknown")}
               </span>
-              <span className="text-[10px] text-muted-foreground tabular-nums">
+              <span className="text-micro text-muted-foreground tabular-nums">
                 Bar {Number(marker.estimatedBar) + 1} · {Math.round(marker.confidence * 100)}%
               </span>
             </div>
@@ -297,7 +297,7 @@ export function SectionTimeline({ analysis }: { readonly analysis: AudioAnalysis
           </span>
         )}
       </div>
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-micro text-muted-foreground">
         This timeline shows observed sections only. It does not invent future phrase boundaries.
       </p>
     </div>

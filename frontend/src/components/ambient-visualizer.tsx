@@ -328,7 +328,7 @@ export default function AmbientVisualizer({
         <figcaption className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-sm">
           <div>
             <p className="font-heading text-xs font-semibold">{section}</p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {Math.round((analysis?.sectionConfidence ?? 0) * 100)}% structure confidence
             </p>
           </div>
@@ -336,7 +336,7 @@ export default function AmbientVisualizer({
             <p className="font-heading text-xs font-semibold">
               Cycle {effectRuntime?.effectCyclePosition ?? 1}/32
             </p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               Reduced motion follows system preference
             </p>
           </div>

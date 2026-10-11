@@ -43,25 +43,36 @@ function AnalysisLevel({
   value,
   peak,
   threshold,
-  color,
+  tone,
   display,
 }: {
   readonly label: string
   readonly value: number
   readonly peak: number
   readonly threshold: number
-  readonly color: string
+  readonly tone: "bass" | "mid" | "high" | "energy" | "rms" | "peak" | "clipping"
   readonly display?: string
 }) {
   return (
     <Progress
       value={value * 100}
       aria-label={`${label}: ${display ?? formatPercent(value)}, recent peak ${formatPercent(peak)}, trigger guide ${formatPercent(threshold)}`}
-      className={cn("gap-x-3 gap-y-1", color)}
+      className={cn(
+        "gap-x-3 gap-y-1",
+        tone === "bass" && "[&_[data-slot=progress-indicator]]:bg-chart-2",
+        tone === "mid" && "[&_[data-slot=progress-indicator]]:bg-chart-3",
+        tone === "high" && "[&_[data-slot=progress-indicator]]:bg-chart-4",
+        tone === "energy" && "[&_[data-slot=progress-indicator]]:bg-chart-1",
+        tone === "rms" && "[&_[data-slot=progress-indicator]]:bg-primary",
+        tone === "peak" && "[&_[data-slot=progress-indicator]]:bg-chart-5",
+        tone === "clipping" && "[&_[data-slot=progress-indicator]]:bg-destructive",
+      )}
     >
-      <ProgressLabel className="font-heading text-[11px]">{label}</ProgressLabel>
-      <ProgressValue className="text-[11px]">{() => display ?? formatPercent(value)}</ProgressValue>
-      <span className="order-3 w-full text-[9px] text-muted-foreground">
+      <ProgressLabel className="font-heading text-caption">{label}</ProgressLabel>
+      <ProgressValue className="text-caption">
+        {() => display ?? formatPercent(value)}
+      </ProgressValue>
+      <span className="order-3 w-full text-tiny text-muted-foreground">
         peak {formatPercent(peak)} · guide {formatPercent(threshold)}
       </span>
     </Progress>
@@ -84,35 +95,35 @@ function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undef
           value={current?.bass ?? 0}
           peak={peakOf((frame) => frame.bass)}
           threshold={0.5}
-          color="[&_[data-slot=progress-indicator]]:bg-chart-2"
+          tone="bass"
         />
         <AnalysisLevel
           label="Mid"
           value={current?.mid ?? 0}
           peak={peakOf((frame) => frame.mid)}
           threshold={0.5}
-          color="[&_[data-slot=progress-indicator]]:bg-chart-3"
+          tone="mid"
         />
         <AnalysisLevel
           label="High"
           value={current?.high ?? 0}
           peak={peakOf((frame) => frame.high)}
           threshold={0.5}
-          color="[&_[data-slot=progress-indicator]]:bg-chart-4"
+          tone="high"
         />
         <AnalysisLevel
           label="Energy"
           value={current?.energy ?? 0}
           peak={peakOf((frame) => frame.energy)}
           threshold={0.6}
-          color="[&_[data-slot=progress-indicator]]:bg-chart-1"
+          tone="energy"
         />
         <AnalysisLevel
           label="RMS"
           value={rms}
           peak={rms}
           threshold={0.8}
-          color="[&_[data-slot=progress-indicator]]:bg-primary"
+          tone="rms"
           display={`${(current?.rmsDbfs ?? -120).toFixed(1)} dBFS`}
         />
         <AnalysisLevel
@@ -120,11 +131,7 @@ function AnalysisMeters({ analysis }: { readonly analysis: AudioAnalysis | undef
           value={peak}
           peak={peak}
           threshold={0.98}
-          color={
-            current?.clipping
-              ? "[&_[data-slot=progress-indicator]]:bg-destructive"
-              : "[&_[data-slot=progress-indicator]]:bg-chart-5"
-          }
+          tone={current?.clipping ? "clipping" : "peak"}
           display={`${(current?.peakDbfs ?? -120).toFixed(1)} dBFS`}
         />
       </div>

@@ -19,10 +19,144 @@
     "unicorn/prefer-set-has": "off",
     "effecttsgo/any-unknown-in-error-context": "off",
     "effecttsgo/unsafe-effect-type-assertion": "off",
-    "effecttsgo/strict-effect-provide": "off"
+    "effecttsgo/strict-effect-provide": "off",
+    "shadcn/no-restyle": [
+      "error",
+      {
+        "allow": ["layout"],
+        "contracts": [
+          {
+            "pattern": "^AccordionItem$",
+            "allow": ["layout", "px-4"]
+          },
+          {
+            "pattern": "^Alert$",
+            "allow": ["layout", "p-4"]
+          },
+          {
+            "pattern": "^AlertDescription$",
+            "allow": ["layout", "pr-24"]
+          },
+          {
+            "pattern": "^Badge$",
+            "allow": ["layout", "text-tiny"]
+          },
+          {
+            "pattern": "^Card$",
+            "allow": ["layout", "gap-0", "py-0", "rounded-none"]
+          },
+          {
+            "pattern": "^CardContent$",
+            "allow": ["layout", "p-0"]
+          },
+          {
+            "pattern": "^CardDescription$",
+            "allow": ["layout", "text-xs", "truncate"]
+          },
+          {
+            "pattern": "^CardHeader$",
+            "allow": ["layout", "gap-0", "border-b", "py-2.5"]
+          },
+          {
+            "pattern": "^DrawerFooter$",
+            "allow": ["layout", "border-t", "pt-4"]
+          },
+          {
+            "pattern": "^Empty$",
+            "allow": ["layout", "border", "py-5", "rounded-none"]
+          },
+          {
+            "pattern": "^Field$",
+            "allow": ["layout", "border-r", "p-4"]
+          },
+          {
+            "pattern": "^FieldDescription$",
+            "allow": ["layout", "gap-2"]
+          },
+          {
+            "pattern": "^FieldGroup$",
+            "allow": ["layout", "border-t", "gap-4", "gap-5", "p-4"]
+          },
+          {
+            "pattern": "^FieldSet$",
+            "allow": ["layout", "border", "border-t", "p-4"]
+          },
+          {
+            "pattern": "^Progress$",
+            "allow": [
+              "layout",
+              "gap-x-3",
+              "gap-y-1",
+              "gap-y-2",
+              "[&_[data-slot=progress-indicator]]:bg-chart-1",
+              "[&_[data-slot=progress-indicator]]:bg-chart-2",
+              "[&_[data-slot=progress-indicator]]:bg-chart-3",
+              "[&_[data-slot=progress-indicator]]:bg-chart-4",
+              "[&_[data-slot=progress-indicator]]:bg-chart-5",
+              "[&_[data-slot=progress-indicator]]:bg-primary",
+              "[&_[data-slot=progress-indicator]]:bg-destructive"
+            ]
+          },
+          {
+            "pattern": "^ProgressLabel$",
+            "allow": ["layout", "font-heading", "text-caption", "text-xs"]
+          },
+          {
+            "pattern": "^ProgressValue$",
+            "allow": ["layout", "text-caption", "text-xs"]
+          },
+          {
+            "pattern": "^Skeleton$",
+            "allow": ["layout", "rounded-none"]
+          },
+          {
+            "pattern": "^TableCell$",
+            "allow": ["layout", "p-0"]
+          },
+          {
+            "pattern": "^Tabs$",
+            "allow": ["layout", "gap-0", "gap-4"]
+          },
+          {
+            "pattern": "^TabsList$",
+            "allow": ["layout", "border-b", "pb-2", "px-1", "px-3", "py-2"]
+          },
+          {
+            "pattern": "^TooltipTrigger$",
+            "allow": [
+              "layout",
+              "bg-muted",
+              "border",
+              "border-border",
+              "border-transparent",
+              "font-heading",
+              "font-medium",
+              "gap-2",
+              "hover:text-foreground",
+              "px-2.5",
+              "text-foreground",
+              "text-muted-foreground",
+              "text-xs",
+              "transition-colors"
+            ]
+          }
+        ]
+      }
+    ],
+    "shadcn/no-raw-colors": "error",
+    "shadcn/no-arbitrary-values": [
+      "error",
+      {
+        "allow": ["layout"]
+      }
+    ],
+    "shadcn/no-inline-styles": "error",
+    "shadcn/no-unknown-classes": "error",
+    "shadcn/require-static-classes": "error"
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "options": {
     "typeAware": true
-  }
+  },
+  "jsPlugins": ["@shadcn/lint"]
 }

@@ -300,7 +300,7 @@ export function BeatRunway({
           className="absolute inset-0 size-full"
           aria-label={`Beat runway. ${summary}. Solid markers are observed beats; dashed markers are projected.`}
         />
-        <figcaption className="absolute right-3 bottom-2 text-[10px] text-muted-foreground">
+        <figcaption className="absolute right-3 bottom-2 text-micro text-muted-foreground">
           observed · projected
         </figcaption>
       </figure>

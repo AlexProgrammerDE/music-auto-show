@@ -178,7 +178,7 @@ export function BluetoothReceiverPanel() {
                     {device.connected ? <Badge variant="secondary">Connected</Badge> : null}
                   </div>
                   <p
-                    className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
+                    className="mt-0.5 truncate font-mono text-caption text-muted-foreground"
                     title={device.id}
                   >
                     {device.id}

@@ -88,10 +88,10 @@ function LightingPalette({
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-heading text-[10px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+        <span className="font-heading text-micro font-semibold tracking-label-wide text-muted-foreground uppercase">
           Lighting palette
         </span>
-        <span className="text-[10px] text-muted-foreground">Active {activeIndex + 1}</span>
+        <span className="text-micro text-muted-foreground">Active {activeIndex + 1}</span>
       </div>
       <canvas
         ref={canvasRef}
@@ -125,7 +125,7 @@ export function PerformanceDeck({
           <Artwork media={media} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <p className="text-[10px] tracking-[0.14em] text-muted-foreground uppercase">
+              <p className="text-micro tracking-label-wider text-muted-foreground uppercase">
                 Now playing
               </p>
               <Badge variant="outline">

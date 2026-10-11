@@ -42,14 +42,14 @@ export function SignalToShow({ runtime }: { readonly runtime: EffectRuntimeStatu
             <div className="contents" key={stage.id}>
               <div className="grid content-start gap-2 border bg-background p-3">
                 <span className="font-heading text-xs font-semibold">{copy.label}</span>
-                <span className="text-[11px] text-muted-foreground">{copy.detail}</span>
+                <span className="text-caption text-muted-foreground">{copy.detail}</span>
                 {stage.drivers.length > 0 ? (
                   <div className="flex flex-wrap gap-1">
                     {stage.drivers.map((driver) => (
                       <Badge
                         key={driver}
                         variant={active.has(driver) ? "secondary" : "outline"}
-                        className="text-[9px]"
+                        className="text-tiny"
                       >
                         {driverLabel(driver)}
                       </Badge>
@@ -109,7 +109,7 @@ export function FixtureReactionMatrix({
     >
       <div className="overflow-x-auto">
         <table className="w-full min-w-xl border-collapse text-left text-xs">
-          <thead className="border-b bg-muted/40 font-heading text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
+          <thead className="border-b bg-muted/40 font-heading text-micro tracking-label text-muted-foreground uppercase">
             <tr>
               <th className="px-4 py-2 font-medium">Fixture</th>
               <th className="px-4 py-2 font-medium">Listens to</th>

@@ -82,11 +82,11 @@ function Metric({
 }) {
   return (
     <div className="border-b px-4 py-3 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
-      <p className="font-heading text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+      <p className="font-heading text-micro font-semibold tracking-label text-muted-foreground uppercase">
         {label}
       </p>
       <p className="mt-1.5 text-xl leading-none font-semibold tabular-nums">{value}</p>
-      {detail ? <p className="mt-1 text-[10px] text-muted-foreground">{detail}</p> : null}
+      {detail ? <p className="mt-1 text-micro text-muted-foreground">{detail}</p> : null}
     </div>
   )
 }

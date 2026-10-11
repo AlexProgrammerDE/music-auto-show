@@ -1209,7 +1209,7 @@ export function StageView({
       {orderedFixtures.length > 0 && !webglUnavailable ? (
         <p
           id={controlsDescriptionId}
-          className="pointer-events-none absolute bottom-2 left-2 bg-background/80 px-2 py-1 text-[10px] text-muted-foreground"
+          className="pointer-events-none absolute bottom-2 left-2 bg-background/80 px-2 py-1 text-micro text-muted-foreground"
         >
           Drag to orbit · Scroll or pinch to zoom · Arrow keys pan · Shift + arrow keys orbit · +/−
           zoom · Home resets

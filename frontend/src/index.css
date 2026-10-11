@@ -76,6 +76,15 @@
 }
 
 @theme inline {
+  --text-mini: 8px;
+  --text-tiny: 9px;
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --tracking-label: 0.08em;
+  --tracking-label-wide: 0.12em;
+  --tracking-label-wider: 0.14em;
+  --tracking-label-widest: 0.16em;
+
   --font-serif: "Roboto Slab Variable", serif;
   --font-heading: "Public Sans Variable", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
