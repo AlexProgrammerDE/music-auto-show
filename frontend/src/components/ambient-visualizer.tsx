@@ -242,7 +242,7 @@ export default function AmbientVisualizer({
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     let animationFrame = 0
     const animate = (now: number) => {
       render(now)
@@ -277,7 +277,18 @@ export default function AmbientVisualizer({
       <div className="flex min-w-0 flex-col gap-3 border-b p-3 lg:flex-row lg:items-center lg:justify-between">
         <Tabs
           value={preset}
-          onValueChange={(value) => void setPreset(value as typeof preset, { history: "push" })}
+          onValueChange={(value) => {
+            if (
+              value === "radial" ||
+              value === "led" ||
+              value === "mirror" ||
+              value === "peak" ||
+              value === "luminance" ||
+              value === "waterfall"
+            ) {
+              void setPreset(value, { history: "push" })
+            }
+          }}
           className="min-w-0"
         >
           <TabsList variant="line" className="w-full max-w-full justify-start overflow-x-auto">

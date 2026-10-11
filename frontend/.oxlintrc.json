@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
   "categories": {
     "correctness": "error",
     "perf": "off",
@@ -10,12 +10,19 @@
     "builtin": true
   },
   "ignorePatterns": ["dist/**", "src/components/ui/**", "src/gen/**", "src/routeTree.gen.ts"],
-  "plugins": ["import", "jsx-a11y", "oxc", "react", "typescript", "unicorn"],
+  "plugins": ["import", "jsx-a11y", "oxc", "react", "typescript", "unicorn", "effecttsgo"],
   "rules": {
     "import/no-named-as-default": "off",
     "import/no-unassigned-import": "off",
     "jsx-a11y/media-has-caption": "off",
     "react/react-in-jsx-scope": "off",
-    "unicorn/prefer-set-has": "off"
+    "unicorn/prefer-set-has": "off",
+    "effecttsgo/any-unknown-in-error-context": "off",
+    "effecttsgo/unsafe-effect-type-assertion": "off",
+    "effecttsgo/strict-effect-provide": "off"
+  },
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
+  "options": {
+    "typeAware": true
   }
 }

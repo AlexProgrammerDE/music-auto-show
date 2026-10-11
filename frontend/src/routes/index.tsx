@@ -282,6 +282,7 @@ function RecordingPanel({
     | undefined
   readonly recordingUrl: string | undefined
 }) {
+  const [recordingDate] = useState(() => new Date().toISOString().slice(0, 10))
   const progress = recording?.maxDurationSeconds
     ? (recording.durationSeconds / recording.maxDurationSeconds) * 100
     : 0
@@ -337,7 +338,7 @@ function RecordingPanel({
                 render={
                   <a
                     href={recordingUrl}
-                    download={`music-auto-show-${new Date().toISOString().slice(0, 10)}.wav`}
+                    download={`music-auto-show-${recordingDate}.wav`}
                     aria-label="Download recorded audio"
                   />
                 }
@@ -554,7 +555,11 @@ function LiveDashboard() {
 
       <Tabs
         value={view}
-        onValueChange={(value) => void setView(value as typeof view, { history: "push" })}
+        onValueChange={(value) => {
+          if (value === "performance" || value === "analyzer" || value === "ambient") {
+            void setView(value, { history: "push" })
+          }
+        }}
         className="min-w-0 gap-4"
       >
         <TabsList

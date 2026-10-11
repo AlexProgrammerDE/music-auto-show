@@ -184,7 +184,16 @@ export function AnalyzerView({
       >
         <Tabs
           value={scope}
-          onValueChange={(value) => void setScope(value as typeof scope, { history: "push" })}
+          onValueChange={(value) => {
+            if (
+              value === "waveform" ||
+              value === "spectrum" ||
+              value === "spectrogram" ||
+              value === "beat"
+            ) {
+              void setScope(value, { history: "push" })
+            }
+          }}
           className="gap-0"
         >
           <TabsList

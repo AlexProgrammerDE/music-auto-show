@@ -47,8 +47,8 @@ export function signalPath(mode: VisualizationMode): readonly SignalStage[] {
 
 export type FrequencyBand = "bass" | "mid" | "high"
 
-export function assignFrequencyBands<T extends { readonly id: string; readonly position: number }>(
-  fixtures: readonly T[],
+export function assignFrequencyBands(
+  fixtures: readonly { readonly id: string; readonly position: number }[],
 ) {
   const ordered = fixtures.toSorted(
     (first, second) => first.position - second.position || first.id.localeCompare(second.id),

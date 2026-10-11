@@ -51,14 +51,12 @@ export function BluetoothReceiverPanel() {
     }) =>
       runShowApi(
         Effect.flatMap(ShowApi, (api) => {
-          switch (action) {
-            case "connect":
-              return api.connectBluetoothReceiverDevice(deviceId)
-            case "disconnect":
-              return api.disconnectBluetoothReceiverDevice(deviceId)
-            case "forget":
-              return api.forgetBluetoothReceiverDevice(deviceId)
+          const actions = {
+            connect: () => api.connectBluetoothReceiverDevice(deviceId),
+            disconnect: () => api.disconnectBluetoothReceiverDevice(deviceId),
+            forget: () => api.forgetBluetoothReceiverDevice(deviceId),
           }
+          return actions[action]()
         }),
       ),
     onSuccess: (status) => {

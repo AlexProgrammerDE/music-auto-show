@@ -189,7 +189,7 @@ export function SpectrumWaterfall({
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     let animationFrame = 0
     const animate = (now: number) => {
       render(now)

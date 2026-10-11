@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
@@ -1095,7 +1095,6 @@ export function StageView({
   readonly fixtureTypes: readonly GrandMa2FixtureType[]
   readonly states: readonly FixtureState[]
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const controlsDescriptionId = useId()
   const latestStatesRef = useRef(states)
   const [webglUnavailable, setWebglUnavailable] = useState(false)
@@ -1112,92 +1111,94 @@ export function StageView({
     latestStatesRef.current = states
   }, [states])
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    let runtime: StageRuntime
-    try {
-      runtime = createStageRuntime(canvas, orderedFixtures, fixtureTypes)
-      setWebglUnavailable(false)
-    } catch {
-      setWebglUnavailable(true)
-      return
-    }
-
-    runtime.controls.listenToKeyEvents(canvas)
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code === "Equal" || event.code === "NumpadAdd") {
-        event.preventDefault()
-        runtime.controls.dollyIn(1.12)
-        runtime.controls.update()
-      } else if (event.code === "Minus" || event.code === "NumpadSubtract") {
-        event.preventDefault()
-        runtime.controls.dollyOut(1.12)
-        runtime.controls.update()
-      } else if (event.code === "Home") {
-        event.preventDefault()
-        runtime.controls.reset()
+  const attachCanvas = useCallback(
+    (canvas: HTMLCanvasElement | null) => {
+      if (!canvas) return undefined
+      let runtime: StageRuntime
+      try {
+        runtime = createStageRuntime(canvas, orderedFixtures, fixtureTypes)
+        setWebglUnavailable(false)
+      } catch {
+        setWebglUnavailable(true)
+        return undefined
       }
-    }
-    canvas.addEventListener("keydown", handleKeyDown)
 
-    const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)")
-    const applyMotionPreference = () => {
-      runtime.reducedMotion = reducedMotionQuery.matches
-      runtime.controls.enableDamping = !runtime.reducedMotion
-      runtime.controls.update()
-    }
-    applyMotionPreference()
-    reducedMotionQuery.addEventListener("change", applyMotionPreference)
+      runtime.controls.listenToKeyEvents(canvas)
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.code === "Equal" || event.code === "NumpadAdd") {
+          event.preventDefault()
+          runtime.controls.dollyIn(1.12)
+          runtime.controls.update()
+        } else if (event.code === "Minus" || event.code === "NumpadSubtract") {
+          event.preventDefault()
+          runtime.controls.dollyOut(1.12)
+          runtime.controls.update()
+        } else if (event.code === "Home") {
+          event.preventDefault()
+          runtime.controls.reset()
+        }
+      }
+      canvas.addEventListener("keydown", handleKeyDown)
 
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return
-      const width = Math.max(1, Math.round(entry.contentRect.width))
-      const height = Math.max(1, Math.round(entry.contentRect.height))
-      runtime.renderer.setPixelRatio(Math.min(2, Math.max(1, window.devicePixelRatio || 1)))
-      runtime.renderer.setSize(width, height, false)
-      runtime.camera.aspect = width / height
-      runtime.camera.updateProjectionMatrix()
-    })
-    observer.observe(canvas)
+      const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)")
+      const applyMotionPreference = () => {
+        runtime.reducedMotion = reducedMotionQuery.matches
+        runtime.controls.enableDamping = !runtime.reducedMotion
+        runtime.controls.update()
+      }
+      applyMotionPreference()
+      reducedMotionQuery.addEventListener("change", applyMotionPreference)
 
-    const themeObserver = new MutationObserver(() => applyTheme(runtime))
-    themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
-    const handleContextLost = (event: Event) => {
-      event.preventDefault()
-      setWebglUnavailable(true)
-    }
-    const handleContextRestored = () => setWebglUnavailable(false)
-    canvas.addEventListener("webglcontextlost", handleContextLost)
-    canvas.addEventListener("webglcontextrestored", handleContextRestored)
+      const observer = new ResizeObserver(([entry]) => {
+        if (!entry) return
+        const width = Math.max(1, Math.round(entry.contentRect.width))
+        const height = Math.max(1, Math.round(entry.contentRect.height))
+        runtime.renderer.setPixelRatio(Math.min(2, Math.max(1, window.devicePixelRatio || 1)))
+        runtime.renderer.setSize(width, height, false)
+        runtime.camera.aspect = width / height
+        runtime.camera.updateProjectionMatrix()
+      })
+      observer.observe(canvas)
 
-    let animationFrame = 0
-    const render = (time: number) => {
-      const renderedStates = interpolatedFixtureStates(
-        sampleLiveFrame(time),
-        latestStatesRef.current,
-      )
-      updateFixtureVisuals(runtime, renderedStates, time / 1000)
+      const themeObserver = new MutationObserver(() => applyTheme(runtime))
+      themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
+      const handleContextLost = (event: Event) => {
+        event.preventDefault()
+        setWebglUnavailable(true)
+      }
+      const handleContextRestored = () => setWebglUnavailable(false)
+      canvas.addEventListener("webglcontextlost", handleContextLost)
+      canvas.addEventListener("webglcontextrestored", handleContextRestored)
+
+      let animationFrame = 0
+      const render = (time: number) => {
+        const renderedStates = interpolatedFixtureStates(
+          sampleLiveFrame(time),
+          latestStatesRef.current,
+        )
+        updateFixtureVisuals(runtime, renderedStates, time / 1000)
+        animationFrame = requestAnimationFrame(render)
+      }
       animationFrame = requestAnimationFrame(render)
-    }
-    animationFrame = requestAnimationFrame(render)
 
-    return () => {
-      cancelAnimationFrame(animationFrame)
-      observer.disconnect()
-      themeObserver.disconnect()
-      canvas.removeEventListener("webglcontextlost", handleContextLost)
-      canvas.removeEventListener("webglcontextrestored", handleContextRestored)
-      canvas.removeEventListener("keydown", handleKeyDown)
-      reducedMotionQuery.removeEventListener("change", applyMotionPreference)
-      disposeScene(runtime)
-    }
-  }, [orderedFixtures, fixtureTypes])
+      return () => {
+        cancelAnimationFrame(animationFrame)
+        observer.disconnect()
+        themeObserver.disconnect()
+        canvas.removeEventListener("webglcontextlost", handleContextLost)
+        canvas.removeEventListener("webglcontextrestored", handleContextRestored)
+        canvas.removeEventListener("keydown", handleKeyDown)
+        reducedMotionQuery.removeEventListener("change", applyMotionPreference)
+        disposeScene(runtime)
+      }
+    },
+    [orderedFixtures, fixtureTypes],
+  )
 
   return (
     <div className="relative h-80 overflow-hidden bg-background">
       <canvas
-        ref={canvasRef}
+        ref={attachCanvas}
         className="block size-full cursor-grab touch-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset active:cursor-grabbing"
         aria-label="Interactive live 3D stage preview driven by grandMA2 body, emitter, beam, pan, and tilt metadata"
         aria-describedby={controlsDescriptionId}

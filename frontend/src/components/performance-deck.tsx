@@ -1,5 +1,5 @@
 import { MusicNotesIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react"
-import { useEffect, useEffectEvent, useRef, useState } from "react"
+import { useEffect, useCallback, useRef, useState } from "react"
 
 import { BeatRunway } from "@/components/beat-runway"
 import { Badge } from "@/components/ui/badge"
@@ -50,7 +50,7 @@ function LightingPalette({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const surfaceRef = useRef<CanvasSurface | undefined>(undefined)
-  const render = useEffectEvent(() => {
+  const render = useCallback(() => {
     const surface = surfaceRef.current
     if (!surface) return
     const { context, width, height } = surface
@@ -72,10 +72,10 @@ function LightingPalette({
         context.strokeRect(index * swatchWidth + 4, 4, swatchWidth - 8, height - 8)
       }
     })
-  })
+  }, [activeIndex, media])
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
@@ -83,8 +83,8 @@ function LightingPalette({
     })
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [])
-  useEffect(() => render(), [activeIndex, media])
+  }, [render])
+  useEffect(() => render(), [render])
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-3">
