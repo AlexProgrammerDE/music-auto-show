@@ -105,3 +105,17 @@ The Vite build is embedded with `rust-embed`. The SPA and gRPC-Web API must cont
 ## Effect source reference
 
 Run `bun run prepare` when local Effect source is needed. It clones the reference checkout into `.repos/effect`, which is ignored and must not be committed.
+
+## React conventions
+
+- Keep page structure, headings, navigation, labels, and independent content mounted while data loads.
+- Show skeletons only for unresolved values, rows, and permission-dependent actions. Do not block a page on its slowest query.
+
+## shadcn/ui
+
+- For shadcn/ui work, use the `shadcn` skill and component documentation.
+- Compose existing shadcn/ui components before writing custom primitives. Use `Field`, `InputGroup`, and `Item` where appropriate.
+
+## Design skills
+
+- For visual design work, use `frontend-design` and `uncodixfy`.

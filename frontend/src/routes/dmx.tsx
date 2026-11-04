@@ -79,10 +79,10 @@ function DmxUniversePage() {
                 )}
                 title={`Channel ${channel}: ${value}`}
               >
-                <span className="text-[8px] leading-none text-muted-foreground tabular-nums">
+                <span className="text-mini leading-none text-muted-foreground tabular-nums">
                   {channel}
                 </span>
-                <span className="self-end text-[10px] leading-none font-semibold tabular-nums">
+                <span className="self-end text-micro leading-none font-semibold tabular-nums">
                   {value}
                 </span>
               </div>

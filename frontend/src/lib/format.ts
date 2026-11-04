@@ -17,7 +17,7 @@ export function formatPercent(value: number) {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`
 }
 
-export function enumEntries<T extends Record<string, string | number>>(values: T) {
+export function enumEntries(values: Record<string, string | number>) {
   return Object.entries(values).filter(
     (entry): entry is [string, number] =>
       typeof entry[1] === "number" && entry[0] !== "UNSPECIFIED",

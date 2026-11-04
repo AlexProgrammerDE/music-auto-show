@@ -180,13 +180,11 @@ export function BeatRunway({
       ? "Finding tempo and meter"
       : "Audio stopped"
 
-  useEffect(() => {
-    if (!tracking) {
-      setDisplayTempo(0)
-      return
-    }
-    setDisplayTempo((previous) => stabilizeBeatTempo(previous, tempo))
-  }, [tempo, tracking])
+  const [previousSample, setPreviousSample] = useState({ tempo, tracking })
+  if (tempo !== previousSample.tempo || tracking !== previousSample.tracking) {
+    setPreviousSample({ tempo, tracking })
+    setDisplayTempo((previous) => (tracking ? stabilizeBeatTempo(previous, tempo) : 0))
+  }
 
   const render = useEffectEvent((now: number) => {
     const surface = surfaceRef.current
@@ -228,7 +226,7 @@ export function BeatRunway({
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
     let animationFrame: number | undefined
     const draw = (now: number) => render(now)
@@ -302,7 +300,7 @@ export function BeatRunway({
           className="absolute inset-0 size-full"
           aria-label={`Beat runway. ${summary}. Solid markers are observed beats; dashed markers are projected.`}
         />
-        <figcaption className="absolute right-3 bottom-2 text-[10px] text-muted-foreground">
+        <figcaption className="absolute right-3 bottom-2 text-micro text-muted-foreground">
           observed · projected
         </figcaption>
       </figure>

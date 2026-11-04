@@ -51,14 +51,12 @@ export function BluetoothReceiverPanel() {
     }) =>
       runShowApi(
         Effect.flatMap(ShowApi, (api) => {
-          switch (action) {
-            case "connect":
-              return api.connectBluetoothReceiverDevice(deviceId)
-            case "disconnect":
-              return api.disconnectBluetoothReceiverDevice(deviceId)
-            case "forget":
-              return api.forgetBluetoothReceiverDevice(deviceId)
+          const actions = {
+            connect: () => api.connectBluetoothReceiverDevice(deviceId),
+            disconnect: () => api.disconnectBluetoothReceiverDevice(deviceId),
+            forget: () => api.forgetBluetoothReceiverDevice(deviceId),
           }
+          return actions[action]()
         }),
       ),
     onSuccess: (status) => {
@@ -180,7 +178,7 @@ export function BluetoothReceiverPanel() {
                     {device.connected ? <Badge variant="secondary">Connected</Badge> : null}
                   </div>
                   <p
-                    className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
+                    className="mt-0.5 truncate font-mono text-caption text-muted-foreground"
                     title={device.id}
                   >
                     {device.id}

@@ -82,11 +82,11 @@ function Metric({
 }) {
   return (
     <div className="border-b px-4 py-3 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
-      <p className="font-heading text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+      <p className="font-heading text-micro font-semibold tracking-label text-muted-foreground uppercase">
         {label}
       </p>
       <p className="mt-1.5 text-xl leading-none font-semibold tabular-nums">{value}</p>
-      {detail ? <p className="mt-1 text-[10px] text-muted-foreground">{detail}</p> : null}
+      {detail ? <p className="mt-1 text-micro text-muted-foreground">{detail}</p> : null}
     </div>
   )
 }
@@ -282,6 +282,7 @@ function RecordingPanel({
     | undefined
   readonly recordingUrl: string | undefined
 }) {
+  const [recordingDate] = useState(() => new Date().toISOString().slice(0, 10))
   const progress = recording?.maxDurationSeconds
     ? (recording.durationSeconds / recording.maxDurationSeconds) * 100
     : 0
@@ -337,7 +338,7 @@ function RecordingPanel({
                 render={
                   <a
                     href={recordingUrl}
-                    download={`music-auto-show-${new Date().toISOString().slice(0, 10)}.wav`}
+                    download={`music-auto-show-${recordingDate}.wav`}
                     aria-label="Download recorded audio"
                   />
                 }
@@ -554,7 +555,11 @@ function LiveDashboard() {
 
       <Tabs
         value={view}
-        onValueChange={(value) => void setView(value as typeof view, { history: "push" })}
+        onValueChange={(value) => {
+          if (value === "performance" || value === "analyzer" || value === "ambient") {
+            void setView(value, { history: "push" })
+          }
+        }}
         className="min-w-0 gap-4"
       >
         <TabsList

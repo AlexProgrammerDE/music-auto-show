@@ -46,7 +46,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
               <span className="block font-heading text-sm font-semibold tracking-tight">
                 Music Auto Show
               </span>
-              <span className="block pt-1 text-[10px] tracking-[0.16em] text-muted-foreground uppercase">
+              <span className="block pt-1 text-micro tracking-label-widest text-muted-foreground uppercase">
                 Lighting control
               </span>
             </span>

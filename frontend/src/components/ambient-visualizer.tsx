@@ -242,7 +242,7 @@ export default function AmbientVisualizer({
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     let animationFrame = 0
     const animate = (now: number) => {
       render(now)
@@ -277,7 +277,18 @@ export default function AmbientVisualizer({
       <div className="flex min-w-0 flex-col gap-3 border-b p-3 lg:flex-row lg:items-center lg:justify-between">
         <Tabs
           value={preset}
-          onValueChange={(value) => void setPreset(value as typeof preset, { history: "push" })}
+          onValueChange={(value) => {
+            if (
+              value === "radial" ||
+              value === "led" ||
+              value === "mirror" ||
+              value === "peak" ||
+              value === "luminance" ||
+              value === "waterfall"
+            ) {
+              void setPreset(value, { history: "push" })
+            }
+          }}
           className="min-w-0"
         >
           <TabsList variant="line" className="w-full max-w-full justify-start overflow-x-auto">
@@ -317,7 +328,7 @@ export default function AmbientVisualizer({
         <figcaption className="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-sm">
           <div>
             <p className="font-heading text-xs font-semibold">{section}</p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {Math.round((analysis?.sectionConfidence ?? 0) * 100)}% structure confidence
             </p>
           </div>
@@ -325,7 +336,7 @@ export default function AmbientVisualizer({
             <p className="font-heading text-xs font-semibold">
               Cycle {effectRuntime?.effectCyclePosition ?? 1}/32
             </p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               Reduced motion follows system preference
             </p>
           </div>
