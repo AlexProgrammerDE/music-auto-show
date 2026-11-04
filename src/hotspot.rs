@@ -9,7 +9,7 @@ mod platform {
     use std::process::Output;
 
     use anyhow::{Context, Result, bail};
-    use rand::{Rng, distr::Alphanumeric};
+    use rand::{RngExt, distr::Alphanumeric};
     use tokio::process::Command;
 
     use super::HotspotCommand;
