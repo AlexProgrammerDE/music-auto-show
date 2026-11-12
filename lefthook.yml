@@ -1,0 +1,32 @@
+lefthook: bunx --no-install lefthook
+min_version: 2.2.2
+
+pre-commit:
+  piped: true
+  jobs:
+    - name: frontend-lint
+      root: "frontend/"
+      glob: "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}"
+      run: bunx --no-install oxlint --type-aware --fix --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    - name: frontend-format
+      root: "frontend/"
+      glob: "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,md,mdx,yml,yaml,toml}"
+      run: bunx --no-install oxfmt --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    - name: rustfmt
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+
+pre-push:
+  commands:
+    frontend:
+      root: "frontend/"
+      glob: "*.{ts,tsx,json}"
+      run: bun run check
+    clippy:
+      glob: "{*.rs,Cargo.toml,Cargo.lock}"
+      run: cargo clippy --all-targets --locked -- -D warnings
+    protobuf:
+      glob: "{*.proto,buf.yaml,buf.gen.yaml}"
+      run: bun run proto:lint

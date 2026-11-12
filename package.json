@@ -11,9 +11,12 @@
     "frontend:check": "bun run --cwd frontend check",
     "build": "bun run proto:generate && bun run frontend:build && cargo build --release --locked",
     "check": "bun run proto:lint && bun run proto:generate && bun run frontend:check && cargo clippy --all-targets --locked -- -D warnings && cargo test --all-targets --locked",
-    "dev": "cargo run -- --simulate"
+    "dev": "cargo run -- --simulate",
+    "prepare": "lefthook install",
+    "pre-commit": "lefthook run pre-commit"
   },
   "devDependencies": {
-    "@bufbuild/buf": "^1.72.0"
+    "@bufbuild/buf": "^1.72.0",
+    "lefthook": "2.2.2"
   }
 }
