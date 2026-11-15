@@ -130,4 +130,4 @@ Run `bun run prepare` when local Effect source is needed. It clones the referenc
 
 ## Design skills
 
-- For visual design work, use `frontend-design` and `uncodixfy`.
+- For visual design work, use `frontend-design`.
