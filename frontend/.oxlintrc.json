@@ -10,7 +10,17 @@
     "builtin": true
   },
   "ignorePatterns": ["dist/**", "src/components/ui/**", "src/gen/**", "src/routeTree.gen.ts"],
-  "plugins": ["import", "jsx-a11y", "oxc", "react", "typescript", "unicorn", "effecttsgo"],
+  "plugins": [
+    "import",
+    "jsx-a11y",
+    "oxc",
+    "promise",
+    "react",
+    "typescript",
+    "unicorn",
+    "vitest",
+    "effecttsgo"
+  ],
   "rules": {
     "import/no-named-as-default": "off",
     "import/no-unassigned-import": "off",
@@ -20,6 +30,7 @@
     "effecttsgo/any-unknown-in-error-context": "off",
     "effecttsgo/unsafe-effect-type-assertion": "off",
     "effecttsgo/strict-effect-provide": "off",
+    "effecttsgo/schema-class-missing-brand": "off",
     "shadcn/no-restyle": [
       "error",
       {
@@ -156,7 +167,8 @@
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "options": {
-    "typeAware": true
+    "typeAware": true,
+    "reportUnusedDisableDirectives": "error"
   },
   "jsPlugins": ["@shadcn/lint"]
 }

@@ -61,7 +61,7 @@ The SPA was initialized from shadcn preset `b2fms620zo`. Files in `frontend/src/
 
 Tailwind utilities and the preset's CSS variables own application styling. Canvas drawing code may calculate colors and geometry because those values represent live visualization data, not page styling.
 
-Oxfmt and Oxlint skip the upstream UI directory, generated protobuf code, and generated TanStack route tree. ESLint is intentionally absent.
+Oxfmt and Oxlint skip the upstream UI directory, generated protobuf code, and generated TanStack route tree.
 
 ## Fixture and configuration boundary
 

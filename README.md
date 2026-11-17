@@ -122,7 +122,7 @@ bun run check
 bun run build
 ```
 
-Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/ui/**` is excluded because those files are owned by the shadcn preset and remain upstream-compatible. ESLint is not part of the project.
+Frontend formatting and linting use Oxfmt and Oxlint. `frontend/src/components/ui/**` is excluded because those files are owned by the shadcn preset and remain upstream-compatible.
 
 ## Runtime options
 
