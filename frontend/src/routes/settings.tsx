@@ -332,6 +332,7 @@ function SettingsPage() {
               void chooseConfigFile()
                 .then((selected) => {
                   if (selected) setPendingImport(selected)
+                  return undefined
                 })
                 .catch((error: Error) => toast.error(error.message))
             }}
