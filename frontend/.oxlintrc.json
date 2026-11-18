@@ -2,7 +2,7 @@
   "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
   "categories": {
     "correctness": "error",
-    "perf": "off",
+    "perf": "error",
     "suspicious": "error"
   },
   "env": {
@@ -22,15 +22,40 @@
     "effecttsgo"
   ],
   "rules": {
+    "effecttsgo/any-unknown-in-error-context": "off",
+    "effecttsgo/schema-class-missing-brand": "off",
+    "effecttsgo/strict-effect-provide": "off",
+    "effecttsgo/unsafe-effect-type-assertion": "off",
+    "eslint/array-callback-return": "error",
+    "eslint/eqeqeq": [
+      "error",
+      "always",
+      {
+        "null": "ignore"
+      }
+    ],
+    "eslint/no-await-in-loop": "off",
+    "eslint/no-console": "error",
+    "eslint/no-fallthrough": "error",
+    "eslint/no-loop-func": "error",
+    "eslint/no-promise-executor-return": "error",
+    "eslint/no-self-compare": "error",
+    "eslint/no-throw-literal": "error",
+    "import/no-cycle": "error",
+    "import/no-duplicates": "error",
     "import/no-named-as-default": "off",
     "import/no-unassigned-import": "off",
     "jsx-a11y/media-has-caption": "off",
+    "promise/catch-or-return": "error",
     "react/react-in-jsx-scope": "off",
-    "unicorn/prefer-set-has": "off",
-    "effecttsgo/any-unknown-in-error-context": "off",
-    "effecttsgo/unsafe-effect-type-assertion": "off",
-    "effecttsgo/strict-effect-provide": "off",
-    "effecttsgo/schema-class-missing-brand": "off",
+    "shadcn/no-arbitrary-values": [
+      "error",
+      {
+        "allow": ["layout"]
+      }
+    ],
+    "shadcn/no-inline-styles": "error",
+    "shadcn/no-raw-colors": "error",
     "shadcn/no-restyle": [
       "error",
       {
@@ -154,16 +179,24 @@
         ]
       }
     ],
-    "shadcn/no-raw-colors": "error",
-    "shadcn/no-arbitrary-values": [
-      "error",
-      {
-        "allow": ["layout"]
-      }
-    ],
-    "shadcn/no-inline-styles": "error",
     "shadcn/no-unknown-classes": "error",
-    "shadcn/require-static-classes": "error"
+    "shadcn/require-static-classes": "error",
+    "typescript/consistent-type-exports": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-optional-chain": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/restrict-plus-operands": "error",
+    "typescript/return-await": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "unicorn/prefer-at": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-set-has": "off",
+    "unicorn/prefer-string-replace-all": "error",
+    "unicorn/prefer-top-level-await": "error"
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "options": {
