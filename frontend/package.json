@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc -b",
-    "lint": "oxlint --deny-warnings .",
+    "lint": "oxlint .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "typecheck": "vite build --emptyOutDir=false && tsc -b",
@@ -54,6 +54,7 @@
     "@types/react-dom": "^19",
     "@types/three": "0.186.0",
     "@vitejs/plugin-react": "^6",
+    "eslint-plugin-better-tailwindcss": "4.11.0",
     "jsdom": "^30.0.0",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",

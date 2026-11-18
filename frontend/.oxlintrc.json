@@ -23,7 +23,6 @@
   ],
   "rules": {
     "effecttsgo/any-unknown-in-error-context": "off",
-    "effecttsgo/schema-class-missing-brand": "off",
     "effecttsgo/strict-effect-provide": "off",
     "effecttsgo/unsafe-effect-type-assertion": "off",
     "eslint/array-callback-return": "error",
@@ -35,6 +34,22 @@
       }
     ],
     "eslint/no-await-in-loop": "off",
+    "unicorn/no-abusive-eslint-disable": "error",
+    "typescript/ban-ts-comment": [
+      "error",
+      {
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "ts-check": false,
+        "minimumDescriptionLength": 10
+      }
+    ],
+    "typescript/prefer-ts-expect-error": "error",
+    "better-tailwindcss/no-conflicting-classes": "error",
+    "better-tailwindcss/no-duplicate-classes": "error",
+    "better-tailwindcss/no-deprecated-classes": "error",
+    "better-tailwindcss/enforce-canonical-classes": "error",
     "eslint/no-console": "error",
     "eslint/no-fallthrough": "error",
     "eslint/no-loop-func": "error",
@@ -124,13 +139,13 @@
               "gap-x-3",
               "gap-y-1",
               "gap-y-2",
-              "[&_[data-slot=progress-indicator]]:bg-chart-1",
-              "[&_[data-slot=progress-indicator]]:bg-chart-2",
-              "[&_[data-slot=progress-indicator]]:bg-chart-3",
-              "[&_[data-slot=progress-indicator]]:bg-chart-4",
-              "[&_[data-slot=progress-indicator]]:bg-chart-5",
-              "[&_[data-slot=progress-indicator]]:bg-primary",
-              "[&_[data-slot=progress-indicator]]:bg-destructive"
+              "**:data-[slot=progress-indicator]:bg-chart-1",
+              "**:data-[slot=progress-indicator]:bg-chart-2",
+              "**:data-[slot=progress-indicator]:bg-chart-3",
+              "**:data-[slot=progress-indicator]:bg-chart-4",
+              "**:data-[slot=progress-indicator]:bg-chart-5",
+              "**:data-[slot=progress-indicator]:bg-primary",
+              "**:data-[slot=progress-indicator]:bg-destructive"
             ]
           },
           {
@@ -212,9 +227,16 @@
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "options": {
     "typeAware": true,
+    "typeCheck": true,
+    "denyWarnings": true,
     "reportUnusedDisableDirectives": "error"
   },
-  "jsPlugins": ["@shadcn/lint"],
+  "jsPlugins": ["@shadcn/lint", "eslint-plugin-better-tailwindcss"],
+  "settings": {
+    "better-tailwindcss": {
+      "entryPoint": "src/index.css"
+    }
+  },
   "overrides": [
     {
       // Tests may print diagnostics.
