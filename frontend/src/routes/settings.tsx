@@ -203,7 +203,7 @@ function EnumSelectField({
 
 export const Route = createFileRoute("/settings")({
   validateSearch: (search: Record<string, unknown>) => ({
-    section: parseSettingsSection(search.section),
+    section: parseSettingsSection(search["section"]),
   }),
   loader: async ({ context }) => {
     await Promise.all([

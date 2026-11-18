@@ -17,6 +17,9 @@ export function magmaColor(value: number) {
   const fraction = position - start
   const from = MAGMA_STOPS[start]
   const to = MAGMA_STOPS[start + 1]
+  if (from === undefined || to === undefined) {
+    throw new RangeError(`Magma stops ${start} and ${start + 1} do not exist`)
+  }
   const channel = (index: 0 | 1 | 2) =>
     Math.round(from[index] + (to[index] - from[index]) * fraction)
   return `rgb(${channel(0)} ${channel(1)} ${channel(2)})`

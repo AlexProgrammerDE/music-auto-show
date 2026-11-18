@@ -42,7 +42,7 @@ import {
   VisualizationMode,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { dashboardSearchParams, dashboardViewParser } from "@/lib/dashboard-search"
-import { formatDuration, formatEnumLabel, formatPercent } from "@/lib/format"
+import { formatDuration, formatEnumName, formatPercent } from "@/lib/format"
 import {
   configQueryOptions,
   grandMa2FixtureTypesQueryOptions,
@@ -128,7 +128,7 @@ function ShowControls({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h1 className="font-heading text-base font-semibold">Live show</h1>
-            <Badge variant="outline">{formatEnumLabel(RunState[snapshotState] ?? "Stopped")}</Badge>
+            <Badge variant="outline">{formatEnumName(RunState, snapshotState, "Stopped")}</Badge>
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground" title={status}>
             {status}
@@ -231,7 +231,7 @@ function EffectReadout({
       description="The active algorithm, drivers, and rendered result"
       action={
         <Badge variant="outline">
-          {formatEnumLabel(VisualizationMode[visualizationMode] ?? "Energy")}
+          {formatEnumName(VisualizationMode, visualizationMode, "Energy")}
         </Badge>
       }
     >
@@ -239,7 +239,7 @@ function EffectReadout({
         <div className="flex flex-wrap gap-1.5">
           {drivers.map((driver) => (
             <Badge key={driver} variant="secondary">
-              {formatEnumLabel(EffectDriver[driver] ?? "Signal")}
+              {formatEnumName(EffectDriver, driver, "Signal")}
             </Badge>
           ))}
           {dropActive ? <Badge variant="secondary">Drop active</Badge> : null}
@@ -249,7 +249,7 @@ function EffectReadout({
           <dt className="text-muted-foreground">Tier</dt>
           <dt className="text-muted-foreground">Beat</dt>
           <dt className="text-muted-foreground">RGB</dt>
-          <dd>{formatEnumLabel(EnergyTier[tier] ?? "Low")}</dd>
+          <dd>{formatEnumName(EnergyTier, tier, "Low")}</dd>
           <dd className="tabular-nums">{Math.round(beatResponse * 100)}%</dd>
           <dd className="tabular-nums">
             {renderedColor.red}·{renderedColor.green}·{renderedColor.blue}

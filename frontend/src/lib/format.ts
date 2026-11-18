@@ -6,6 +6,18 @@ export function formatEnumLabel(value: string) {
     .join(" ")
 }
 
+/**
+ * Formats the name of a protobuf enum number. Protobuf enums are open, so a newer backend can send
+ * a number this build does not know; that case uses the fallback label.
+ */
+export function formatEnumName(
+  names: Readonly<Record<number, string>>,
+  value: number,
+  fallback: string,
+) {
+  return formatEnumLabel(names[value] ?? fallback)
+}
+
 export function formatDuration(seconds: number) {
   const safeSeconds = Math.max(0, Math.floor(seconds))
   const minutes = Math.floor(safeSeconds / 60)

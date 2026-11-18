@@ -35,11 +35,18 @@ const modeDrivers: Record<VisualizationMode, readonly EffectDriver[]> = {
   [VisualizationMode.RANDOM_FLASH]: [EffectDriver.BEAT, EffectDriver.PALETTE],
 }
 
+/** Protobuf enums are open, so a newer backend can send a mode this build does not know. */
+function driversFor(mode: VisualizationMode): readonly EffectDriver[] {
+  return Object.hasOwn(modeDrivers, mode)
+    ? modeDrivers[mode]
+    : modeDrivers[VisualizationMode.ENERGY]
+}
+
 export function signalPath(mode: VisualizationMode): readonly SignalStage[] {
   return [
     { id: "input", drivers: [] },
-    { id: "analysis", drivers: modeDrivers[mode] ?? modeDrivers[VisualizationMode.ENERGY] },
-    { id: "decision", drivers: modeDrivers[mode] ?? modeDrivers[VisualizationMode.ENERGY] },
+    { id: "analysis", drivers: driversFor(mode) },
+    { id: "decision", drivers: driversFor(mode) },
     { id: "fixture", drivers: [] },
     { id: "dmx", drivers: [] },
   ]

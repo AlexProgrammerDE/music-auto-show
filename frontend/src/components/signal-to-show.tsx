@@ -9,7 +9,7 @@ import {
   type FixtureState,
   VisualizationMode,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
-import { formatEnumLabel } from "@/lib/format"
+import { formatEnumName } from "@/lib/format"
 import { assignFrequencyBands, signalPath, type SignalStageId } from "@/lib/signal-to-show"
 
 const stageCopy: Record<SignalStageId, { readonly label: string; readonly detail: string }> = {
@@ -21,7 +21,7 @@ const stageCopy: Record<SignalStageId, { readonly label: string; readonly detail
 }
 
 function driverLabel(driver: EffectDriver) {
-  return formatEnumLabel(EffectDriver[driver] ?? "Signal")
+  return formatEnumName(EffectDriver, driver, "Signal")
 }
 
 export function SignalToShow({ runtime }: { readonly runtime: EffectRuntimeStatus | undefined }) {
@@ -31,9 +31,7 @@ export function SignalToShow({ runtime }: { readonly runtime: EffectRuntimeStatu
     <SectionPanel
       title="Signal to show"
       description="What is driving the rig right now"
-      action={
-        <Badge variant="outline">{formatEnumLabel(VisualizationMode[mode] ?? "Energy")}</Badge>
-      }
+      action={<Badge variant="outline">{formatEnumName(VisualizationMode, mode, "Energy")}</Badge>}
     >
       <div className="grid gap-2 p-3 md:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr] md:items-stretch">
         {signalPath(mode).map((stage, index, stages) => {

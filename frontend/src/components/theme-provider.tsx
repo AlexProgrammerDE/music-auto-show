@@ -11,14 +11,14 @@ type ThemeProviderProps = {
 }
 
 const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)"
-const THEME_VALUES: readonly string[] = ["dark", "light", "system"]
+const THEME_VALUES: ReadonlySet<string> = new Set(["dark", "light", "system"])
 
 function isTheme(value: string | null): value is Theme {
   if (value === null) {
     return false
   }
 
-  return THEME_VALUES.includes(value)
+  return THEME_VALUES.has(value)
 }
 
 function getSystemTheme(): ResolvedTheme {

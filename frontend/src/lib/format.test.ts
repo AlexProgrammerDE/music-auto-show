@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   formatDuration,
   formatEnumLabel,
+  formatEnumName,
   formatEnumValue,
   formatPercent,
   generateN,
@@ -20,6 +21,15 @@ describe("display formatting", () => {
         2,
       ),
     ).toBe("Pipewire")
+  })
+
+  it("formats protobuf enum numbers with a fallback for unknown numbers", () => {
+    enum Section {
+      UNSPECIFIED = 0,
+      BIG_DROP = 1,
+    }
+    expect(formatEnumName(Section, Section.BIG_DROP, "Listening")).toBe("Big Drop")
+    expect(formatEnumName(Section, 7, "Listening")).toBe("Listening")
   })
 
   it("clamps percentages and recording durations", () => {

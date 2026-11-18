@@ -11,7 +11,7 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
 import { ambientPresetParser } from "@/lib/dashboard-search"
-import { formatEnumLabel } from "@/lib/format"
+import { formatEnumLabel, formatEnumName } from "@/lib/format"
 import {
   LIVE_HISTORY_DURATION_MS,
   latestLiveFrame,
@@ -270,8 +270,10 @@ export default function AmbientVisualizer({
     document.addEventListener("fullscreenchange", handleFullscreen)
     return () => document.removeEventListener("fullscreenchange", handleFullscreen)
   }, [])
-  const section = formatEnumLabel(
-    MusicSection[analysis?.section ?? MusicSection.UNSPECIFIED] ?? "Listening",
+  const section = formatEnumName(
+    MusicSection,
+    analysis?.section ?? MusicSection.UNSPECIFIED,
+    "Listening",
   )
   return (
     <section ref={containerRef} className="grid min-w-0 border bg-card">

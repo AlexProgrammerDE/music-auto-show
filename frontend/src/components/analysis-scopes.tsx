@@ -8,7 +8,7 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { useLiveAudio } from "@/hooks/use-live-audio"
 import { resizeCanvas, type CanvasSurface } from "@/lib/canvas"
-import { formatEnumLabel } from "@/lib/format"
+import { formatEnumName } from "@/lib/format"
 import { latestLiveFrame, liveAnalysisHistory, projectBeat } from "@/lib/live-frame-store"
 import { magmaColor } from "@/lib/perceptual-colormap"
 
@@ -234,7 +234,7 @@ export function HarmonicWheel({ analysis }: { readonly analysis: AudioAnalysis |
   }, true)
   const known = (current?.harmonicConfidence ?? 0) >= 0.08
   const keyName = pitchNames[current?.keyPitchClass ?? 0]
-  const tonality = formatEnumLabel(Tonality[current?.tonality ?? Tonality.UNSPECIFIED] ?? "")
+  const tonality = formatEnumName(Tonality, current?.tonality ?? Tonality.UNSPECIFIED, "")
   return (
     <div className="grid border bg-background md:grid-cols-[15rem_1fr]">
       <figure className="relative min-h-56 border-b md:border-r md:border-b-0">
@@ -273,7 +273,7 @@ export function SectionTimeline({ analysis }: { readonly analysis: AudioAnalysis
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-heading text-xs font-semibold">Confirmed structure</span>
         <Badge variant={current === MusicSection.DROP ? "secondary" : "outline"}>
-          {formatEnumLabel(MusicSection[current] ?? "Listening")} · {Math.round(confidence * 100)}%
+          {formatEnumName(MusicSection, current, "Listening")} · {Math.round(confidence * 100)}%
         </Badge>
       </div>
       <div className="flex min-h-12 items-stretch overflow-x-auto border">
@@ -284,7 +284,7 @@ export function SectionTimeline({ analysis }: { readonly analysis: AudioAnalysis
               className="grid min-w-28 content-center border-r px-3 py-2 last:border-r-0"
             >
               <span className="font-heading text-micro font-semibold uppercase">
-                {formatEnumLabel(MusicSection[marker.section] ?? "Unknown")}
+                {formatEnumName(MusicSection, marker.section, "Unknown")}
               </span>
               <span className="text-micro text-muted-foreground tabular-nums">
                 Bar {Number(marker.estimatedBar) + 1} · {Math.round(marker.confidence * 100)}%
