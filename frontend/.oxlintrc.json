@@ -196,12 +196,39 @@
     "unicorn/prefer-node-protocol": "error",
     "unicorn/prefer-set-has": "off",
     "unicorn/prefer-string-replace-all": "error",
-    "unicorn/prefer-top-level-await": "error"
+    "unicorn/prefer-top-level-await": "error",
+    "react/jsx-no-target-blank": "error",
+    "react/button-has-type": "error",
+    "react/no-danger": "error",
+    "react/jsx-no-useless-fragment": "error",
+    "react/no-unknown-property": "error",
+    "react/only-export-components": [
+      "error",
+      {
+        "allowConstantExport": true
+      }
+    ]
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "options": {
     "typeAware": true,
     "reportUnusedDisableDirectives": "error"
   },
-  "jsPlugins": ["@shadcn/lint"]
+  "jsPlugins": ["@shadcn/lint"],
+  "overrides": [
+    {
+      // Tests may print diagnostics.
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "eslint/no-console": "off"
+      }
+    },
+    {
+      // TanStack Router route files export Route next to private route components.
+      "files": ["src/routes/**"],
+      "rules": {
+        "react/only-export-components": "off"
+      }
+    }
+  ]
 }
