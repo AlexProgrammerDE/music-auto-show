@@ -10,10 +10,10 @@ import {
 import { Link, useRouterState } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
-import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useTheme } from "@/hooks/use-theme"
 import { cn } from "@/lib/utils"
 
 const navigation = [

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { snapSliderValue } from "@/components/slider-number-field"
+import { snapSliderValue } from "@/lib/slider-value"
 
 describe("snapSliderValue", () => {
   it("snaps manual values to the nearest configured increment", () => {

@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Slider } from "@/components/ui/slider"
+import { snapSliderValue } from "@/lib/slider-value"
 
 type SliderNumberFieldProps = {
   readonly id: string
@@ -17,12 +18,6 @@ type SliderNumberFieldProps = {
   readonly displayScale?: number
   readonly onBlur?: () => void
   readonly onChange: (value: number) => void
-}
-
-export function snapSliderValue(value: number, minimum: number, maximum: number, step: number) {
-  const clamped = Math.max(minimum, Math.min(maximum, value))
-  const steps = Math.round((clamped - minimum) / step)
-  return Number((minimum + steps * step).toFixed(10))
 }
 
 export function SliderNumberField({
