@@ -1,4 +1,4 @@
-import { createContext, useContext, type ComponentProps, type ReactNode } from "react"
+import { createContext, useContext, useMemo, type ComponentProps, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -42,7 +42,10 @@ type CredenzaProps = {
 
 export function Credenza({ children, open, onOpenChange }: CredenzaProps) {
   const mobile = useMobile()
-  const content = <CredenzaContext.Provider value={{ mobile }}>{children}</CredenzaContext.Provider>
+  const contextValue = useMemo(() => ({ mobile }), [mobile])
+  const content = (
+    <CredenzaContext.Provider value={contextValue}>{children}</CredenzaContext.Provider>
+  )
 
   return mobile ? (
     <Drawer open={open} onOpenChange={onOpenChange} showSwipeHandle>

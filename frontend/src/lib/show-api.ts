@@ -2,18 +2,19 @@ import { createClient } from "@connectrpc/connect"
 import { createGrpcWebTransport } from "@connectrpc/connect-web"
 import { Context, Effect, Layer, ManagedRuntime, Schema } from "effect"
 
-import type {
-  AudioDevice,
-  BluetoothReceiverStatus,
-  CommandResult,
-  GrandMa2FixtureType,
-  LiveFrame,
-  Recording,
-  RecordingStatus,
-  ShowConfig,
-  ShowSnapshot,
+import {
+  MusicAutoShowService,
+  type AudioDevice,
+  type BluetoothReceiverStatus,
+  type CommandResult,
+  type GrandMa2FixtureType,
+  type LiveFrame,
+  type Recording,
+  type RecordingStatus,
+  type ShowCommand,
+  type ShowConfig,
+  type ShowSnapshot,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
-import { MusicAutoShowService, type ShowCommand } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 export class RpcFailure extends Schema.TaggedError<RpcFailure>()("RpcFailure", {
   operation: Schema.String,

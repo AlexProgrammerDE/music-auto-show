@@ -135,7 +135,10 @@ function chooseConfigFile() {
           resolve(undefined)
           return
         }
-        file.text().then((json) => resolve({ json, name: file.name }), reject)
+        file
+          .text()
+          .then((json) => resolve({ json, name: file.name }))
+          .catch(reject)
       })
       input.click()
     },

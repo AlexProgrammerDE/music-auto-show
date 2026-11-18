@@ -14,7 +14,9 @@ describe("reconnectSnapshotStream", () => {
       ),
     )
 
-    await new Promise((resolve) => setTimeout(resolve, 620))
+    await new Promise((resolve) => {
+      setTimeout(resolve, 620)
+    })
     await Effect.runPromise(Fiber.interrupt(fiber))
 
     expect(connections).toBeGreaterThanOrEqual(3)

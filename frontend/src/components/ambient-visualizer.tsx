@@ -206,6 +206,7 @@ function drawAmbient(
     case "waterfall":
       drawWaterfall(context, width, height, waterfall)
       break
+    case "radial":
     default:
       drawRadial(context, width, height, values, beatPosition)
   }
