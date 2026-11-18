@@ -16,10 +16,13 @@ import {
   type ShowSnapshot,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
-export class RpcFailure extends Schema.TaggedError<RpcFailure>()("RpcFailure", {
-  operation: Schema.String,
-  message: Schema.String,
-}) {}
+export class RpcFailure extends Schema.TaggedError<RpcFailure, { readonly brand: unique symbol }>()(
+  "RpcFailure",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 type ShowApiShape = {
   readonly getSnapshot: Effect.Effect<ShowSnapshot, RpcFailure>

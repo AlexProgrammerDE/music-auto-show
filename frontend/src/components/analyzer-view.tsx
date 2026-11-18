@@ -59,13 +59,13 @@ function AnalysisLevel({
       aria-label={`${label}: ${display ?? formatPercent(value)}, recent peak ${formatPercent(peak)}, trigger guide ${formatPercent(threshold)}`}
       className={cn(
         "gap-x-3 gap-y-1",
-        tone === "bass" && "[&_[data-slot=progress-indicator]]:bg-chart-2",
-        tone === "mid" && "[&_[data-slot=progress-indicator]]:bg-chart-3",
-        tone === "high" && "[&_[data-slot=progress-indicator]]:bg-chart-4",
-        tone === "energy" && "[&_[data-slot=progress-indicator]]:bg-chart-1",
-        tone === "rms" && "[&_[data-slot=progress-indicator]]:bg-primary",
-        tone === "peak" && "[&_[data-slot=progress-indicator]]:bg-chart-5",
-        tone === "clipping" && "[&_[data-slot=progress-indicator]]:bg-destructive",
+        tone === "bass" && "**:data-[slot=progress-indicator]:bg-chart-2",
+        tone === "mid" && "**:data-[slot=progress-indicator]:bg-chart-3",
+        tone === "high" && "**:data-[slot=progress-indicator]:bg-chart-4",
+        tone === "energy" && "**:data-[slot=progress-indicator]:bg-chart-1",
+        tone === "rms" && "**:data-[slot=progress-indicator]:bg-primary",
+        tone === "peak" && "**:data-[slot=progress-indicator]:bg-chart-5",
+        tone === "clipping" && "**:data-[slot=progress-indicator]:bg-destructive",
       )}
     >
       <ProgressLabel className="font-heading text-caption">{label}</ProgressLabel>

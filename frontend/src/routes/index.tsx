@@ -294,7 +294,7 @@ function RecordingPanel({
             value={progress}
             className={cn(
               "gap-x-3 gap-y-2",
-              recording?.recording && "[&_[data-slot=progress-indicator]]:bg-destructive",
+              recording?.recording && "**:data-[slot=progress-indicator]:bg-destructive",
             )}
           >
             <ProgressLabel className="text-xs">Capture duration</ProgressLabel>
@@ -597,7 +597,7 @@ function LiveDashboard() {
           {view === "ambient" ? (
             <Suspense
               fallback={
-                <div className="flex min-h-[28rem] items-center justify-center border bg-card text-xs text-muted-foreground">
+                <div className="flex min-h-112 items-center justify-center border bg-card text-xs text-muted-foreground">
                   Preparing ambient visualizer
                 </div>
               }

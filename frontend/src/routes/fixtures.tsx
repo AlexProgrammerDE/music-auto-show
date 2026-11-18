@@ -109,7 +109,7 @@ const columns = columnHelper.columns([
       <div className="flex min-w-28 items-center gap-2">
         <Progress
           value={(context.getValue() / 255) * 100}
-          className="[&_[data-slot=progress-indicator]]:bg-chart-2"
+          className="**:data-[slot=progress-indicator]:bg-chart-2"
         />
         <span className="w-7 text-right text-xs tabular-nums">{context.getValue()}</span>
       </div>

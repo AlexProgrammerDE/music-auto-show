@@ -318,7 +318,7 @@ export default function AmbientVisualizer({
           {fullscreen ? "Exit full screen" : "Full screen"}
         </Button>
       </div>
-      <figure className="relative min-h-[28rem] overflow-hidden bg-background lg:min-h-[38rem]">
+      <figure className="relative min-h-112 overflow-hidden bg-background lg:min-h-152">
         <canvas
           ref={canvasRef}
           width={1440}
