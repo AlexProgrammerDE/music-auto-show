@@ -252,7 +252,7 @@
       }
     ]
   },
-  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/strict.json"],
   "options": {
     "typeAware": true,
     "typeCheck": true,
