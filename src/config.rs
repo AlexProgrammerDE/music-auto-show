@@ -291,6 +291,7 @@ pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError
         path: path.to_owned(),
         source: error.error,
     })?;
+    #[cfg(unix)]
     sync_directory(parent)?;
     Ok(())
 }
@@ -310,11 +311,6 @@ fn sync_directory(path: &Path) -> Result<(), ConfigError> {
             path: path.to_owned(),
             source,
         })
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), ConfigError> {
-    Ok(())
 }
 
 fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<GrandMa2Library> {
