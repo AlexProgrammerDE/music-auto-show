@@ -23,7 +23,7 @@ import { magmaColor } from "@/lib/perceptual-colormap"
 
 type AmbientPreset = "radial" | "led" | "mirror" | "peak" | "luminance" | "waterfall"
 
-interface WaterfallMotion {
+type WaterfallMotion = {
   readonly frames: readonly LiveSpectrogramFrame[]
   readonly now: number
 }
@@ -191,23 +191,29 @@ function drawAmbient(
   const values = liveSpectrum
   clear(context, width, height)
   switch (preset) {
-    case "led":
+    case "led": {
       drawLedGrid(context, width, height, values)
       break
-    case "mirror":
+    }
+    case "mirror": {
       drawMirror(context, width, height, values)
       break
-    case "peak":
+    }
+    case "peak": {
       drawPeakLine(context, width, height, values)
       break
-    case "luminance":
+    }
+    case "luminance": {
       drawLuminance(context, width, height, values)
       break
-    case "waterfall":
+    }
+    case "waterfall": {
       drawWaterfall(context, width, height, waterfall)
       break
-    case "radial":
+    }
+    case "radial": {
       drawRadial(context, width, height, values, beatPosition)
+    }
   }
 }
 

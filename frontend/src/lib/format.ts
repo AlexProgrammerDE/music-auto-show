@@ -36,7 +36,7 @@ export function enumEntries(values: Record<string, string | number>) {
   )
 }
 
-export function formatEnumValue(entries: ReadonlyArray<readonly [string, number]>, value: number) {
+export function formatEnumValue(entries: readonly (readonly [string, number])[], value: number) {
   const entry = entries.find(([, candidate]) => candidate === value)
   return entry ? formatEnumLabel(entry[0]) : "Unknown"
 }

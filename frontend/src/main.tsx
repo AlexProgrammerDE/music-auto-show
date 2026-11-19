@@ -27,6 +27,7 @@ const queryClient = new QueryClient({
 const router = createRouter({ routeTree, context: { queryClient } })
 
 declare module "@tanstack/react-router" {
+  // oxlint-disable-next-line typescript/consistent-type-definitions -- module augmentation merges into the library's interface
   interface Register {
     router: typeof router
   }

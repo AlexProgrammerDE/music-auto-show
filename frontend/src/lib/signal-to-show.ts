@@ -2,7 +2,7 @@ import { EffectDriver, VisualizationMode } from "@/gen/music_auto_show/v1/music_
 
 export type SignalStageId = "input" | "analysis" | "decision" | "fixture" | "dmx"
 
-export interface SignalStage {
+export type SignalStage = {
   readonly id: SignalStageId
   readonly drivers: readonly EffectDriver[]
 }

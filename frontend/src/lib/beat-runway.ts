@@ -1,4 +1,4 @@
-export interface BeatRunwaySample {
+export type BeatRunwaySample = {
   readonly active: boolean
   readonly beatIndex: number
   readonly beatPosition: number
@@ -9,7 +9,7 @@ export interface BeatRunwaySample {
   readonly tempo: number
 }
 
-export interface BeatRunwayFrame extends BeatRunwaySample {
+export type BeatRunwayFrame = BeatRunwaySample & {
   readonly absoluteBeat: number
 }
 

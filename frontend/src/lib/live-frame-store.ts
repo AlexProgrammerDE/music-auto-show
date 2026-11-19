@@ -8,18 +8,18 @@ const FRAME_RETENTION = 8
 export const LIVE_HISTORY_DURATION_MS = 5_000
 export const LIVE_RENDER_DELAY_MS = 30
 
-export interface TimedLiveFrame {
+export type TimedLiveFrame = {
   readonly capturedAt: number
   readonly frame: LiveFrame
 }
 
-export interface LiveFrameSample {
+export type LiveFrameSample = {
   readonly alpha: number
   readonly current: TimedLiveFrame
   readonly previous: TimedLiveFrame
 }
 
-export interface ProjectedBeat {
+export type ProjectedBeat = {
   readonly barPosition: number
   readonly beatIndex: number
   readonly beatPosition: number
@@ -28,7 +28,7 @@ export interface ProjectedBeat {
   readonly meter: number
 }
 
-export interface LiveAnalysisSample {
+export type LiveAnalysisSample = {
   readonly bass: number
   readonly beatActivation: number
   readonly capturedAt: number
@@ -38,7 +38,7 @@ export interface LiveAnalysisSample {
   readonly mid: number
 }
 
-export interface LiveSpectrogramFrame {
+export type LiveSpectrogramFrame = {
   readonly bins: readonly number[]
   readonly capturedAt: number
 }

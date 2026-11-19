@@ -1,13 +1,13 @@
 import type { DmxRuntimeStatus, ShowSnapshot } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { RunState } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
-export interface DmxPresentation {
+export type DmxPresentation = {
   readonly active: boolean
   readonly failed: boolean
   readonly label: "Connected" | "Error" | "Offline" | "Simulated" | "Stopped"
 }
 
-export interface RuntimePresentation {
+export type RuntimePresentation = {
   readonly audioActive: boolean
   readonly beatnetAvailable: boolean
   readonly beatnetError: string

@@ -21,7 +21,7 @@ import {
   type TimedLiveFrame,
 } from "@/lib/live-frame-store"
 
-interface RunwayPalette {
+type RunwayPalette = {
   readonly accent: string
   readonly bass: string
   readonly border: string

@@ -81,10 +81,12 @@ function parseSettingsSection(value: unknown): SettingsSection {
   switch (value) {
     case "audio":
     case "dmx":
-    case "lighting":
+    case "lighting": {
       return value
-    default:
+    }
+    default: {
       return "show"
+    }
   }
 }
 

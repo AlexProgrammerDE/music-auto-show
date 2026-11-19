@@ -71,21 +71,28 @@ export function SignalToShow({ runtime }: { readonly runtime: EffectRuntimeStatu
 
 function reactionForMode(mode: VisualizationMode, band: string | undefined) {
   switch (mode) {
-    case VisualizationMode.FREQUENCY_SPLIT:
+    case VisualizationMode.FREQUENCY_SPLIT: {
       return `${band ?? "high"} energy`
-    case VisualizationMode.BEAT_PULSE:
+    }
+    case VisualizationMode.BEAT_PULSE: {
       return "Beat + downbeat"
-    case VisualizationMode.COLOR_CYCLE:
+    }
+    case VisualizationMode.COLOR_CYCLE: {
       return "32-beat cycle"
-    case VisualizationMode.RAINBOW_WAVE:
+    }
+    case VisualizationMode.RAINBOW_WAVE: {
       return "Time + energy"
-    case VisualizationMode.STROBE_BEAT:
+    }
+    case VisualizationMode.STROBE_BEAT: {
       return "Beat + bass"
-    case VisualizationMode.RANDOM_FLASH:
+    }
+    case VisualizationMode.RANDOM_FLASH: {
       return "Beat selection"
+    }
     case VisualizationMode.UNSPECIFIED:
-    case VisualizationMode.ENERGY:
+    case VisualizationMode.ENERGY: {
       return "Energy + bass"
+    }
   }
 }
 

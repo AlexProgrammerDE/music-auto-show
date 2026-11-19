@@ -44,6 +44,14 @@
     "typescript/consistent-return": "off",
     // `resolve(undefined)` is required when the promise value type includes undefined.
     "unicorn/no-useless-undefined": ["error", { "checkArguments": false }],
+    // Object types are mostly declared with `type` here.
+    "typescript/consistent-type-definitions": ["error", "type"],
+    "typescript/array-type": "error",
+    "typescript/no-inferrable-types": "error",
+    "typescript/prefer-function-type": "error",
+    "typescript/consistent-indexed-object-style": "error",
+    "unicorn/switch-case-braces": "error",
+    "eslint/no-useless-assignment": "error",
     "react/jsx-no-constructed-context-values": "error",
     "react/no-array-index-key": "error",
     "react/no-deriving-state-in-effects": "error",
