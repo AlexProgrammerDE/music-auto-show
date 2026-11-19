@@ -1725,39 +1725,10 @@ mod tests {
             let beat = frame.is_multiple_of(frames_per_beat);
             let beat_number = starting_beat + frame / frames_per_beat;
             let downbeat = beat && beat_number.is_multiple_of(usize::from(meter));
-            let previous_beat_count = decoder.beat_count;
-            let previous_contradictions = decoder.contradictory_onsets;
-            let estimate = decoder.update(
+            estimates.push(decoder.update(
                 if beat && !downbeat { 0.95 } else { 0.01 },
                 if downbeat { 0.95 } else { 0.01 },
-            );
-            if frame < 4
-                || decoder.beat_count != previous_beat_count
-                || decoder.contradictory_onsets != previous_contradictions
-            {
-                let cluster = dominant_tempo_cluster(&decoder.particles);
-                let posterior = meter_posterior(&decoder.meter_particles);
-                let bits = decoder.particles.iter().fold([0_u32; 3], |bits, p| {
-                    [
-                        bits[0].wrapping_add(p.tempo.to_bits()),
-                        bits[1].wrapping_add(p.phase.to_bits()),
-                        bits[2].wrapping_add(p.weight.to_bits()),
-                    ]
-                });
-                eprintln!(
-                    "{tempo} BPM, {meter} beats per bar, frame {frame}: particles={bits:x?} +                     onset={beat} downbeat={downbeat} contradictions={} +                     tempo={:.3} cluster={:.3}/{:.6} tempo_candidate={} +                     meter={} posterior={:?} meter_candidate={} beat_index={}",
-                    decoder.contradictory_onsets,
-                    estimate.tempo,
-                    cluster.bpm,
-                    cluster.confidence,
-                    decoder.tempo.candidate_beats,
-                    estimate.meter,
-                    posterior.probabilities,
-                    decoder.meter.candidate_beats,
-                    estimate.beat_index,
-                );
-            }
-            estimates.push(estimate);
+            ));
         }
         estimates
     }
