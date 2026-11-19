@@ -13,7 +13,6 @@ import {
   GridHelper,
   Group,
   HemisphereLight,
-  LineBasicMaterial,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -267,7 +266,7 @@ function paintFixtureLabel(label: FixtureLabelVisual) {
 function createFixtureLabel(name: string) {
   const canvas = document.createElement("canvas")
   const context = canvas.getContext("2d")
-  if (!context) return undefined
+  if (!context) return
 
   context.font = FIXTURE_LABEL_FONT
   const fittedName = fitFixtureLabel(context, name, FIXTURE_LABEL_MAX_TEXT_WIDTH)
@@ -306,15 +305,12 @@ function applyTheme(runtime: StageRuntime) {
   runtime.floorMaterial.color.setHex(theme.floor)
   runtime.trussMaterial.color.setHex(theme.structure)
   runtime.fixtures.forEach((fixture) => {
-    fixture.housingMaterials.forEach((material) => material.color.setHex(theme.structure))
+    fixture.housingMaterials.forEach((material) => {
+      material.color.setHex(theme.structure)
+    })
     if (fixture.label) paintFixtureLabel(fixture.label)
   })
-  const materials = Array.isArray(runtime.grid.material)
-    ? runtime.grid.material
-    : [runtime.grid.material]
-  materials.forEach((material) => {
-    if (material instanceof LineBasicMaterial) material.color.setHex(theme.grid)
-  })
+  runtime.grid.material.color.setHex(theme.grid)
 }
 
 function createBeamGeometry(segments = 24) {
@@ -382,14 +378,21 @@ function setBeamTransform(
   beam.quaternion.setFromUnitVectors(UP, towardSource)
 }
 
+/** `instanceof Mesh` alone narrows to Mesh<any, any>; this keeps the default type arguments. */
+function isMesh(object: Object3D): object is Mesh {
+  return object instanceof Mesh
+}
+
 function disposeScene(runtime: StageRuntime) {
   runtime.controls.stopListenToKeyEvents()
   runtime.controls.dispose()
   runtime.scene.traverse((object) => {
-    if (object instanceof Mesh) {
+    if (isMesh(object)) {
       object.geometry.dispose()
       const materials = Array.isArray(object.material) ? object.material : [object.material]
-      materials.forEach((material) => material.dispose())
+      materials.forEach((material) => {
+        material.dispose()
+      })
       return
     }
     if (object instanceof Sprite) {
@@ -398,10 +401,7 @@ function disposeScene(runtime: StageRuntime) {
     }
   })
   runtime.grid.geometry.dispose()
-  const gridMaterials = Array.isArray(runtime.grid.material)
-    ? runtime.grid.material
-    : [runtime.grid.material]
-  gridMaterials.forEach((material) => material.dispose())
+  runtime.grid.material.dispose()
   runtime.spotLightCookie.dispose()
   runtime.renderer.dispose()
 }
@@ -485,9 +485,12 @@ function createModelHierarchy(
     parent.add(group)
     nodesById.set(metadata.id, group)
     if (metadata.emitterId) {
-      const markers = markersByEmitter.get(metadata.emitterId) ?? new Map()
+      let markers = markersByEmitter.get(metadata.emitterId)
+      if (!markers) {
+        markers = new Map()
+        markersByEmitter.set(metadata.emitterId, markers)
+      }
       markers.set(metadata.kind, { metadata, group })
-      markersByEmitter.set(metadata.emitterId, markers)
     }
     if (!panPivot && metadata.kind === FixtureModelNodeKind.PAN_AXIS) panPivot = group
     if (!tiltPivot && metadata.kind === FixtureModelNodeKind.TILT_AXIS) tiltPivot = group
@@ -509,10 +512,14 @@ function createModelHierarchy(
       group.add(mesh)
       materials.push(material)
     }
-    metadata.children.forEach((child) => createNode(child, group))
+    metadata.children.forEach((child) => {
+      createNode(child, group)
+    })
   }
 
-  nodes.forEach((node) => createNode(node, root))
+  nodes.forEach((node) => {
+    createNode(node, root)
+  })
   return { materials, nodesById, markersByEmitter, panPivot, tiltPivot }
 }
 
@@ -1113,14 +1120,14 @@ export function StageView({
 
   const attachCanvas = useCallback(
     (canvas: HTMLCanvasElement | null) => {
-      if (!canvas) return undefined
+      if (!canvas) return
       let runtime: StageRuntime
       try {
         runtime = createStageRuntime(canvas, orderedFixtures, fixtureTypes)
         setWebglUnavailable(false)
       } catch {
         setWebglUnavailable(true)
-        return undefined
+        return
       }
 
       runtime.controls.listenToKeyEvents(canvas)
@@ -1160,13 +1167,17 @@ export function StageView({
       })
       observer.observe(canvas)
 
-      const themeObserver = new MutationObserver(() => applyTheme(runtime))
+      const themeObserver = new MutationObserver(() => {
+        applyTheme(runtime)
+      })
       themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
       const handleContextLost = (event: Event) => {
         event.preventDefault()
         setWebglUnavailable(true)
       }
-      const handleContextRestored = () => setWebglUnavailable(false)
+      const handleContextRestored = () => {
+        setWebglUnavailable(false)
+      }
       canvas.addEventListener("webglcontextlost", handleContextLost)
       canvas.addEventListener("webglcontextrestored", handleContextRestored)
 

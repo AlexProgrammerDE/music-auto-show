@@ -32,7 +32,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
-const rootElement = document.getElementById("root")
+const rootElement = document.querySelector("#root")
 if (rootElement === null) {
   throw new Error("index.html has no #root element")
 }

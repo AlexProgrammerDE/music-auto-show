@@ -118,7 +118,9 @@ export function BluetoothReceiverPanel() {
             size="sm"
             variant="outline"
             disabled={pairingMutation.isPending}
-            onClick={() => pairingMutation.mutate(opensWindowsSettings || !pairingEnabled)}
+            onClick={() => {
+              pairingMutation.mutate(opensWindowsSettings || !pairingEnabled)
+            }}
           >
             {pairingMutation.isPending ? (
               <Spinner data-icon="inline-start" />
@@ -190,12 +192,12 @@ export function BluetoothReceiverPanel() {
                     size="sm"
                     variant="outline"
                     disabled={deviceMutation.isPending}
-                    onClick={() =>
+                    onClick={() => {
                       deviceMutation.mutate({
                         action: device.connected ? "disconnect" : "connect",
                         deviceId: device.id,
                       })
-                    }
+                    }}
                   >
                     {pendingDevice && deviceMutation.variables.action !== "forget" ? (
                       <Spinner data-icon="inline-start" />
@@ -211,7 +213,9 @@ export function BluetoothReceiverPanel() {
                     size="sm"
                     variant="ghost"
                     disabled={deviceMutation.isPending}
-                    onClick={() => deviceMutation.mutate({ action: "forget", deviceId: device.id })}
+                    onClick={() => {
+                      deviceMutation.mutate({ action: "forget", deviceId: device.id })
+                    }}
                   >
                     {pendingDevice && deviceMutation.variables.action === "forget" ? (
                       <Spinner data-icon="inline-start" />

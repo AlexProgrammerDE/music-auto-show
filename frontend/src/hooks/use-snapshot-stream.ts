@@ -29,8 +29,10 @@ export function useSnapshotStream() {
         void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
       }
     })
-    void runShowApi(liveFrameProgram, { signal: controller.signal }).catch(() => undefined)
+    void runShowApi(liveFrameProgram, { signal: controller.signal }).catch(() => {})
 
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+    }
   }, [queryClient])
 }

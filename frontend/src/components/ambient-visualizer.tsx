@@ -207,7 +207,6 @@ function drawAmbient(
       drawWaterfall(context, width, height, waterfall)
       break
     case "radial":
-    default:
       drawRadial(context, width, height, values, beatPosition)
   }
 }
@@ -243,7 +242,7 @@ export default function AmbientVisualizer({
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return undefined
+    if (!canvas) return
     let animationFrame = 0
     const animate = (now: number) => {
       render(now)
@@ -254,7 +253,9 @@ export default function AmbientVisualizer({
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
       render(performance.now())
     })
-    const themeObserver = new MutationObserver(() => render(performance.now()))
+    const themeObserver = new MutationObserver(() => {
+      render(performance.now())
+    })
     resizeObserver.observe(canvas)
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
     animationFrame = window.requestAnimationFrame(animate)
@@ -265,10 +266,13 @@ export default function AmbientVisualizer({
     }
   }, [])
   useEffect(() => {
-    const handleFullscreen = () =>
+    const handleFullscreen = () => {
       setFullscreen(document.fullscreenElement === containerRef.current)
+    }
     document.addEventListener("fullscreenchange", handleFullscreen)
-    return () => document.removeEventListener("fullscreenchange", handleFullscreen)
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreen)
+    }
   }, [])
   const section = formatEnumName(
     MusicSection,
@@ -280,7 +284,7 @@ export default function AmbientVisualizer({
       <div className="flex min-w-0 flex-col gap-3 border-b p-3 lg:flex-row lg:items-center lg:justify-between">
         <Tabs
           value={preset}
-          onValueChange={(value) => {
+          onValueChange={(value: unknown) => {
             if (
               value === "radial" ||
               value === "led" ||

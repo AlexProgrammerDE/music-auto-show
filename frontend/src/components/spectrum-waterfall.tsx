@@ -189,7 +189,7 @@ export function SpectrumWaterfall({
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return undefined
+    if (!canvas) return
     let animationFrame = 0
     const animate = (now: number) => {
       render(now)
@@ -200,7 +200,9 @@ export function SpectrumWaterfall({
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
       render(performance.now())
     })
-    const themeObserver = new MutationObserver(() => render(performance.now()))
+    const themeObserver = new MutationObserver(() => {
+      render(performance.now())
+    })
     resizeObserver.observe(canvas)
     themeObserver.observe(document.documentElement, { attributeFilter: ["class"] })
     animationFrame = window.requestAnimationFrame(animate)

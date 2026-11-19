@@ -124,25 +124,20 @@ function configFormValues(config: ShowConfig) {
 }
 
 function chooseConfigFile() {
-  return new Promise<{ readonly json: string; readonly name: string } | undefined>(
-    (resolve, reject) => {
-      const input = document.createElement("input")
-      input.type = "file"
-      input.accept = "application/json,.json"
-      input.addEventListener("change", () => {
-        const file = input.files?.[0]
-        if (!file) {
-          resolve(undefined)
-          return
-        }
-        file
-          .text()
-          .then((json) => resolve({ json, name: file.name }))
-          .catch(reject)
-      })
-      input.click()
-    },
-  )
+  return new Promise<{ readonly json: string; readonly name: string } | undefined>((resolve) => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = "application/json,.json"
+    input.addEventListener("change", () => {
+      const file = input.files?.[0]
+      if (!file) {
+        resolve(undefined)
+        return
+      }
+      resolve(file.text().then((json) => ({ json, name: file.name })))
+    })
+    input.click()
+  })
 }
 
 function downloadConfig(json: string, filename: string) {
@@ -182,7 +177,9 @@ function EnumSelectField({
         name={name}
         items={items}
         value={String(value)}
-        onValueChange={(next) => onChange(Number(next))}
+        onValueChange={(next) => {
+          onChange(Number(next))
+        }}
       >
         <SelectTrigger id={id} className="w-full" title={selectedLabel}>
           <SelectValue>{selectedLabel}</SelectValue>
@@ -226,6 +223,14 @@ function SettingsPage() {
     readonly json: string
     readonly name: string
   }>()
+  const importConfigFile = async () => {
+    try {
+      const selected = await chooseConfigFile()
+      if (selected) setPendingImport(selected)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
   const saveMutation = useMutation({
     mutationFn: (nextConfig: typeof config) =>
       runShowApi(Effect.flatMap(ShowApi, (api) => api.updateConfig(nextConfig))),
@@ -289,13 +294,17 @@ function SettingsPage() {
   const importMutation = useMutation({
     mutationFn: (json: string) =>
       runShowApi(Effect.flatMap(ShowApi, (api) => api.importConfig(json))),
-    onSuccess: (saved) => applyLoadedConfig(saved, `Loaded ${saved.name}`),
+    onSuccess: (saved) => {
+      applyLoadedConfig(saved, `Loaded ${saved.name}`)
+    },
     onError: (error) => toast.error(error.message),
   })
 
   const resetMutation = useMutation({
     mutationFn: () => runShowApi(Effect.flatMap(ShowApi, (api) => api.resetConfig)),
-    onSuccess: (saved) => applyLoadedConfig(saved, "New show configuration created"),
+    onSuccess: (saved) => {
+      applyLoadedConfig(saved, "New show configuration created")
+    },
     onError: (error) => toast.error(error.message),
   })
 
@@ -332,12 +341,7 @@ function SettingsPage() {
             variant="outline"
             disabled={importMutation.isPending}
             onClick={() => {
-              void chooseConfigFile()
-                .then((selected) => {
-                  if (selected) setPendingImport(selected)
-                  return undefined
-                })
-                .catch((error: Error) => toast.error(error.message))
+              void importConfigFile()
             }}
           >
             {importMutation.isPending ? (
@@ -351,7 +355,9 @@ function SettingsPage() {
             type="button"
             variant="outline"
             disabled={exportMutation.isPending}
-            onClick={() => exportMutation.mutate()}
+            onClick={() => {
+              exportMutation.mutate()
+            }}
           >
             {exportMutation.isPending ? (
               <Spinner data-icon="inline-start" />
@@ -360,7 +366,13 @@ function SettingsPage() {
             )}
             {exportMutation.isPending ? "Exporting…" : "Export"}
           </Button>
-          <Button type="button" variant="outline" onClick={() => setResetOpen(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setResetOpen(true)
+            }}
+          >
             <FilePlusIcon data-icon="inline-start" aria-hidden="true" /> New
           </Button>
           <form.Subscribe
@@ -425,7 +437,9 @@ function SettingsPage() {
                         aria-invalid={invalid}
                         value={field.state.value}
                         onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.value)}
+                        onChange={(event) => {
+                          field.handleChange(event.target.value)
+                        }}
                       />
                       {invalid ? (
                         <FieldError>{field.state.meta.errors.map(String).join(", ")}</FieldError>
@@ -527,7 +541,9 @@ function SettingsPage() {
                               itemToStringLabel={(option) => option.label}
                               itemToStringValue={(option) => option.id}
                               isItemEqualToValue={(option, value) => option.id === value.id}
-                              onValueChange={(option) => field.handleChange(option?.id ?? "")}
+                              onValueChange={(option) => {
+                                field.handleChange(option?.id ?? "")
+                              }}
                             >
                               <ComboboxInput
                                 id={field.name}
@@ -569,7 +585,9 @@ function SettingsPage() {
                         step={0.05}
                         value={field.state.value}
                         onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                        onChange={(event) => {
+                          field.handleChange(event.target.valueAsNumber)
+                        }}
                       />
                       <InputGroupAddon align="inline-end">×</InputGroupAddon>
                     </InputGroup>
@@ -586,7 +604,9 @@ function SettingsPage() {
                       autoComplete="off"
                       value={field.state.value}
                       onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
+                      onChange={(event) => {
+                        field.handleChange(event.target.value)
+                      }}
                     />
                     <FieldDescription>
                       The checkpoint stays outside the binary and loads through native Rust
@@ -630,7 +650,9 @@ function SettingsPage() {
                       value={field.state.value}
                       placeholder="auto…"
                       onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
+                      onChange={(event) => {
+                        field.handleChange(event.target.value)
+                      }}
                     />
                     <FieldDescription>
                       Use auto to discover a compatible USB serial interface.
@@ -653,7 +675,9 @@ function SettingsPage() {
                         max={512}
                         value={field.state.value}
                         onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                        onChange={(event) => {
+                          field.handleChange(event.target.valueAsNumber)
+                        }}
                       />
                       <InputGroupAddon align="inline-end">channels</InputGroupAddon>
                     </InputGroup>
@@ -675,7 +699,9 @@ function SettingsPage() {
                         max={44}
                         value={field.state.value}
                         onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                        onChange={(event) => {
+                          field.handleChange(event.target.valueAsNumber)
+                        }}
                       />
                       <InputGroupAddon align="inline-end">FPS</InputGroupAddon>
                     </InputGroup>
@@ -950,7 +976,9 @@ function SettingsPage() {
         icon={<FilePlusIcon aria-hidden="true" />}
         pending={resetMutation.isPending}
         onOpenChange={setResetOpen}
-        onConfirm={() => resetMutation.mutate()}
+        onConfirm={() => {
+          resetMutation.mutate()
+        }}
       />
     </form>
   )

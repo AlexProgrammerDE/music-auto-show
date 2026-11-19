@@ -92,7 +92,9 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`Switch to ${dark ? "light" : "dark"} mode`}
-                  onClick={() => setTheme(dark ? "light" : "dark")}
+                  onClick={() => {
+                    setTheme(dark ? "light" : "dark")
+                  }}
                 />
               }
             >

@@ -231,8 +231,12 @@ function FixturesPage() {
             : `${fixture.startChannel}`,
         intensity: fixture.intensityScale,
         state: states.get(fixture.id),
-        edit: () => setEditingFixtureId(fixture.id),
-        remove: () => setRemovingFixtureId(fixture.id),
+        edit: () => {
+          setEditingFixtureId(fixture.id)
+        },
+        remove: () => {
+          setRemovingFixtureId(fixture.id)
+        },
       }
     })
   }, [config.fixtures, snapshot.fixtureStates, typeById])
@@ -294,7 +298,12 @@ function FixturesPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setImportOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setImportOpen(true)
+            }}
+          >
             <UploadSimpleIcon data-icon="inline-start" aria-hidden="true" />
             Import grandMA2 XML
           </Button>
@@ -407,7 +416,9 @@ function FixturesPage() {
                   id="grandma2-file"
                   type="file"
                   accept=".xml,application/xml,text/xml"
-                  onChange={(event) => setImportFile(event.target.files?.[0])}
+                  onChange={(event) => {
+                    setImportFile(event.target.files?.[0])
+                  }}
                 />
                 <FieldDescription>
                   Maximum file size is 2 MB. grandMA2 XMLP files are encrypted and are not

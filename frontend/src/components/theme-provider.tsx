@@ -81,7 +81,7 @@ export function ThemeProvider({
     applyTheme(theme)
 
     if (theme !== "system") {
-      return undefined
+      return
     }
 
     const mediaQuery = window.matchMedia(COLOR_SCHEME_QUERY)

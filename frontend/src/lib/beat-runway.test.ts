@@ -172,17 +172,17 @@ describe("beat runway projection", () => {
       tempo: 100,
     }
     let previousAbsoluteBeat = sample.estimatedBeat + sample.beatPosition
-    for (const [offset, tempo] of [
-      [100, 200],
-      [200, 100],
-      [300, 199],
-      [400, 101],
+    const fastReading = { beatIndex: 4, beatPosition: 0.8, estimatedBeat: 80 }
+    const slowReading = { beatIndex: 2, beatPosition: 0.1, estimatedBeat: 12 }
+    for (const [offset, tempo, reading] of [
+      [100, 200, fastReading],
+      [200, 100, slowReading],
+      [300, 199, fastReading],
+      [400, 101, slowReading],
     ] as const) {
       sample = reconcileBeatRunwaySample(sample, {
         active: true,
-        beatIndex: tempo > 150 ? 4 : 2,
-        beatPosition: tempo > 150 ? 0.8 : 0.1,
-        estimatedBeat: tempo > 150 ? 80 : 12,
+        ...reading,
         meter: 4,
         sampledAt: 1_000 + offset,
         tempo,

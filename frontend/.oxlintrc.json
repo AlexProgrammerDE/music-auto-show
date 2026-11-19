@@ -2,6 +2,7 @@
   "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
   "categories": {
     "correctness": "error",
+    "pedantic": "error",
     "perf": "error",
     "suspicious": "error"
   },
@@ -22,6 +23,27 @@
     "effecttsgo"
   ],
   "rules": {
+    // Pedantic rules left off: size metrics, opinion, or duplicates of configured rules.
+    "typescript/prefer-readonly-parameter-types": "off",
+    "eslint/max-lines": "off",
+    "eslint/max-lines-per-function": "off",
+    "eslint/max-depth": "off",
+    "eslint/max-nested-callbacks": "off",
+    "eslint/max-classes-per-file": "off",
+    "import/max-dependencies": "off",
+    "eslint/no-inline-comments": "off",
+    "eslint/no-warning-comments": "off",
+    "eslint/no-negated-condition": "off",
+    "unicorn/no-negated-condition": "off",
+    // Duplicates `typescript/require-await`.
+    "eslint/require-await": "off",
+    // Conflicts with the `prefer-nullish-coalescing` `ignorePrimitives` setup.
+    "typescript/strict-boolean-expressions": "off",
+    // Conflicts with `unicorn/no-useless-undefined`, which turns `return undefined` into `return`,
+    // for example in effects that return a cleanup on one path. `noImplicitReturns` still applies.
+    "typescript/consistent-return": "off",
+    // `resolve(undefined)` is required when the promise value type includes undefined.
+    "unicorn/no-useless-undefined": ["error", { "checkArguments": false }],
     "react/jsx-no-constructed-context-values": "error",
     "react/no-array-index-key": "error",
     "react/no-deriving-state-in-effects": "error",

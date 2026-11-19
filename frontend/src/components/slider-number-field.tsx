@@ -47,7 +47,9 @@ export function SliderNumberField({
   useEffect(() => {
     const sliderInputs =
       sliderRef.current?.querySelectorAll<HTMLInputElement>('input[type="range"]')
-    sliderInputs?.forEach((input) => input.setAttribute("aria-label", `${label} slider`))
+    sliderInputs?.forEach((input) => {
+      input.setAttribute("aria-label", `${label} slider`)
+    })
   }, [label])
 
   return (
@@ -61,8 +63,8 @@ export function SliderNumberField({
           max={displayMax}
           step={displayStep}
           value={[displayValue]}
-          onValueChange={(next) => {
-            const nextValue = Array.isArray(next) ? next[0] : next
+          onValueChange={(next: number | readonly number[]) => {
+            const nextValue = typeof next === "number" ? next : next[0]
             if (nextValue !== undefined) commitDisplayValue(nextValue)
           }}
         />
@@ -78,7 +80,9 @@ export function SliderNumberField({
             step={displayStep}
             value={displayValue}
             onBlur={onBlur}
-            onChange={(event) => commitDisplayValue(event.target.valueAsNumber)}
+            onChange={(event) => {
+              commitDisplayValue(event.target.valueAsNumber)
+            }}
           />
           <InputGroupAddon align="inline-end">{unit}</InputGroupAddon>
         </InputGroup>

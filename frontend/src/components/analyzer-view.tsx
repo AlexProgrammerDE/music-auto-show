@@ -35,7 +35,7 @@ function normalizedDb(value: number) {
 }
 
 function peakOf(select: (frame: LiveAnalysisSample) => number) {
-  return Math.max(0, ...liveAnalysisHistory().map(select))
+  return Math.max(0, ...liveAnalysisHistory().map((frame) => select(frame)))
 }
 
 function AnalysisLevel({
@@ -191,7 +191,7 @@ export function AnalyzerView({
       >
         <Tabs
           value={scope}
-          onValueChange={(value) => {
+          onValueChange={(value: unknown) => {
             if (
               value === "waveform" ||
               value === "spectrum" ||

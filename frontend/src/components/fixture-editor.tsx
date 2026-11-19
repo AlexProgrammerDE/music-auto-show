@@ -150,7 +150,7 @@ export function FixtureEditor({
               <form.Field
                 name="name"
                 validators={{
-                  onChange: ({ value }) => {
+                  onChange: ({ value }): string | undefined => {
                     if (!value.trim()) return "Name is required"
                     if (
                       existingNames.some(
@@ -175,7 +175,9 @@ export function FixtureEditor({
                         aria-invalid={invalid}
                         value={field.state.value}
                         onBlur={field.handleBlur}
-                        onChange={(event) => field.handleChange(event.target.value)}
+                        onChange={(event) => {
+                          field.handleChange(event.target.value)
+                        }}
                       />
                       {invalid ? (
                         <FieldError>{field.state.meta.errors.map(String).join(", ")}</FieldError>
@@ -211,7 +213,9 @@ export function FixtureEditor({
                         name={field.name}
                         items={typeItems}
                         value={field.state.value}
-                        onValueChange={(value) => field.handleChange(value ?? "")}
+                        onValueChange={(value) => {
+                          field.handleChange(value ?? "")
+                        }}
                       >
                         <SelectTrigger
                           id={`${field.name}-trigger`}
@@ -261,7 +265,9 @@ export function FixtureEditor({
                       max={512}
                       value={field.state.value}
                       onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      onChange={(event) => {
+                        field.handleChange(event.target.valueAsNumber)
+                      }}
                     />
                   </Field>
                 )}
@@ -280,7 +286,9 @@ export function FixtureEditor({
                       min={0}
                       value={field.state.value}
                       onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      onChange={(event) => {
+                        field.handleChange(event.target.valueAsNumber)
+                      }}
                     />
                   </Field>
                 )}
@@ -301,7 +309,9 @@ export function FixtureEditor({
                       step={0.01}
                       value={field.state.value}
                       onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                      onChange={(event) => {
+                        field.handleChange(event.target.valueAsNumber)
+                      }}
                     />
                     <FieldDescription>Applied after the global show intensity.</FieldDescription>
                   </Field>
@@ -341,7 +351,9 @@ export function FixtureEditor({
                           step={0.01}
                           value={field.state.value}
                           onBlur={field.handleBlur}
-                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                          onChange={(event) => {
+                            field.handleChange(event.target.valueAsNumber)
+                          }}
                         />
                       </Field>
                     )}
@@ -387,7 +399,9 @@ export function FixtureEditor({
                                 step={0.01}
                                 value={field.state.value}
                                 onBlur={field.handleBlur}
-                                onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                                onChange={(event) => {
+                                  field.handleChange(event.target.valueAsNumber)
+                                }}
                               />
                             </Field>
                           )}
@@ -436,7 +450,9 @@ export function FixtureEditor({
                                 step={0.01}
                                 value={field.state.value}
                                 onBlur={field.handleBlur}
-                                onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                                onChange={(event) => {
+                                  field.handleChange(event.target.valueAsNumber)
+                                }}
                               />
                             </Field>
                           )}

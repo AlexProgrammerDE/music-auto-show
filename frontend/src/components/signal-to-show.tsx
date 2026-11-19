@@ -85,7 +85,6 @@ function reactionForMode(mode: VisualizationMode, band: string | undefined) {
       return "Beat selection"
     case VisualizationMode.UNSPECIFIED:
     case VisualizationMode.ENERGY:
-    default:
       return "Energy + bass"
   }
 }

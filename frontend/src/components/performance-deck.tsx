@@ -36,7 +36,9 @@ function Artwork({ media }: { readonly media: MediaInfo | undefined }) {
       alt={media?.trackName ? `${media.trackName} cover artwork` : "Current track cover artwork"}
       className="size-20 shrink-0 border object-cover"
       decoding="async"
-      onError={() => setFailedArtworkUrl(artworkUrl)}
+      onError={() => {
+        setFailedArtworkUrl(artworkUrl)
+      }}
     />
   )
 }
@@ -75,16 +77,20 @@ function LightingPalette({
   }, [activeIndex, media])
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return undefined
+    if (!canvas) return
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)
       render()
     })
     observer.observe(canvas)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+    }
   }, [render])
-  useEffect(() => render(), [render])
+  useEffect(() => {
+    render()
+  }, [render])
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-3">

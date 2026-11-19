@@ -311,7 +311,9 @@ function RecordingPanel({
               size="sm"
               variant={recording?.recording ? "destructive" : "outline"}
               disabled={pending}
-              onClick={() => onRecord(recording?.recording ? "stop" : "start")}
+              onClick={() => {
+                onRecord(recording?.recording ? "stop" : "start")
+              }}
             >
               {pending ? (
                 <Spinner data-icon="inline-start" />
@@ -326,7 +328,9 @@ function RecordingPanel({
               size="sm"
               variant="ghost"
               disabled={!recording?.hasRecording || pending}
-              onClick={() => onClearOpenChange(true)}
+              onClick={() => {
+                onClearOpenChange(true)
+              }}
             >
               <TrashIcon data-icon="inline-start" aria-hidden="true" /> Clear
             </Button>
@@ -365,7 +369,9 @@ function RecordingPanel({
         icon={<TrashIcon aria-hidden="true" />}
         pending={pending}
         onOpenChange={onClearOpenChange}
-        onConfirm={() => onRecord("clear")}
+        onConfirm={() => {
+          onRecord("clear")
+        }}
       />
     </>
   )
@@ -440,7 +446,7 @@ function LiveDashboard() {
     },
     onSuccess: (_, action) => {
       if (action === "clear") {
-        setRecordingUrl((previous) => {
+        setRecordingUrl((previous): string | undefined => {
           if (previous) URL.revokeObjectURL(previous)
           return undefined
         })
@@ -536,8 +542,12 @@ function LiveDashboard() {
       <ShowControls
         blackoutPending={blackoutMutation.isPending}
         commandPending={commandMutation.isPending}
-        onBlackout={() => blackoutMutation.mutate(!snapshot.blackout)}
-        onCommand={() => commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)}
+        onBlackout={() => {
+          blackoutMutation.mutate(!snapshot.blackout)
+        }}
+        onCommand={() => {
+          commandMutation.mutate(running ? ShowCommand.STOP : ShowCommand.START)
+        }}
         running={running}
         snapshotState={snapshot.runState}
         statusMessage={snapshot.statusMessage}
@@ -555,7 +565,7 @@ function LiveDashboard() {
 
       <Tabs
         value={view}
-        onValueChange={(value) => {
+        onValueChange={(value: unknown) => {
           if (value === "performance" || value === "analyzer" || value === "ambient") {
             void setView(value, { history: "push" })
           }
@@ -585,7 +595,9 @@ function LiveDashboard() {
               <RecordingPanel
                 clearOpen={clearRecordingOpen}
                 onClearOpenChange={setClearRecordingOpen}
-                onRecord={(action) => recordingMutation.mutate(action)}
+                onRecord={(action) => {
+                  recordingMutation.mutate(action)
+                }}
                 pending={recordingMutation.isPending}
                 recording={recording}
                 recordingUrl={recordingUrl}
