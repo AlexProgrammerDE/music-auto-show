@@ -19,6 +19,7 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    /* erasableSyntaxOnly stays off: protoc-gen-es generates TypeScript enums in src/gen. */
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     /* exactOptionalPropertyTypes stays off: the frozen shadcn files in src/components/ui pass
