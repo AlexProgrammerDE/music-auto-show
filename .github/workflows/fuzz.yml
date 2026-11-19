@@ -53,6 +53,8 @@ env:
   # E0391 "needs async drop" query cycle, so this repository pins an earlier
   # nightly for fuzzing.
   FUZZ_TOOLCHAIN: nightly-2026-07-09
+  # The prebuilt cargo-fuzz binary defaults to musl, which ASan does not support.
+  FUZZ_TRIPLE: x86_64-unknown-linux-gnu
 
 jobs:
   fuzz:
@@ -110,12 +112,12 @@ jobs:
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
       - name: Build fuzz target
-        run: cargo +"$FUZZ_TOOLCHAIN" fuzz build "$TARGET"
+        run: cargo +"$FUZZ_TOOLCHAIN" fuzz build --target "$FUZZ_TRIPLE" "$TARGET"
 
       - name: Fuzz
         run: |
           mkdir -p "fuzz/corpus/$TARGET"
-          cargo +"$FUZZ_TOOLCHAIN" fuzz run "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" -- \
+          cargo +"$FUZZ_TOOLCHAIN" fuzz run --target "$FUZZ_TRIPLE" "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" -- \
             -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
 
       - name: Save corpus
