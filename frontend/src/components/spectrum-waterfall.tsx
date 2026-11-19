@@ -38,8 +38,8 @@ function drawFrequencyLabels(
   for (const [frequency, label] of [
     [60, "60"],
     [250, "250"],
-    [1_000, "1k"],
-    [4_000, "4k"],
+    [1000, "1k"],
+    [4000, "4k"],
     [16_000, "16k"],
   ] as const) {
     if (frequency < minimum || frequency > maximum) continue

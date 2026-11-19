@@ -282,6 +282,7 @@ function RecordingPanel({
     | undefined
   readonly recordingUrl: string | undefined
 }) {
+  // oxlint-disable-next-line react/hook-use-state -- Capture the filename date once per mount. It has no setter.
   const [recordingDate] = useState(() => new Date().toISOString().slice(0, 10))
   const progress = recording?.maxDurationSeconds
     ? (recording.durationSeconds / recording.maxDurationSeconds) * 100

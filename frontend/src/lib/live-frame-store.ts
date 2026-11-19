@@ -5,7 +5,7 @@ import type {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 const FRAME_RETENTION = 8
-export const LIVE_HISTORY_DURATION_MS = 5_000
+export const LIVE_HISTORY_DURATION_MS = 5000
 export const LIVE_RENDER_DELAY_MS = 30
 
 export type TimedLiveFrame = {

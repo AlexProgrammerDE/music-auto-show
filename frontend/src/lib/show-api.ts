@@ -16,6 +16,7 @@ import {
   type ShowSnapshot,
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a factory for the base class.
 export class RpcFailure extends Schema.TaggedError<RpcFailure, { readonly brand: unique symbol }>()(
   "RpcFailure",
   {

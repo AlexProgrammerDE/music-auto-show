@@ -23,10 +23,10 @@ describe("beat runway projection", () => {
         beatPosition: 0.75,
         estimatedBeat: 10,
         meter: 3,
-        sampledAt: 1_000,
+        sampledAt: 1000,
         tempo: 120,
       },
-      1_250,
+      1250,
     )
     expect(frame.beatPosition).toBeCloseTo(0.25)
     expect(frame.estimatedBeat).toBe(11)
@@ -40,14 +40,14 @@ describe("beat runway projection", () => {
       beatPosition: 0.1,
       estimatedBeat: 8,
       meter: 4,
-      sampledAt: 1_000,
+      sampledAt: 1000,
       tempo: 120,
     }
-    const projected = projectBeatRunwayFrame(previous, 1_100)
+    const projected = projectBeatRunwayFrame(previous, 1100)
     const reconciled = reconcileBeatRunwaySample(previous, {
       ...previous,
       beatPosition: 0.32,
-      sampledAt: 1_100,
+      sampledAt: 1100,
     })
 
     expect(reconciled.beatPosition).toBeCloseTo(projected.beatPosition)
@@ -63,23 +63,23 @@ describe("beat runway projection", () => {
       beatPosition: 0.78,
       estimatedBeat: 8,
       meter: 4,
-      sampledAt: 1_000,
+      sampledAt: 1000,
       tempo: 120,
     }
-    const projected = projectBeatRunwayFrame(previous, 1_100)
+    const projected = projectBeatRunwayFrame(previous, 1100)
     const reconciled = reconcileBeatRunwaySample(previous, {
       active: true,
       beatIndex: 2,
       beatPosition: 0.02,
       estimatedBeat: 9,
       meter: 4,
-      sampledAt: 1_100,
+      sampledAt: 1100,
       tempo: 120,
     })
 
     expect(reconciled.beatPosition).toBeCloseTo(projected.beatPosition)
     expect(reconciled.beatIndex).toBe(1)
-    const afterBoundary = projectBeatRunwayFrame(reconciled, 1_111)
+    const afterBoundary = projectBeatRunwayFrame(reconciled, 1111)
     expect(afterBoundary.beatPosition).toBeGreaterThanOrEqual(0)
     expect(afterBoundary.beatPosition).toBeLessThan(0.01)
     expect(afterBoundary.beatIndex).toBe(2)
@@ -93,7 +93,7 @@ describe("beat runway projection", () => {
       beatPosition: 0.4,
       estimatedBeat: 40,
       meter: 4,
-      sampledAt: 1_100,
+      sampledAt: 1100,
       tempo: 120,
     }
     const reconciled = reconcileBeatRunwaySample(
@@ -102,7 +102,7 @@ describe("beat runway projection", () => {
         beatIndex: 1,
         beatPosition: 0.1,
         estimatedBeat: 8,
-        sampledAt: 1_000,
+        sampledAt: 1000,
       },
       incoming,
     )
@@ -119,7 +119,7 @@ describe("beat runway projection", () => {
       beatPosition: 0.6,
       estimatedBeat: 21,
       meter: 4,
-      sampledAt: 1_100,
+      sampledAt: 1100,
       tempo: 100,
     }
 
@@ -129,7 +129,7 @@ describe("beat runway projection", () => {
         beatIndex: 1,
         beatPosition: 0.1,
         estimatedBeat: 8,
-        sampledAt: 1_050,
+        sampledAt: 1050,
       }),
     ).toBe(previous)
   })
@@ -156,7 +156,7 @@ describe("beat runway projection", () => {
         beatPosition: 0.8,
         estimatedBeat: 80,
         meter: 4,
-        sampledAt: 1_000,
+        sampledAt: 1000,
         tempo: 200,
       },
     )
@@ -168,7 +168,7 @@ describe("beat runway projection", () => {
       beatPosition: 0.25,
       estimatedBeat: 20,
       meter: 4,
-      sampledAt: 1_000,
+      sampledAt: 1000,
       tempo: 100,
     }
     let previousAbsoluteBeat = sample.estimatedBeat + sample.beatPosition
@@ -184,7 +184,7 @@ describe("beat runway projection", () => {
         active: true,
         ...reading,
         meter: 4,
-        sampledAt: 1_000 + offset,
+        sampledAt: 1000 + offset,
         tempo,
       })
       const absoluteBeat = sample.estimatedBeat + sample.beatPosition

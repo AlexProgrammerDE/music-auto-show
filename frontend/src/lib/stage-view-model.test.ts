@@ -45,7 +45,7 @@ describe("stage view model", () => {
   })
 
   it("derives bounded spotlight optics from grandMA2 emitter metadata", () => {
-    const projection = stageLightProjection(45, 1_200, 0.1, 0.75, 6)
+    const projection = stageLightProjection(45, 1200, 0.1, 0.75, 6)
     expect(projection.angleRadians).toBeCloseTo(Math.PI / 8)
     expect(projection.distance).toBeCloseTo(6.9)
     expect(projection.intensity).toBe(900)

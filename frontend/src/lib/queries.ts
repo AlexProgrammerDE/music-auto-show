@@ -14,7 +14,7 @@ export const showQueryKeys = {
 export const snapshotQueryOptions = queryOptions({
   queryKey: showQueryKeys.snapshot,
   queryFn: () => runShowApi(Effect.flatMap(ShowApi, (api) => api.getSnapshot)),
-  refetchInterval: 2_000,
+  refetchInterval: 2000,
 })
 
 export const configQueryOptions = queryOptions({
@@ -30,7 +30,7 @@ export const audioDevicesQueryOptions = queryOptions({
 export const bluetoothReceiverQueryOptions = queryOptions({
   queryKey: showQueryKeys.bluetoothReceiver,
   queryFn: () => runShowApi(Effect.flatMap(ShowApi, (api) => api.getBluetoothReceiverStatus)),
-  refetchInterval: 2_000,
+  refetchInterval: 2000,
 })
 
 export const grandMa2FixtureTypesQueryOptions = queryOptions({

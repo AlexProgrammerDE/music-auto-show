@@ -59,8 +59,8 @@ export function stageLightProjection(
   const normalizedAperture = Math.max(0, Math.min(0.5, apertureMeters))
   const candela =
     beamIntensity > 0
-      ? Math.max(40, Math.min(4_000, beamIntensity))
-      : 200 + normalizedAperture * 1_000
+      ? Math.max(40, Math.min(4000, beamIntensity))
+      : 200 + normalizedAperture * 1000
 
   return {
     angleRadians: (angleDegrees * Math.PI) / 360,

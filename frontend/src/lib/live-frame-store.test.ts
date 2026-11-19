@@ -22,8 +22,8 @@ afterEach(resetLiveFrameStore)
 
 describe("live frame timing", () => {
   test("calibrates clock offset and preserves transport jitter in the local timeline", () => {
-    publishLiveFrame(create(LiveFrameSchema, { capturedAtUnixMs: 1_000n, sequence: 1n }), 100, 900)
-    publishLiveFrame(create(LiveFrameSchema, { capturedAtUnixMs: 1_025n, sequence: 2n }), 135, 900)
+    publishLiveFrame(create(LiveFrameSchema, { capturedAtUnixMs: 1000n, sequence: 1n }), 100, 900)
+    publishLiveFrame(create(LiveFrameSchema, { capturedAtUnixMs: 1025n, sequence: 2n }), 135, 900)
 
     const sample = sampleLiveFrame(145, 30)
 
@@ -42,7 +42,7 @@ describe("live frame timing", () => {
       estimatedBeat: 17n,
     })
 
-    const projected = projectBeat(audio, 1_000, 1_250)
+    const projected = projectBeat(audio, 1000, 1250)
 
     expect(projected.beatPosition).toBeCloseTo(0.75)
     expect(projected.barPosition).toBeCloseTo(0.4375)
@@ -77,7 +77,7 @@ describe("live frame timing", () => {
   test("retains exact live analyzer rows without blending measured values", () => {
     publishLiveFrame(
       create(LiveFrameSchema, {
-        capturedAtUnixMs: 1_000n,
+        capturedAtUnixMs: 1000n,
         sequence: 1n,
         audio: create(LiveAudioFrameSchema, {
           bass: 0.2,
@@ -90,7 +90,7 @@ describe("live frame timing", () => {
     )
     publishLiveFrame(
       create(LiveFrameSchema, {
-        capturedAtUnixMs: 1_025n,
+        capturedAtUnixMs: 1025n,
         sequence: 2n,
         audio: create(LiveAudioFrameSchema, {
           bass: 0.8,
@@ -116,9 +116,9 @@ describe("live frame timing", () => {
 
   test("keeps only the latest five seconds of live analyzer history", () => {
     for (const [sequence, capturedAt] of [
-      [1n, 1_000n],
-      [2n, 6_001n],
-      [3n, 6_026n],
+      [1n, 1000n],
+      [2n, 6001n],
+      [3n, 6026n],
     ] as const) {
       publishLiveFrame(
         create(LiveFrameSchema, {

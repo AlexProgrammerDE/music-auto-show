@@ -139,19 +139,19 @@ function stageTheme() {
   const dark = document.documentElement.classList.contains("dark")
   return dark
     ? {
-        background: 0x090c0d,
-        floor: 0x171d1f,
-        structure: 0x7f898c,
-        grid: 0x30383a,
+        background: 0x09_0c_0d,
+        floor: 0x17_1d_1f,
+        structure: 0x7f_89_8c,
+        grid: 0x30_38_3a,
         labelBackground: "rgba(9, 12, 13, 0.88)",
         labelBorder: "rgba(127, 137, 140, 0.42)",
         labelText: "#d9dfe0",
       }
     : {
-        background: 0xf8f9f9,
-        floor: 0xe9eded,
-        structure: 0x687174,
-        grid: 0xc8d0d2,
+        background: 0xf8_f9_f9,
+        floor: 0xe9_ed_ed,
+        structure: 0x68_71_74,
+        grid: 0xc8_d0_d2,
         labelBackground: "rgba(248, 249, 249, 0.9)",
         labelBorder: "rgba(104, 113, 116, 0.36)",
         labelText: "#252b2d",
@@ -178,7 +178,7 @@ function createSpotLightCookie() {
 function createStageSpotLights(scene: Scene, cookie: CanvasTexture) {
   return Array.from({ length: MAX_STAGE_SPOT_LIGHTS }, (_, lightIndex) => {
     const target = new Object3D()
-    const light = new SpotLight(0xffffff, 0, 8, Math.PI / 8, 0.45, 2)
+    const light = new SpotLight(0xff_ff_ff, 0, 8, Math.PI / 8, 0.45, 2)
     light.target = target
     light.castShadow = lightIndex < MAX_STAGE_SHADOW_LIGHTS
     if (light.castShadow) {
@@ -427,7 +427,7 @@ function applyMountRotation(root: Group, fixture: FixtureConfig) {
 
 function createHousingMaterial(color?: number) {
   return new MeshStandardMaterial({
-    color: color && color > 0 ? color : 0x70797c,
+    color: color && color > 0 ? color : 0x70_79_7c,
     roughness: 0.48,
     metalness: 0.62,
   })
@@ -869,8 +869,8 @@ function createStageRuntime(
   controls.keyPanSpeed = 14
   controls.keyRotateSpeed = 1.5
   controls.update()
-  scene.add(new HemisphereLight(0xffffff, 0x1b2224, 1.7))
-  const keyLight = new DirectionalLight(0xffffff, 1.4)
+  scene.add(new HemisphereLight(0xff_ff_ff, 0x1b_22_24, 1.7))
+  const keyLight = new DirectionalLight(0xff_ff_ff, 1.4)
   keyLight.position.set(3, 6, 5)
   scene.add(keyLight)
 

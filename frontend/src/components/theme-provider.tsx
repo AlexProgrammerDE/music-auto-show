@@ -52,7 +52,7 @@ export function ThemeProvider({
   storageKey = "theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = React.useState<Theme>(() => {
+  const [theme, setTheme] = React.useState<Theme>(() => {
     const storedTheme = localStorage.getItem(storageKey)
     if (isTheme(storedTheme)) {
       return storedTheme
@@ -61,10 +61,10 @@ export function ThemeProvider({
     return defaultTheme
   })
 
-  const setTheme = React.useCallback(
+  const updateTheme = React.useCallback(
     (nextTheme: Theme) => {
       localStorage.setItem(storageKey, nextTheme)
-      setThemeState(nextTheme)
+      setTheme(nextTheme)
     },
     [storageKey],
   )
@@ -114,7 +114,7 @@ export function ThemeProvider({
         return
       }
 
-      setThemeState((currentTheme) => {
+      setTheme((currentTheme) => {
         const nextTheme =
           currentTheme === "dark"
             ? "light"
@@ -147,11 +147,11 @@ export function ThemeProvider({
       }
 
       if (isTheme(event.newValue)) {
-        setThemeState(event.newValue)
+        setTheme(event.newValue)
         return
       }
 
-      setThemeState(defaultTheme)
+      setTheme(defaultTheme)
     }
 
     window.addEventListener("storage", handleStorageChange)
@@ -164,9 +164,9 @@ export function ThemeProvider({
   const value = React.useMemo(
     () => ({
       theme,
-      setTheme,
+      setTheme: updateTheme,
     }),
-    [theme, setTheme],
+    [theme, updateTheme],
   )
 
   return (
