@@ -37,7 +37,7 @@ The neural network matches the official model shape:
 - 1,764-sample Hann windows and 441-sample hops
 - 144 log-frequency bands plus their positive differences, for 288 features
 - convolution, projection, four unidirectional LSTM layers, and three output classes
-- causal particle tracking for beat phase, tempo, and meter
+- causal particle tracking for beat phase and tempo, with a nine-state probability model for meter
 
 The detector uses Candle to read the PyTorch state dictionary directly. It does not launch Python. Checkpoints remain external and are ignored by Git because the upstream BeatNet+ repository does not publish redistribution terms for its weights.
 

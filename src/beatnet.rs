@@ -532,13 +532,6 @@ struct Particle {
     wrapped: bool,
 }
 
-#[derive(Clone, Copy)]
-struct MeterParticle {
-    beat_in_bar: u8,
-    meter: u8,
-    weight: f32,
-}
-
 #[derive(Clone, Copy, Default)]
 struct TempoCluster {
     bpm: f32,
@@ -552,6 +545,56 @@ struct MeterPosterior {
 }
 
 impl MeterPosterior {
+    fn new() -> Self {
+        Self {
+            beat_probabilities: [
+                [1.0 / 6.0, 1.0 / 6.0, 0.0, 0.0],
+                [1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 0.0],
+                [1.0 / 12.0; 4],
+            ],
+            probabilities: [1.0 / 3.0; 3],
+        }
+    }
+
+    fn advance(&mut self, beat_activation: f32, downbeat_activation: f32) {
+        const METER_CHANGE_PROBABILITY: f32 = 0.005;
+        // All nine meter and beat-position states fit in the table. Carry their
+        // probabilities forward directly so resampling cannot erase a meter.
+        let mut next = [[0.0; 4]; 3];
+        for (index, beats) in self.beat_probabilities.iter().enumerate() {
+            let last_beat = index + 1;
+            next[index][1..=last_beat].copy_from_slice(&beats[..last_beat]);
+            for (other, next_beats) in next.iter_mut().enumerate() {
+                let transition_probability = if other == index {
+                    1.0 - METER_CHANGE_PROBABILITY
+                } else {
+                    METER_CHANGE_PROBABILITY / 2.0
+                };
+                next_beats[0] += beats[last_beat] * transition_probability;
+            }
+        }
+
+        let beat_likelihood =
+            meter_observation_likelihood(beat_activation, downbeat_activation, false);
+        let downbeat_likelihood =
+            meter_observation_likelihood(beat_activation, downbeat_activation, true);
+        let mut total = 0.0;
+        for beats in &mut next {
+            beats[0] *= downbeat_likelihood;
+            for weight in &mut beats[1..] {
+                *weight *= beat_likelihood;
+            }
+            total += beats.iter().sum::<f32>();
+        }
+        for (beats, probability) in next.iter_mut().zip(&mut self.probabilities) {
+            for weight in beats.iter_mut() {
+                *weight /= total;
+            }
+            *probability = beats.iter().sum();
+        }
+        self.beat_probabilities = next;
+    }
+
     fn meter_probability(&self, meter: u8) -> f32 {
         self.probabilities[usize::from(meter.clamp(2, 4) - 2)]
     }
@@ -758,7 +801,7 @@ impl MeterCommitment {
 
 struct ParticleDecoder {
     particles: Vec<Particle>,
-    meter_particles: Vec<MeterParticle>,
+    meter_posterior: MeterPosterior,
     rng: StdRng,
     tempo: TempoCommitment,
     meter: MeterCommitment,
@@ -776,7 +819,6 @@ struct ParticleDecoder {
 
 impl ParticleDecoder {
     const PARTICLES: usize = 1_500;
-    const METER_PARTICLES: usize = 250;
     const FPS: usize = 50;
     const MIN_TEMPO: f32 = 55.0;
     const MAX_TEMPO: f32 = 215.0;
@@ -788,7 +830,7 @@ impl ParticleDecoder {
     fn new() -> Self {
         let mut decoder = Self {
             particles: Vec::with_capacity(Self::PARTICLES),
-            meter_particles: Vec::with_capacity(Self::METER_PARTICLES),
+            meter_posterior: MeterPosterior::new(),
             rng: StdRng::seed_from_u64(0x4245_4154_4e45_542b),
             tempo: TempoCommitment::new(),
             meter: MeterCommitment::new(),
@@ -813,27 +855,7 @@ impl ParticleDecoder {
 
     fn reset_tracking_state(&mut self) {
         self.seed_beat_hypotheses(None, None);
-        self.meter_particles.clear();
-        let meter_counts = [
-            (0..Self::METER_PARTICLES)
-                .filter(|index| index % 3 == 0)
-                .count(),
-            (0..Self::METER_PARTICLES)
-                .filter(|index| index % 3 == 1)
-                .count(),
-            (0..Self::METER_PARTICLES)
-                .filter(|index| index % 3 == 2)
-                .count(),
-        ];
-        for index in 0..Self::METER_PARTICLES {
-            let meter_index = index % 3;
-            let meter = u8::try_from(meter_index).unwrap_or_default() + 2;
-            self.meter_particles.push(MeterParticle {
-                beat_in_bar: self.rng.random_range(0..meter),
-                meter,
-                weight: 1.0 / 3.0 / meter_counts[meter_index] as f32,
-            });
-        }
+        self.meter_posterior = MeterPosterior::new();
         self.tempo.reset();
         self.meter.reset();
         self.beat_count = 0;
@@ -944,7 +966,8 @@ impl ParticleDecoder {
                 self.reacquire_beat_hypotheses(0.0);
             }
         } else if strong_onset && predictive_boundary >= 0.1 {
-            self.contradictory_onsets = 0;
+            // A new tempo can still land on the old grid every few beats.
+            self.contradictory_onsets = self.contradictory_onsets.saturating_sub(1);
         }
 
         let mut weight_sum = 0.0;
@@ -995,9 +1018,9 @@ impl ParticleDecoder {
         self.recent_downbeat_peak = downbeat_activation.max(self.recent_downbeat_peak * 0.82);
         if grid_boundary {
             self.frames_since_grid_boundary = 0;
-            let meter_posterior =
-                self.advance_meter_particles(self.recent_beat_peak, self.recent_downbeat_peak);
-            self.meter.advance(meter_posterior);
+            self.meter_posterior
+                .advance(self.recent_beat_peak, self.recent_downbeat_peak);
+            self.meter.advance(self.meter_posterior);
             self.tempo.update(dominant_tempo_cluster(&self.particles));
             self.beat_count = self.beat_count.saturating_add(1);
             if self.meter.beat_in_bar == 0 {
@@ -1007,14 +1030,13 @@ impl ParticleDecoder {
             self.recent_downbeat_peak = downbeat_activation;
         }
 
-        let meter_posterior = meter_posterior(&self.meter_particles);
         let downbeat = beat
             && self.meter.beat_in_bar == 0
             && downbeat_activation > beat_activation
             && downbeat_activation > 0.1;
         let tempo = self.tempo.tempo();
         let tempo_confidence = tempo_cluster_confidence(&self.particles, tempo);
-        let meter_confidence = self.meter.confidence(meter_posterior);
+        let meter_confidence = self.meter.confidence(self.meter_posterior);
         let tracking_confidence =
             (phase_lock * (tempo_confidence * 0.4 + meter_confidence * 0.6)).clamp(0.0, 1.0);
         BeatEstimate {
@@ -1065,77 +1087,6 @@ impl ParticleDecoder {
         }
         self.particles = resampled;
     }
-
-    fn advance_meter_particles(
-        &mut self,
-        beat_activation: f32,
-        downbeat_activation: f32,
-    ) -> MeterPosterior {
-        const METER_CHANGE_PROBABILITY: f32 = 0.005;
-        let mut weight_sum = 0.0;
-        for particle in &mut self.meter_particles {
-            particle.beat_in_bar = (particle.beat_in_bar + 1) % particle.meter;
-            if particle.beat_in_bar == 0 && self.rng.random::<f32>() < METER_CHANGE_PROBABILITY {
-                let alternative = self.rng.random_range(0..2);
-                particle.meter = match (particle.meter, alternative) {
-                    (2 | 3, 0) => 4,
-                    (2, _) | (4, 0) => 3,
-                    (3 | 4, _) => 2,
-                    _ => 4,
-                };
-                particle.beat_in_bar = 0;
-            }
-            let likelihood = meter_observation_likelihood(
-                beat_activation,
-                downbeat_activation,
-                1.0,
-                particle.beat_in_bar == 0,
-            )
-            .max(0.003);
-            particle.weight *= likelihood;
-            weight_sum += particle.weight;
-        }
-        if weight_sum <= f32::EPSILON {
-            let weight = 1.0 / Self::METER_PARTICLES as f32;
-            for particle in &mut self.meter_particles {
-                particle.weight = weight;
-            }
-        } else {
-            for particle in &mut self.meter_particles {
-                particle.weight /= weight_sum;
-            }
-        }
-
-        let effective = 1.0
-            / self
-                .meter_particles
-                .iter()
-                .map(|particle| particle.weight.powi(2))
-                .sum::<f32>();
-        if effective < Self::METER_PARTICLES as f32 * 0.65 {
-            self.systematic_meter_resample();
-        }
-        meter_posterior(&self.meter_particles)
-    }
-
-    fn systematic_meter_resample(&mut self) {
-        let step = 1.0 / Self::METER_PARTICLES as f32;
-        let start = self.rng.random::<f32>() * step;
-        let mut cumulative = self.meter_particles[0].weight;
-        let mut source = 0;
-        let mut resampled = Vec::with_capacity(Self::METER_PARTICLES);
-        for index in 0..Self::METER_PARTICLES {
-            let target = start + index as f32 * step;
-            while target > cumulative && source + 1 < self.meter_particles.len() {
-                source += 1;
-                cumulative += self.meter_particles[source].weight;
-            }
-            let mut particle = self.meter_particles[source];
-            particle.weight = step;
-            resampled.push(particle);
-        }
-        self.meter_particles = resampled;
-    }
 }
 
 fn beat_observation_likelihood(
@@ -1151,16 +1102,14 @@ fn beat_observation_likelihood(
 fn meter_observation_likelihood(
     beat_activation: f32,
     downbeat_activation: f32,
-    boundary: f32,
     predicts_downbeat: bool,
 ) -> f32 {
-    let non_beat = (1.0 - beat_activation - downbeat_activation).clamp(0.001, 1.0);
-    let boundary_activation = if predicts_downbeat {
+    let activation = if predicts_downbeat {
         downbeat_activation
     } else {
         beat_activation
     };
-    non_beat * (1.0 - boundary) + boundary_activation * boundary + 1e-6
+    (activation + 1e-6).max(0.003)
 }
 
 fn finite_activation(activation: f32) -> f32 {
@@ -1267,20 +1216,6 @@ fn tempo_cluster_confidence(particles: &[Particle], tempo: f32) -> f32 {
         .filter(|particle| ((particle.tempo / tempo) - 1.0).abs() <= 0.05)
         .map(|particle| particle.weight)
         .sum()
-}
-
-fn meter_posterior(particles: &[MeterParticle]) -> MeterPosterior {
-    let mut posterior = MeterPosterior {
-        beat_probabilities: [[0.0; 4]; 3],
-        probabilities: [0.0; 3],
-    };
-    for particle in particles {
-        let meter_index = usize::from(particle.meter - 2);
-        posterior.probabilities[meter_index] += particle.weight;
-        posterior.beat_probabilities[meter_index][usize::from(particle.beat_in_bar)] +=
-            particle.weight;
-    }
-    posterior
 }
 
 fn circular_phase(particles: &[Particle]) -> f32 {
@@ -1510,22 +1445,41 @@ mod tests {
 
     #[test]
     fn meter_observations_penalize_false_downbeats() {
-        let ordinary_beat = meter_observation_likelihood(0.95, 0.01, 1.0, false);
-        let false_downbeat = meter_observation_likelihood(0.95, 0.01, 1.0, true);
-        let actual_downbeat = meter_observation_likelihood(0.01, 0.95, 1.0, true);
-        let missed_downbeat = meter_observation_likelihood(0.01, 0.95, 1.0, false);
+        let ordinary_beat = meter_observation_likelihood(0.95, 0.01, false);
+        let false_downbeat = meter_observation_likelihood(0.95, 0.01, true);
+        let actual_downbeat = meter_observation_likelihood(0.01, 0.95, true);
+        let missed_downbeat = meter_observation_likelihood(0.01, 0.95, false);
 
         assert!(ordinary_beat > false_downbeat * 50.0);
         assert!(actual_downbeat > missed_downbeat * 50.0);
     }
 
     #[test]
-    fn meter_particles_begin_with_equal_meter_priors() {
+    fn meter_posterior_begins_with_equal_meter_priors() {
         let decoder = ParticleDecoder::new();
-        let posterior = meter_posterior(&decoder.meter_particles);
+        let posterior = decoder.meter_posterior;
 
         for probability in posterior.probabilities {
             approx::assert_abs_diff_eq!(probability, 1.0 / 3.0, epsilon = 0.0001);
+        }
+    }
+
+    #[test]
+    fn meter_transition_preserves_alternatives_at_the_bar_boundary() {
+        let mut posterior = MeterPosterior {
+            beat_probabilities: [[0.0; 4], [0.0, 0.0, 1.0, 0.0], [0.0; 4]],
+            probabilities: [0.0, 1.0, 0.0],
+        };
+
+        posterior.advance(0.5, 0.5);
+
+        for (meter, expected_probability) in [(2, 0.0025), (3, 0.995), (4, 0.0025)] {
+            approx::assert_abs_diff_eq!(
+                posterior.meter_probability(meter),
+                expected_probability,
+                epsilon = 0.000_001
+            );
+            assert_eq!(posterior.strongest_beat(meter), 0);
         }
     }
 
@@ -1672,6 +1626,29 @@ mod tests {
         assert!(decoder.beat_count >= 32);
         assert!(decoder.bar_count >= 8);
         assert!(decoder.meter.locked);
+        assert_eq!(decoder.contradictory_onsets, 0);
+    }
+
+    #[test]
+    fn intermittent_grid_agreement_does_not_prevent_reacquisition() {
+        let mut decoder = ParticleDecoder::new();
+        decoder.seed_tempo(120.0);
+        decoder.tempo.published = Some(120.0);
+        let weight = 1.0 / decoder.particles.len() as f32;
+        let mut estimate = BeatEstimate::default();
+
+        for phase in [0.45, 0.45, 0.96, 0.45, 0.45] {
+            for particle in &mut decoder.particles {
+                particle.phase = phase;
+                particle.weight = weight;
+            }
+            estimate = decoder.update(0.95, 0.01);
+            for _ in 0..ParticleDecoder::MIN_CONTRADICTORY_ONSET_FRAMES {
+                decoder.update(0.01, 0.01);
+            }
+        }
+
+        assert!(estimate.beat_position < 0.1 || estimate.beat_position > 0.9);
         assert_eq!(decoder.contradictory_onsets, 0);
     }
 
