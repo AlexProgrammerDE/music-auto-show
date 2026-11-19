@@ -1,3 +1,20 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Pass configuration explicitly to code and use Command::env for child processes. Mutating the process environment is unsafe in a multithreaded service." },
+    { path = "std::env::remove_var", reason = "Pass configuration explicitly to code and use Command::env_remove for child processes. Mutating the process environment is unsafe in a multithreaded service." },
+    { path = "std::thread::sleep", reason = "Use tokio::time::sleep in async code to keep the runtime worker available." },
+    { path = "std::process::Command::output", reason = "Use tokio::process::Command::output to await the child without blocking the runtime." },
+    { path = "std::process::Command::status", reason = "Use tokio::process::Command::status to await the child without blocking the runtime." },
+    { path = "std::process::Command::spawn", reason = "Use tokio::process::Command::spawn so the child can be awaited asynchronously." },
+    { path = "std::fs::read", reason = "Use tokio::fs::read or perform the read inside spawn_blocking." },
+    { path = "std::fs::read_to_string", reason = "Use tokio::fs::read_to_string or perform the read inside spawn_blocking." },
+    { path = "std::fs::write", reason = "Use tokio::fs::write or perform the write inside spawn_blocking." },
+    { path = "ureq::get", reason = "Use Agent::get on a ureq agent configured with a global timeout." },
+    { path = "ureq::post", reason = "Use Agent::post on a ureq agent configured with a global timeout." },
+    { path = "ureq::agent", reason = "Use Agent::config_builder and set a global timeout before creating the agent." },
+    { path = "ureq::Agent::new_with_defaults", reason = "Use Agent::config_builder and set a global timeout before creating the agent." },
+    { path = "ureq::run", reason = "Use Agent::run on a ureq agent configured with a global timeout." },
+]

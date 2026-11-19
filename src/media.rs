@@ -1,24 +1,13 @@
 //! Cross-platform now-playing metadata and album-art color extraction.
 
-use std::{
-    collections::HashMap,
-    fmt::Write,
-    fs::File,
-    io::{Cursor, Read},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, fmt::Write, sync::Arc, time::Duration};
 
-use image::{
-    DynamicImage, ExtendedColorType, ImageReader, Limits, codecs::jpeg::JpegEncoder,
-    imageops::FilterType,
-};
+use image::{DynamicImage, ExtendedColorType, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use nowhear::{Artwork, MediaSource, MediaSourceBuilder, PlaybackState, PlayerInfo};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
-use url::Url;
 
 use crate::proto::v1::{MediaInfo, RgbColor};
 
@@ -198,7 +187,7 @@ pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: Cancellat
                         result = tokio::task::spawn_blocking(move || {
                             artwork
                                 .as_ref()
-                                .and_then(read_artwork)
+                                .and_then(artwork_input::read)
                                 .map_or_else(ProcessedArtwork::default, |bytes| {
                                     process_artwork(&bytes, 5)
                                 })
@@ -278,50 +267,79 @@ fn artwork_source_key(artwork: &Artwork) -> String {
     }
 }
 
-fn read_artwork(artwork: &Artwork) -> Option<Vec<u8>> {
-    match artwork {
-        Artwork::Bytes { data, .. } => {
-            (data.len() <= ARTWORK_MAX_SOURCE_BYTES).then(|| data.to_vec())
-        }
-        Artwork::Url { url } => {
-            let parsed = Url::parse(url).ok()?;
-            match parsed.scheme() {
-                "file" => read_limited(File::open(parsed.to_file_path().ok()?).ok()?),
-                "http" | "https" => {
-                    let mut response = ureq::get(url).call().ok()?;
-                    let bytes = response
-                        .body_mut()
-                        .with_config()
-                        .limit(ARTWORK_MAX_SOURCE_BYTES as u64 + 1)
-                        .read_to_vec()
-                        .ok()?;
-                    (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
+mod artwork_input {
+    #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
+    use std::{
+        fs::File,
+        io::{Cursor, Read},
+        time::Duration,
+    };
+
+    use image::{DynamicImage, ImageReader, Limits};
+    use nowhear::Artwork;
+    use url::Url;
+
+    use super::{ARTWORK_MAX_DECODE_BYTES, ARTWORK_MAX_SOURCE_BYTES, ARTWORK_MAX_SOURCE_EDGE};
+
+    const ARTWORK_READ_LIMIT: u64 = ARTWORK_MAX_SOURCE_BYTES as u64 + 1;
+
+    pub(super) fn read(artwork: &Artwork) -> Option<Vec<u8>> {
+        match artwork {
+            Artwork::Bytes { data, .. } => {
+                (data.len() <= ARTWORK_MAX_SOURCE_BYTES).then(|| data.to_vec())
+            }
+            Artwork::Url { url } => {
+                let parsed = Url::parse(url).ok()?;
+                match parsed.scheme() {
+                    "file" => read_limited(File::open(parsed.to_file_path().ok()?).ok()?),
+                    "http" | "https" => {
+                        let mut response = ureq::Agent::config_builder()
+                            .timeout_connect(Some(Duration::from_secs(10)))
+                            .timeout_global(Some(Duration::from_secs(30)))
+                            .build()
+                            .new_agent()
+                            .get(url)
+                            .call()
+                            .ok()?;
+                        let bytes = response
+                            .body_mut()
+                            .with_config()
+                            .limit(ARTWORK_READ_LIMIT)
+                            .read_to_vec()
+                            .ok()?;
+                        (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
+                    }
+                    _ => None,
                 }
-                _ => None,
             }
         }
     }
-}
 
-fn read_limited(reader: impl Read) -> Option<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader
-        .take(ARTWORK_MAX_SOURCE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
+    fn read_limited(reader: impl Read) -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        reader
+            .take(ARTWORK_READ_LIMIT)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        (bytes.len() <= ARTWORK_MAX_SOURCE_BYTES).then_some(bytes)
+    }
+
+    pub(super) fn decode(image_bytes: &[u8]) -> Option<DynamicImage> {
+        let mut reader = ImageReader::new(Cursor::new(image_bytes))
+            .with_guessed_format()
+            .ok()?;
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(ARTWORK_MAX_SOURCE_EDGE);
+        limits.max_image_height = Some(ARTWORK_MAX_SOURCE_EDGE);
+        limits.max_alloc = Some(ARTWORK_MAX_DECODE_BYTES);
+        reader.limits(limits);
+        reader.decode().ok()
+    }
 }
 
 fn process_artwork(image_bytes: &[u8], color_count: usize) -> ProcessedArtwork {
-    let Ok(mut reader) = ImageReader::new(Cursor::new(image_bytes)).with_guessed_format() else {
-        return ProcessedArtwork::default();
-    };
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(ARTWORK_MAX_SOURCE_EDGE);
-    limits.max_image_height = Some(ARTWORK_MAX_SOURCE_EDGE);
-    limits.max_alloc = Some(ARTWORK_MAX_DECODE_BYTES);
-    reader.limits(limits);
-    let Ok(image) = reader.decode() else {
+    let Some(image) = artwork_input::decode(image_bytes) else {
         return ProcessedArtwork::default();
     };
     let colors = extract_colors(&image, color_count);

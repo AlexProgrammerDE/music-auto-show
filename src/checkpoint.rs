@@ -133,6 +133,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "This synchronous test reads back a local checkpoint fixture"
+    )]
     fn downloads_verified_checkpoint_atomically() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let path = directory.path().join("models/beatnet-plus.pt");
@@ -163,6 +167,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "This synchronous test writes and reads back a local checkpoint fixture"
+    )]
     fn preserves_existing_checkpoint_without_requesting_download() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let path = directory.path().join("beatnet-plus.pt");

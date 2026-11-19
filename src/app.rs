@@ -1436,6 +1436,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "This test writes a tiny file to simulate a blocked configuration directory"
+    )]
     async fn failed_config_persistence_restores_the_running_show() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let blocked_parent = directory.path().join("not-a-directory");

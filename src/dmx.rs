@@ -560,6 +560,10 @@ impl DmxOutput {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The dedicated DMX thread waits for the serial mark-after-break interval"
+)]
 fn send_open_dmx(
     port: &mut dyn SerialPort,
     universe: &[u8],
@@ -596,6 +600,10 @@ fn send_open_dmx(
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The dedicated DMX thread enforces the minimum time between serial breaks"
+)]
 fn wait_for_break_spacing(last_break_at: Option<Instant>) {
     let Some(last_break_at) = last_break_at else {
         return;

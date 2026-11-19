@@ -514,6 +514,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "This test reads back a small local configuration file after persistence"
+    )]
     async fn imported_grandma2_fixture_is_persisted_and_listed() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let config_path = directory.path().join("config.json");

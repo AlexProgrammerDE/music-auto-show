@@ -29,6 +29,10 @@ fn main() {
         )
         .expect("protobuf definitions compile");
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Cargo runs this build script synchronously and needs the completed frontend build"
+    )]
     let status = Command::new("bun")
         .args(["run", "--cwd", "frontend", "build"])
         .status()
