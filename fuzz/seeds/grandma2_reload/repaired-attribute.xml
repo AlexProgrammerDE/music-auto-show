@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+  <FixtureType name="Fixture" mode="Default">
+    <manufacturer>Maker</manufacturer>
+    <Info type="Revision">1</Info>
+    <Modules><Module index="0" name="Main" class="Conventional">
+      <ChannelType attribute="EFFECTMACROS" feature="EFFECTMACROS" coarse="1" default="128">
+        <ChannelFunction subattribute="EFFECTMACROSELECT" attribute="EFFECTMACROS" feature="EFFECTMACROS" min_dmx_24="0" max_dmx_24="16777215">
+          <ChannelSet name="Pattern <>" from_dmx="0" to_dmx="127"/>
+          <ChannelSet name="Sound" from_dmx="128" to_dmx="255"/>
+        </ChannelFunction>
+      </ChannelType>
+    </Module></Modules>
+  </FixtureType>
+</MA>

@@ -126,6 +126,8 @@ empty_enum_variants_with_brackets = "warn"
 
 [lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz builds the crate with `--cfg fuzzing`; see fuzz/.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 unused_qualifications = "warn"
 unused_lifetimes = "warn"
 redundant_lifetimes = "warn"

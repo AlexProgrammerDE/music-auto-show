@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+  <FixtureType name="Pixel bar" mode="Two cells">
+    <manufacturer>Example</manufacturer>
+    <Modules>
+      <Module index="7" name="Cell" class="Conventional" beamtype="Wash">
+        <ChannelType attribute="COLORRGB1" feature="RGB" coarse="1">
+          <ChannelFunction subattribute="COLORRGB1" attribute="COLORRGB1" feature="RGB" attribute_user_name="Red" min_dmx_24="0" max_dmx_24="16777215"/>
+        </ChannelType>
+        <ChannelType attribute="DIM" feature="DIMMER" coarse="2">
+          <ChannelFunction subattribute="DIM" attribute="DIM" feature="DIMMER" min_dmx_24="0" max_dmx_24="16777215"/>
+        </ChannelType>
+      </Module>
+    </Modules>
+    <Instances>
+      <Instance index="0" module_index="7" patch="1"/>
+      <Instance index="1" module_index="7" patch="5"/>
+    </Instances>
+  </FixtureType>
+</MA>

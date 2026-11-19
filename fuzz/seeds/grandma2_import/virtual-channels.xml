@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+  <FixtureType name="Virtual channels" mode="Default">
+    <manufacturer>Example</manufacturer>
+    <Info type="Warning">Check the strobe channel.</Info>
+    <Modules>
+      <Module index="0" name="Patched" class="LED" beamtype="Wash">
+        <ChannelType attribute="DIM" feature="DIMMER" coarse="1">
+          <ChannelFunction subattribute="DIM" attribute="DIM" feature="DIMMER" min_dmx_24="0" max_dmx_24="16777215"/>
+        </ChannelType>
+        <ChannelType attribute="VIRTUALDIM" feature="DIMMER">
+          <ChannelFunction subattribute="DIM" attribute="DIM" feature="DIMMER" min_dmx_24="0" max_dmx_24="16777215"/>
+        </ChannelType>
+      </Module>
+      <Module index="1" name="Strobe" class="Conventional">
+        <ChannelType attribute="SHUTTER" feature="SHUTTER" coarse="1">
+          <ChannelFunction subattribute="STROBE" attribute="SHUTTER" feature="SHUTTER" min_dmx_24="0" max_dmx_24="16777215"/>
+        </ChannelType>
+      </Module>
+    </Modules>
+    <Instances>
+      <Instance index="0" module_index="0" patch="1"/>
+    </Instances>
+  </FixtureType>
+</MA>

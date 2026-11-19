@@ -1,0 +1,54 @@
+[package]
+name = "music-auto-show-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+prost = "0.14.4"
+
+[dependencies.music-auto-show]
+path = ".."
+
+# Keep the fuzz crate out of the main project's build, Clippy, and cargo-deny runs.
+[workspace]
+members = []
+
+[[bin]]
+name = "grandma2_import"
+path = "fuzz_targets/grandma2_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grandma2_reload"
+path = "fuzz_targets/grandma2_reload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_json"
+path = "fuzz_targets/config_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_proto"
+path = "fuzz_targets/config_proto.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "beatnet_checkpoint"
+path = "fuzz_targets/beatnet_checkpoint.rs"
+test = false
+doc = false
+bench = false

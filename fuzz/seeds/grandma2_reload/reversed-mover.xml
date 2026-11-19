@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+  <FixtureType name="Reversed mover" mode="Default">
+    <manufacturer>Example</manufacturer>
+    <Modules>
+      <Module index="0" name="Main" class="Headmover" beamtype="Wash" beam_angle="30">
+        <Body><Size x="0.2" y="0.2" z="0.3"/></Body>
+        <ChannelType attribute="PAN" feature="POSITION" coarse="1" fine="2">
+          <ChannelFunction subattribute="PAN" attribute="PAN" feature="POSITION" min_dmx_24="0" max_dmx_24="16777215" physfrom="270" physto="-270"/>
+        </ChannelType>
+        <ChannelType attribute="ZOOM" feature="BEAM" coarse="3">
+          <ChannelFunction subattribute="ZOOM" attribute="ZOOM" feature="BEAM" min_dmx_24="0" max_dmx_24="16777215" physfrom="50" physto="10"/>
+        </ChannelType>
+      </Module>
+    </Modules>
+  </FixtureType>
+</MA>

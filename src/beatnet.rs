@@ -527,6 +527,16 @@ fn verify_checkpoint_archive(reader: impl Read + Seek) -> Result<(), BeatNetErro
     Ok(())
 }
 
+/// Runs the checkpoint archive checks on an in-memory file for the fuzz
+/// targets in `fuzz/`. candle is not called.
+///
+/// # Errors
+/// Returns an error if the archive is malformed, too large, or fails a CRC check.
+#[cfg(fuzzing)]
+pub fn verify_checkpoint_archive_bytes(checkpoint: &[u8]) -> Result<(), BeatNetError> {
+    verify_checkpoint_archive(io::Cursor::new(checkpoint))
+}
+
 fn load_tensor<S: Into<Shape>>(
     builder: &VarBuilder<'_>,
     shape: S,
