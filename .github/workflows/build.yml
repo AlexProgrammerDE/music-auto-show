@@ -32,7 +32,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux system libraries
         if: runner.os == 'Linux'
@@ -41,15 +43,20 @@ jobs:
           sudo apt-get install -y libasound2-dev libdbus-1-dev libpipewire-0.3-dev libudev-dev pkg-config
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
+      # Tag builds publish release binaries, so they never restore a cache.
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
 
       - name: Install root tools
         run: bun install --frozen-lockfile
@@ -65,10 +72,13 @@ jobs:
 
       - name: Rename release binary
         shell: bash
-        run: cp "${{ matrix.binary }}" "${{ matrix.artifact_name }}"
+        env:
+          BINARY: ${{ matrix.binary }}
+          ARTIFACT_NAME: ${{ matrix.artifact_name }}
+        run: cp "$BINARY" "$ARTIFACT_NAME"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
@@ -83,12 +93,12 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
 
       - name: Create release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: |
             artifacts/music-auto-show-linux/music-auto-show-linux
