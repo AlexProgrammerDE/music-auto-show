@@ -43,6 +43,32 @@ Run the relevant checks before review. State the command and result in the pull 
 If a check cannot run, explain the missing dependency or service. Do not claim it passed.
 Keep generated artifacts consistent with their source and review their diff.
 
+## Fuzzing
+
+The `fuzz/` crate holds cargo-fuzz targets for the grandMA2 fixture importer, the show configuration loaders, and the BeatNet+ checkpoint integrity checks.
+It is a separate Cargo workspace, so `cargo build`, Clippy, and cargo-deny of the main project ignore it.
+The [Fuzz workflow](.github/workflows/fuzz.yml) runs each target for 60 seconds when a parser changes and for 10 minutes every week.
+
+Install cargo-fuzz 0.13.2 and `nightly-2026-07-09`.
+Newer nightlies, including `nightly-2026-11-01`, fail to compile `zbus`.
+Run the commands below from `fuzz/`:
+
+```bash
+# List the targets
+cargo +nightly-2026-07-09 fuzz list
+
+# Run one target for 5 minutes, starting from its seed files
+mkdir -p corpus/config_json
+cargo +nightly-2026-07-09 fuzz run config_json corpus/config_json seeds/config_json -- -max_total_time=300 -rss_limit_mb=2048 -timeout=10
+
+# Reproduce and minimize a failing input
+cargo +nightly-2026-07-09 fuzz run config_json artifacts/config_json/<file>
+cargo +nightly-2026-07-09 fuzz tmin config_json artifacts/config_json/<file>
+```
+
+Keep `fuzz/seeds/<target>/` small and use only synthetic data. Never add a real BeatNet+ checkpoint.
+When a target finds a bug, fix the parser and add a unit test that uses the minimized input.
+
 ## Style and documentation
 
 Follow the existing code conventions and repository formatter. Keep commit hooks enabled.
