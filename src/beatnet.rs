@@ -1,6 +1,8 @@
 use std::{
     array,
     collections::VecDeque,
+    fs::File,
+    io::{self, BufReader, Read, Seek},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
@@ -445,6 +447,9 @@ fn load_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
             "checkpoint is {checkpoint_size} bytes; maximum supported size is {MAX_CHECKPOINT_BYTES} bytes"
         )));
     }
+    let checkpoint =
+        File::open(path).map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
+    verify_checkpoint_archive(BufReader::new(checkpoint))?;
     let builder = VarBuilder::from_pth(path, DType::F32, &Device::Cpu)
         .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
     let mut lstm = Vec::with_capacity(LSTM_LAYERS);
@@ -480,6 +485,29 @@ fn load_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
         output_weight: load_tensor(&builder, (3, HIDDEN_SIZE), "output_linear.weight")?,
         output_bias: load_tensor(&builder, 3, "output_linear.bias")?,
     })
+}
+
+/// Reads every ZIP entry to its end so the ZIP reader checks the entry size and
+/// CRC-32. candle stops reading `data.pkl` at the pickle STOP opcode, before
+/// that check, so without this step a corrupted pickle reaches candle's reader.
+fn verify_checkpoint_archive(reader: impl Read + Seek) -> Result<(), BeatNetError> {
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
+    let mut remaining_bytes = MAX_CHECKPOINT_BYTES;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
+        remaining_bytes = remaining_bytes.checked_sub(entry.size()).ok_or_else(|| {
+            BeatNetError::InvalidCheckpoint(format!(
+                "checkpoint entries exceed {MAX_CHECKPOINT_BYTES} bytes"
+            ))
+        })?;
+        io::copy(&mut entry, &mut io::sink()).map_err(|error| {
+            BeatNetError::InvalidCheckpoint(format!("checkpoint entry {index}: {error}"))
+        })?;
+    }
+    Ok(())
 }
 
 fn load_tensor<S: Into<Shape>>(
@@ -1681,6 +1709,62 @@ mod tests {
         posterior.probabilities[meter_index] = 0.95;
         posterior.beat_probabilities[meter_index][usize::from(beat_in_bar)] = 0.95;
         posterior
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "This synchronous test corrupts a local checkpoint fixture"
+    )]
+    fn rejects_corrupted_pickle_before_candle_reads_it() {
+        // Each corruption changes `data.pkl` without updating the ZIP CRC.
+        // candle-core 0.11 allocates a BINUNICODE string's declared length
+        // before it reads the string, so a corrupted length requests 4 GiB. It
+        // also stops at the STOP opcode before the CRC check, so it accepts the
+        // changed string without an error.
+        let pickle_string = b"X\x01\x00\x00\x00a";
+        for (offset, corruption) in [(1, &[0xff_u8; 4][..]), (5, b"b")] {
+            let directory = tempfile::tempdir().expect("temporary directory should be created");
+            let path = write_checkpoint(directory.path(), b"\x80\x02X\x01\x00\x00\x00a.");
+            let mut bytes = std::fs::read(&path).expect("checkpoint should be readable");
+            let start = bytes
+                .windows(pickle_string.len())
+                .position(|window| window == pickle_string)
+                .expect("pickle string should be stored uncompressed")
+                + offset;
+            bytes[start..start + corruption.len()].copy_from_slice(corruption);
+            std::fs::write(&path, bytes).expect("checkpoint should be writable");
+
+            assert_eq!(
+                invalid_checkpoint_message(&path),
+                "checkpoint entry 0: Invalid checksum"
+            );
+        }
+    }
+
+    /// Writes a PyTorch ZIP checkpoint whose `data.pkl` entry holds `pickle`.
+    fn write_checkpoint(directory: &Path, pickle: &[u8]) -> PathBuf {
+        let path = directory.join("checkpoint.pt");
+        let file = File::create(&path).expect("checkpoint should be created");
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                "archive/data.pkl",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .expect("pickle entry should start");
+        io::Write::write_all(&mut writer, pickle).expect("pickle entry should be written");
+        writer.finish().expect("checkpoint archive should finish");
+        path
+    }
+
+    fn invalid_checkpoint_message(path: &Path) -> String {
+        match BeatNetPlus::load(path) {
+            Ok(_) => panic!("checkpoint should be rejected"),
+            Err(BeatNetError::InvalidCheckpoint(message)) => message,
+            Err(error) => panic!("checkpoint failed with an unexpected error: {error}"),
+        }
     }
 
     #[expect(

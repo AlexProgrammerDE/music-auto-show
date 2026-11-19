@@ -2148,6 +2148,7 @@ dependencies = [
  "ureq",
  "url",
  "windows",
+ "zip",
 ]
 
 [[package]]
