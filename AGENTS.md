@@ -60,6 +60,7 @@ bun run --cwd frontend lint
 bun run --cwd frontend test
 cargo fmt --all -- --check
 cargo test --all-targets
+cargo deny --locked check # Requires cargo-deny 0.20.2
 ```
 
 ## Architecture

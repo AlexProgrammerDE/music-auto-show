@@ -74,3 +74,5 @@ The commit message hook checks the first line against the Conventional Commit ru
 Before a push, Lefthook runs the checks that match the changed files.
 It checks protobuf formatting, lints protobuf definitions, and generates frontend types when the relevant files change.
 It also runs the frontend checks, Clippy, and Rust tests when their inputs change.
+Install cargo-deny 0.20.2 for pushes that change `Cargo.toml`, `Cargo.lock`, or `deny.toml`.
+Run `cargo deny --locked check` to check Rust dependencies locally.

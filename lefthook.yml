@@ -40,6 +40,9 @@ pre-push:
     - name: frontend
       glob: "{frontend/**,*.proto,buf.yaml,buf.gen.yaml,buf.lock,package.json,bun.lock,.bun-version}"
       run: bun run frontend:check
+    - name: cargo-deny
+      glob: "{Cargo.toml,Cargo.lock,deny.toml}"
+      run: cargo deny --locked check
     - name: rust
       glob: "{*.rs,Cargo.toml,Cargo.lock,clippy.toml,fixtures/**,frontend/**,*.proto,buf.yaml,buf.gen.yaml,buf.lock,package.json,bun.lock,.bun-version}"
       run: cargo clippy --all-targets --locked -- -D warnings && cargo test --all-targets --locked
