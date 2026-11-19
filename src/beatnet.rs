@@ -3,6 +3,7 @@ use std::{
     collections::VecDeque,
     fs::File,
     io::{self, BufReader, Read, Seek},
+    panic,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
@@ -450,6 +451,22 @@ fn load_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
     let checkpoint =
         File::open(path).map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
     verify_checkpoint_archive(BufReader::new(checkpoint))?;
+    // candle-core 0.11 panics on some malformed pickles, for example when a
+    // tensor has fewer rebuild arguments than expected. Report that as an
+    // invalid checkpoint so the audio worker keeps running without BeatNet+.
+    panic::catch_unwind(|| read_weights(path)).unwrap_or_else(|payload| {
+        let reason = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("unknown panic");
+        Err(BeatNetError::InvalidCheckpoint(format!(
+            "checkpoint reader panicked: {reason}"
+        )))
+    })
+}
+
+fn read_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
     let builder = VarBuilder::from_pth(path, DType::F32, &Device::Cpu)
         .map_err(|error| BeatNetError::InvalidCheckpoint(error.to_string()))?;
     let mut lstm = Vec::with_capacity(LSTM_LAYERS);
@@ -1740,6 +1757,24 @@ mod tests {
                 "checkpoint entry 0: Invalid checksum"
             );
         }
+    }
+
+    #[test]
+    fn reports_checkpoint_reader_panic_as_invalid_checkpoint() {
+        // A `_rebuild_tensor_v2` call with an empty argument tuple and a valid
+        // CRC. candle-core 0.11.1 removes tuple items by index without a
+        // length check and panics.
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = write_checkpoint(
+            directory.path(),
+            b"\x80\x02}(X\x0a\x00\x00\x00conv1.biasctorch._utils\n_rebuild_tensor_v2\n)Ru.",
+        );
+
+        let message = invalid_checkpoint_message(&path);
+        assert!(
+            message.starts_with("checkpoint reader panicked: "),
+            "unexpected error: {message}"
+        );
     }
 
     /// Writes a PyTorch ZIP checkpoint whose `data.pkl` entry holds `pickle`.
