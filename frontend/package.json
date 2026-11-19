@@ -11,10 +11,11 @@
     "format:check": "oxfmt --check .",
     "typecheck": "vite build --emptyOutDir=false && tsc -b",
     "test": "vitest run",
-    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test",
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test && bun run knip",
     "preview": "vite preview",
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
-    "fix": "oxlint --fix . && bun run format"
+    "fix": "oxlint --fix . && bun run format",
+    "knip": "knip"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -47,8 +48,6 @@
     "@effect/tsgo": "0.70.0",
     "@shadcn/lint": "0.2.5",
     "@tanstack/router-plugin": "^1.168.22",
-    "@testing-library/jest-dom": "^7.0.0",
-    "@testing-library/react": "^16.3.2",
     "@types/node": "^26.0.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -56,6 +55,7 @@
     "@vitejs/plugin-react": "^6",
     "eslint-plugin-better-tailwindcss": "4.11.0",
     "jsdom": "^30.0.0",
+    "knip": "6.35.0",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
     "oxlint-tsgolint": "7.0.2007",

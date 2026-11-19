@@ -17,7 +17,7 @@ import {
 } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a factory for the base class.
-export class RpcFailure extends Schema.TaggedError<RpcFailure, { readonly brand: unique symbol }>()(
+class RpcFailure extends Schema.TaggedError<RpcFailure, { readonly brand: unique symbol }>()(
   "RpcFailure",
   {
     operation: Schema.String,
@@ -71,7 +71,9 @@ type ShowApiShape = {
   readonly watchLiveFrames: (onFrame: (frame: LiveFrame) => void) => Effect.Effect<void, RpcFailure>
 }
 
-export class ShowApi extends Context.Service<ShowApi, ShowApiShape>()("music-auto-show/ShowApi") {}
+export class ShowApi extends Context.Service<ShowApi, ShowApiShape>()(
+  "frontend/lib/show-api/ShowApi",
+) {}
 
 const transport = createGrpcWebTransport({
   baseUrl: `${window.location.origin}/api`,
@@ -80,7 +82,7 @@ const transport = createGrpcWebTransport({
 const client = createClient(MusicAutoShowService, transport)
 
 function rpcFailure(operation: string, cause: unknown) {
-  return new RpcFailure({
+  return RpcFailure.make({
     operation,
     message: cause instanceof Error ? cause.message : String(cause),
   })
@@ -243,7 +245,7 @@ const liveApi: ShowApiShape = {
     }),
 }
 
-export const showApiRuntime = ManagedRuntime.make(Layer.succeed(ShowApi)(liveApi))
+const showApiRuntime = ManagedRuntime.make(Layer.succeed(ShowApi)(liveApi))
 
 export function runShowApi<A, E>(
   effect: Effect.Effect<A, E, ShowApi>,

@@ -77,7 +77,7 @@ function LightingPalette({
   }, [activeIndex, media])
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       surfaceRef.current = resizeCanvas(canvas, entry.contentRect.width, entry.contentRect.height)

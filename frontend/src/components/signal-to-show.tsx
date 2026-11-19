@@ -94,6 +94,7 @@ function reactionForMode(mode: VisualizationMode, band: string | undefined) {
       return "Energy + bass"
     }
   }
+  return undefined
 }
 
 export function FixtureReactionMatrix({

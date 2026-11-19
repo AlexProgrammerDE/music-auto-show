@@ -59,7 +59,7 @@ type EmitterVisual = {
   readonly metadata: FixtureEmitter
   readonly lens: Mesh<BufferGeometry, MeshStandardMaterial>
   readonly lenses: readonly Mesh<BufferGeometry, MeshStandardMaterial>[]
-  readonly beam?: Mesh<BufferGeometry, MeshBasicMaterial>
+  readonly beam?: Mesh<BufferGeometry, MeshBasicMaterial> | undefined
   readonly beamOrigin: Object3D
   readonly beamClippingDistanceMeters: number
   readonly directionFrame: Object3D
@@ -79,15 +79,15 @@ type FixtureVisual = {
   readonly fixtureType: GrandMa2FixtureType
   readonly root: Group
   readonly mount: Vector3
-  readonly panPivot?: Group
-  readonly tiltPivot?: Group
+  readonly panPivot?: Group | undefined
+  readonly tiltPivot?: Group | undefined
   readonly importedAxes: boolean
-  readonly panBaseQuaternion?: Quaternion
-  readonly tiltBaseQuaternion?: Quaternion
+  readonly panBaseQuaternion?: Quaternion | undefined
+  readonly tiltBaseQuaternion?: Quaternion | undefined
   readonly emitterGroup: Group
   readonly housingMaterials: readonly MeshStandardMaterial[]
   readonly emitters: readonly EmitterVisual[]
-  readonly label?: FixtureLabelVisual
+  readonly label?: FixtureLabelVisual | undefined
   rotationPhase: number
 }
 
@@ -266,7 +266,7 @@ function paintFixtureLabel(label: FixtureLabelVisual) {
 function createFixtureLabel(name: string) {
   const canvas = document.createElement("canvas")
   const context = canvas.getContext("2d")
-  if (!context) return
+  if (!context) return undefined
 
   context.font = FIXTURE_LABEL_FONT
   const fittedName = fitFixtureLabel(context, name, FIXTURE_LABEL_MAX_TEXT_WIDTH)
@@ -443,8 +443,8 @@ type ModelHierarchyVisual = {
       { readonly metadata: FixtureModelNode; readonly group: Group }
     >
   >
-  readonly panPivot?: Group
-  readonly tiltPivot?: Group
+  readonly panPivot?: Group | undefined
+  readonly tiltPivot?: Group | undefined
 }
 
 function hasModelNodeKind(nodes: readonly FixtureModelNode[], kind: FixtureModelNodeKind): boolean {
@@ -1120,14 +1120,14 @@ export function StageView({
 
   const attachCanvas = useCallback(
     (canvas: HTMLCanvasElement | null) => {
-      if (!canvas) return
+      if (!canvas) return undefined
       let runtime: StageRuntime
       try {
         runtime = createStageRuntime(canvas, orderedFixtures, fixtureTypes)
         setWebglUnavailable(false)
       } catch {
         setWebglUnavailable(true)
-        return
+        return undefined
       }
 
       runtime.controls.listenToKeyEvents(canvas)

@@ -52,8 +52,6 @@ export function signalPath(mode: VisualizationMode): readonly SignalStage[] {
   ]
 }
 
-export type FrequencyBand = "bass" | "mid" | "high"
-
 export function assignFrequencyBands(
   fixtures: readonly { readonly id: string; readonly position: number }[],
 ) {

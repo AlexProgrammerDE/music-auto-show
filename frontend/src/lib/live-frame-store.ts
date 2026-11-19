@@ -6,7 +6,7 @@ import type {
 
 const FRAME_RETENTION = 8
 export const LIVE_HISTORY_DURATION_MS = 5000
-export const LIVE_RENDER_DELAY_MS = 30
+const LIVE_RENDER_DELAY_MS = 30
 
 export type TimedLiveFrame = {
   readonly capturedAt: number
@@ -170,7 +170,7 @@ export function sampleLiveFrame(
   }
 }
 
-export function interpolateNumber(previous: number, current: number, alpha: number) {
+function interpolateNumber(previous: number, current: number, alpha: number) {
   return previous + (current - previous) * clamp01(alpha)
 }
 

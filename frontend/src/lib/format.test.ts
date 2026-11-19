@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { MusicSection } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import {
   formatDuration,
   formatEnumLabel,
@@ -24,12 +25,8 @@ describe("display formatting", () => {
   })
 
   it("formats protobuf enum numbers with a fallback for unknown numbers", () => {
-    enum Section {
-      UNSPECIFIED = 0,
-      BIG_DROP = 1,
-    }
-    expect(formatEnumName(Section, Section.BIG_DROP, "Listening")).toBe("Big Drop")
-    expect(formatEnumName(Section, 7, "Listening")).toBe("Listening")
+    expect(formatEnumName(MusicSection, MusicSection.DROP, "Listening")).toBe("Drop")
+    expect(formatEnumName(MusicSection, 7, "Listening")).toBe("Listening")
   })
 
   it("clamps percentages and recording durations", () => {

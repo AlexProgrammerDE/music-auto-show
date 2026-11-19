@@ -31,7 +31,7 @@ function useCanvasRender(
   })
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     let animationFrame = 0
     const drawFrame = (now: number) => {
       render(now)

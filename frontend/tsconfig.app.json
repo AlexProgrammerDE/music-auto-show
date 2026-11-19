@@ -19,11 +19,10 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    /* erasableSyntaxOnly stays off: protoc-gen-es generates TypeScript enums in src/gen. */
+    "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
-    /* exactOptionalPropertyTypes stays off: the frozen shadcn files in src/components/ui pass
-       optional props with undefined values to sonner and Phosphor icons. */
+    "exactOptionalPropertyTypes": true,
     "noPropertyAccessFromIndexSignature": true,
     "noImplicitReturns": true,
     "noImplicitOverride": true,

@@ -226,7 +226,7 @@ export function BeatRunway({
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
     let animationFrame: number | undefined
     const draw = (now: number) => {
