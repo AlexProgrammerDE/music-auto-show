@@ -17,6 +17,8 @@ impl BluetoothReceiver {
         self.platform.status().await
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot change the pairing state or read the new status.
     pub async fn set_pairing(
         &self,
         enabled: bool,
@@ -27,14 +29,20 @@ impl BluetoothReceiver {
             .await
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot connect to the device or read the new status.
     pub async fn connect(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
         self.platform.connect(device_id).await
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot disconnect the device or read the new status.
     pub async fn disconnect(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
         self.platform.disconnect(device_id).await
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot forget the device or read the new status.
     pub async fn forget(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
         self.platform.forget(device_id).await
     }
@@ -111,8 +119,8 @@ mod platform {
             enabled: bool,
             timeout_seconds: u32,
         ) -> Result<BluetoothReceiverStatus> {
-            let mut state = self.initialized_state().await?;
-            let state = state
+            let mut state_guard = self.initialized_state().await?;
+            let state = state_guard
                 .as_mut()
                 .context("Bluetooth receiver state was not initialized")?;
             if enabled {
@@ -151,13 +159,15 @@ mod platform {
                 state.adapter.set_discoverable(false).await?;
                 state.adapter.set_pairable(false).await?;
             }
-            build_status(state).await
+            let adapter = state.adapter.clone();
+            drop(state_guard);
+            build_status(&adapter).await
         }
 
         pub async fn connect(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
             let address = parse_address(device_id)?;
-            let mut state = self.initialized_state().await?;
-            let state = state
+            let mut state_guard = self.initialized_state().await?;
+            let state = state_guard
                 .as_mut()
                 .context("Bluetooth receiver state was not initialized")?;
             let device = state.adapter.device(address)?;
@@ -179,38 +189,47 @@ mod platform {
             if !device.is_connected().await? {
                 device.connect().await?;
             }
-            build_status(state).await
+            let adapter = state.adapter.clone();
+            drop(state_guard);
+            build_status(&adapter).await
         }
 
         pub async fn disconnect(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
             let address = parse_address(device_id)?;
-            let mut state = self.initialized_state().await?;
-            let state = state
+            let mut state_guard = self.initialized_state().await?;
+            let state = state_guard
                 .as_mut()
                 .context("Bluetooth receiver state was not initialized")?;
             let device = state.adapter.device(address)?;
             if device.is_connected().await? {
                 device.disconnect().await?;
             }
-            build_status(state).await
+            let adapter = state.adapter.clone();
+            drop(state_guard);
+            build_status(&adapter).await
         }
 
         pub async fn forget(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
             let address = parse_address(device_id)?;
-            let mut state = self.initialized_state().await?;
-            let state = state
+            let mut state_guard = self.initialized_state().await?;
+            let state = state_guard
                 .as_mut()
                 .context("Bluetooth receiver state was not initialized")?;
             state.adapter.remove_device(address).await?;
-            build_status(state).await
+            let adapter = state.adapter.clone();
+            drop(state_guard);
+            build_status(&adapter).await
         }
 
         async fn status_result(&self) -> Result<BluetoothReceiverStatus> {
-            let mut state = self.initialized_state().await?;
-            let state = state
-                .as_mut()
-                .context("Bluetooth receiver state was not initialized")?;
-            build_status(state).await
+            let state_guard = self.initialized_state().await?;
+            let adapter = state_guard
+                .as_ref()
+                .context("Bluetooth receiver state was not initialized")?
+                .adapter
+                .clone();
+            drop(state_guard);
+            build_status(&adapter).await
         }
 
         async fn initialized_state(&self) -> Result<MutexGuard<'_, Option<LinuxState>>> {
@@ -270,8 +289,7 @@ mod platform {
         })
     }
 
-    async fn build_status(state: &LinuxState) -> Result<BluetoothReceiverStatus> {
-        let adapter = &state.adapter;
+    async fn build_status(adapter: &Adapter) -> Result<BluetoothReceiverStatus> {
         let receiver_ready = adapter
             .uuids()
             .await?
@@ -426,14 +444,16 @@ mod platform {
         }
 
         pub async fn disconnect(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
-            if let Some(connection) = self.connections.lock().await.remove(device_id) {
+            let connection = self.connections.lock().await.remove(device_id);
+            if let Some(connection) = connection {
                 connection.Close()?;
             }
             self.status_result().await
         }
 
         pub async fn forget(&self, device_id: &str) -> Result<BluetoothReceiverStatus> {
-            if let Some(connection) = self.connections.lock().await.remove(device_id) {
+            let connection = self.connections.lock().await.remove(device_id);
+            if let Some(connection) = connection {
                 connection.Close()?;
             }
             let information =
@@ -472,6 +492,7 @@ mod platform {
                     audio_capable: true,
                 });
             }
+            drop(connections);
             devices.sort_by(|left, right| {
                 right
                     .connected
@@ -519,6 +540,11 @@ mod platform {
             Self
         }
 
+        #[expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Keep the same async interface as Linux and Windows"
+        )]
         pub async fn status(&self) -> BluetoothReceiverStatus {
             BluetoothReceiverStatus {
                 supported: false,
@@ -528,6 +554,11 @@ mod platform {
             }
         }
 
+        #[expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Keep the same async interface as Linux and Windows"
+        )]
         pub async fn set_pairing(
             &self,
             _enabled: bool,
@@ -536,14 +567,29 @@ mod platform {
             bail!("Bluetooth audio receiver is not supported on this platform")
         }
 
+        #[expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Keep the same async interface as Linux and Windows"
+        )]
         pub async fn connect(&self, _device_id: &str) -> Result<BluetoothReceiverStatus> {
             bail!("Bluetooth audio receiver is not supported on this platform")
         }
 
+        #[expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Keep the same async interface as Linux and Windows"
+        )]
         pub async fn disconnect(&self, _device_id: &str) -> Result<BluetoothReceiverStatus> {
             bail!("Bluetooth audio receiver is not supported on this platform")
         }
 
+        #[expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Keep the same async interface as Linux and Windows"
+        )]
         pub async fn forget(&self, _device_id: &str) -> Result<BluetoothReceiverStatus> {
             bail!("Bluetooth audio receiver is not supported on this platform")
         }

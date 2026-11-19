@@ -5,7 +5,6 @@ use quick_xml::{
     Reader, XmlVersion,
     events::{BytesStart, Event},
 };
-use sha2::{Digest, Sha256};
 
 use crate::proto::v1::{
     FixtureEmitter, FixtureEmitterKind, FixtureMesh, FixtureModelKind, FixtureModelNode,
@@ -44,6 +43,8 @@ pub struct GrandMa2Library {
 }
 
 impl GrandMa2Library {
+    /// # Errors
+    /// Returns an error if a bundled or imported fixture definition is invalid.
     pub fn load(imported: &[GrandMa2FixtureFile]) -> Result<Self> {
         let mut fixture_types = Vec::new();
         for (id, filename, xml) in BUILTIN_FILES {
@@ -237,6 +238,11 @@ pub struct MappedFunction {
 }
 
 impl MappedFunction {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The normalized value is clamped and rounded to a whole DMX step"
+    )]
     pub fn normalized_value(&self, value: f32) -> u32 {
         let value = value.clamp(0.0, 1.0);
         self.from_dmx + (value * self.to_dmx.saturating_sub(self.from_dmx) as f32).round() as u32
@@ -283,6 +289,8 @@ pub struct ParsedFixtureFile {
     pub fixture_types: Vec<ParsedFixtureType>,
 }
 
+/// # Errors
+/// Returns an error if the name or XML does not describe a supported fixture file.
 pub fn import_fixture_file(filename: &str, bytes: &[u8]) -> Result<ParsedFixtureFile> {
     if bytes.is_empty() {
         bail!("grandMA2 fixture file is empty");
@@ -293,13 +301,7 @@ pub fn import_fixture_file(filename: &str, bytes: &[u8]) -> Result<ParsedFixture
     let filename = sanitize_filename(filename)?;
     let original = std::str::from_utf8(bytes).context("grandMA2 fixture file is not UTF-8")?;
     let (xml, repaired) = sanitize_xml(original)?;
-    let mut hasher = Sha256::new();
-    hasher.update(xml.as_bytes());
-    let digest = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest = crate::checkpoint::sha256_hex(xml.as_bytes());
     let file = GrandMa2FixtureFile {
         id: format!("ma2:{}", &digest[..20]),
         filename,
@@ -347,7 +349,6 @@ fn sanitize_xml(xml: &str) -> Result<(String, bool)> {
                 in_tag = true;
                 result.push(character);
             }
-            (false, _, _) => result.push(character),
             (true, None, '"' | '\'') => {
                 quote = Some(character);
                 result.push(character);
@@ -364,7 +365,7 @@ fn sanitize_xml(xml: &str) -> Result<(String, bool)> {
                 in_tag = false;
                 result.push(character);
             }
-            (true, _, _) => result.push(character),
+            _ => result.push(character),
         }
     }
     if quote.is_some() {
@@ -463,6 +464,10 @@ enum TextCapture {
     Warning,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the XML events and parser state transitions in one match"
+)]
 fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -488,7 +493,7 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
                         });
                     }
                     "manufacturer" if fixture.is_some() => {
-                        capture = Some(TextCapture::Manufacturer)
+                        capture = Some(TextCapture::Manufacturer);
                     }
                     "Info" if fixture.is_some() => {
                         capture =
@@ -730,6 +735,10 @@ fn raw_instance(reader: &Reader<&[u8]>, element: &BytesStart<'_>) -> Result<RawI
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep fixture patch validation and the resulting channel mapping together"
+)]
 fn compile_fixture_type(
     raw: RawFixtureType,
     id: String,
@@ -851,6 +860,15 @@ fn compile_fixture_type(
     })
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Fixture defaults are rounded and bounded before conversion to coarse DMX steps"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the fixture channel mapping and its validation together"
+)]
 fn compile_channel(raw: &RawChannel, warnings: &mut Vec<String>) -> MappedChannel {
     let resolution_shift = if raw.fine.is_some() { 8 } else { 0 };
     let color_hues = color_hues(
@@ -942,7 +960,7 @@ fn compile_channel(raw: &RawChannel, warnings: &mut Vec<String>) -> MappedChanne
         ));
     }
     let default_value = if raw.fine.is_some() {
-        (raw.default_value.round().max(0.0) as u32 >> 8).min(255)
+        raw.default_value.round().clamp(0.0, 65_535.0) as u32 >> 8
     } else {
         raw.default_value.round().clamp(0.0, 255.0) as u32
     };
@@ -1098,6 +1116,10 @@ fn color_hues(name: &str) -> Vec<f32> {
     if hues.len() >= 2 { hues } else { Vec::new() }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the visual defaults and fixture geometry mapping together"
+)]
 fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVisual {
     let main_module = raw
         .modules
@@ -1182,7 +1204,7 @@ fn compile_visual(raw: &RawFixtureType, warnings: &mut Vec<String>) -> FixtureVi
                 y_m: 0.0,
                 z_m: dimensions[2] / 2.0,
                 color_rgb: if emitter_kind == FixtureEmitterKind::White {
-                    0xffffff
+                    0xff_ff_ff
                 } else {
                     0
                 },
@@ -1266,7 +1288,7 @@ fn visual_modules(raw: &RawFixtureType) -> Vec<(u32, &RawModule)> {
             .iter()
             .enumerate()
             .filter(|(_, module)| !module.channels.is_empty())
-            .map(|(index, module)| (index as u32, module))
+            .filter_map(|(index, module)| u32::try_from(index).ok().map(|index| (index, module)))
             .collect()
     } else {
         raw.instances
@@ -1296,6 +1318,10 @@ fn apply_builtin_model(id: &str, visual: &mut FixtureVisual) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the MUVY model geometry together so the dimensions and emitter positions can be reviewed together"
+)]
 fn apply_muvy_model(visual: &mut FixtureVisual) {
     let lens_positions = [
         (0.0, 0.0),
@@ -1530,7 +1556,10 @@ fn apply_mini_butterfly_model(visual: &mut FixtureVisual) {
     visual.model_kind = FixtureModelKind::CompactEffect as i32;
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The parameters describe the fixture geometry at the call site"
+)]
 fn fixture_emitter(
     id: &str,
     name: &str,
@@ -1552,7 +1581,7 @@ fn fixture_emitter(
         y_m: position[1],
         z_m: position[2],
         color_rgb: if matches!(kind, FixtureEmitterKind::White | FixtureEmitterKind::Strobe) {
-            0xffffff
+            0xff_ff_ff
         } else {
             0
         },
@@ -1565,7 +1594,10 @@ fn fixture_emitter(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The parameters describe the fixture geometry at the call site"
+)]
 fn marker_node(
     id: &str,
     name: &str,
@@ -1605,7 +1637,10 @@ fn mesh_node(id: &str, name: &str, position: [f32; 3], dimensions: [f32; 3]) -> 
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The parameters describe the fixture geometry at the call site"
+)]
 fn model_node(
     id: &str,
     name: &str,
@@ -1657,7 +1692,7 @@ fn box_mesh(id: &str, name: &str, dimensions: [f32; 3]) -> FixtureMesh {
             0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 1, 2, 6, 1, 6,
             5, 0, 4, 7, 0, 7, 3,
         ],
-        color_rgb: 0x353b3d,
+        color_rgb: 0x35_3b_3d,
     }
 }
 
@@ -1739,7 +1774,7 @@ fn layout_emitters(
             }
             continue;
         }
-        let columns = (indices.len() as f32).sqrt().ceil() as usize;
+        let columns = (indices.len() - 1).isqrt() + 1;
         let rows = indices.len().div_ceil(columns);
         let scale = if kind == FixtureEmitterKind::Strobe {
             0.82
@@ -1805,6 +1840,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Check all related metadata from the same loaded fixture library"
+    )]
     fn builtins_expose_documented_physical_metadata() {
         let library = GrandMa2Library::load(&[]).expect("built-ins should parse");
         assert_eq!(library.fixture_types().len(), 3);
@@ -1827,7 +1866,7 @@ mod tests {
         assert_eq!(muvy.visual.emitters[0].beam_angle_degrees, 45.0);
         assert_eq!(muvy.visual.emitters[0].beam_intensity, 0.0);
         approx::assert_abs_diff_eq!(muvy.visual.emitters[0].aperture_m, 0.104, epsilon = 0.0001);
-        assert!(muvy.warnings.is_empty());
+        assert_eq!(muvy.warnings, [] as [String; 0]);
         let color_macro = muvy
             .channels
             .iter()
@@ -1874,7 +1913,7 @@ mod tests {
                 .emitters
                 .iter()
                 .filter(|emitter| emitter.casts_beam)
-                .all(|emitter| emitter.beam_angle_degrees == 5.0)
+                .all(|emitter| emitter.beam_angle_degrees.to_bits() == 5.0_f32.to_bits())
         );
         assert!(
             derby
@@ -1903,7 +1942,7 @@ mod tests {
                 .iter()
                 .all(|emitter| emitter.casts_beam
                     && emitter.direction_z > 0.85
-                    && emitter.beam_angle_degrees == 5.0
+                    && emitter.beam_angle_degrees.to_bits() == 5.0_f32.to_bits()
                     && emitter.beam_intensity == 0.0)
         );
         assert!(

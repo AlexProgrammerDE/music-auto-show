@@ -65,6 +65,8 @@ pub struct BeatNetPlus {
 }
 
 impl BeatNetPlus {
+    /// # Errors
+    /// Returns an error if the checkpoint cannot be read or its weights are invalid.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BeatNetError> {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
@@ -85,6 +87,8 @@ impl BeatNetPlus {
         &self.model_path
     }
 
+    /// # Errors
+    /// Returns an error if the model fails to process a complete frame.
     pub fn push_resampled_samples(
         &mut self,
         samples_22khz: &[f32],
@@ -224,6 +228,11 @@ impl FeatureExtractor {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Log band exponents are bounded by fixed frequency limits and bin indices are nonnegative"
+)]
 fn logarithmic_filterbank() -> Vec<Filter> {
     let bands_per_octave = 24.0_f64;
     let reference = 440.0_f64;
@@ -233,7 +242,7 @@ fn logarithmic_filterbank() -> Vec<Filter> {
     let right = (f64::log2(maximum / reference) * bands_per_octave).ceil() as i32;
     let mut bins = Vec::new();
     for exponent in left..right {
-        let frequency = reference * 2.0_f64.powf(exponent as f64 / bands_per_octave);
+        let frequency = reference * 2.0_f64.powf(f64::from(exponent) / bands_per_octave);
         if !(minimum..=maximum).contains(&frequency) {
             continue;
         }
@@ -422,6 +431,7 @@ fn load_cached_weights(path: &Path) -> Result<Arc<BeatNetWeights>, BeatNetError>
         key,
         weights: Arc::clone(&weights),
     });
+    drop(cache);
     Ok(weights)
 }
 
@@ -454,9 +464,13 @@ fn load_weights(path: &Path) -> Result<BeatNetWeights, BeatNetError> {
             recurrent_bias: load_tensor(&builder, LSTM_GATES, &format!("lstm.bias_hh_l{layer}"))?,
         });
     }
-    let lstm: [LstmWeights; LSTM_LAYERS] = lstm
-        .try_into()
-        .map_err(|_| BeatNetError::InvalidCheckpoint("wrong LSTM layer count".into()))?;
+    let lstm: [LstmWeights; LSTM_LAYERS] =
+        lstm.try_into().map_err(|layers: Vec<LstmWeights>| {
+            BeatNetError::InvalidCheckpoint(format!(
+                "expected {LSTM_LAYERS} LSTM layers, got {}",
+                layers.len()
+            ))
+        })?;
     Ok(BeatNetWeights {
         conv_weight: load_tensor(&builder, (2, 1, 10), "conv1.weight")?,
         conv_bias: load_tensor(&builder, 2, "conv1.bias")?,
@@ -547,7 +561,7 @@ impl MeterPosterior {
             .iter()
             .enumerate()
             .max_by(|(_, first), (_, second)| first.total_cmp(second))
-            .map_or(4, |(index, _)| index as u8 + 2)
+            .map_or(4, |(index, _)| u8::try_from(index).unwrap_or_default() + 2)
     }
 
     fn strongest_beat(&self, meter: u8) -> u8 {
@@ -556,7 +570,7 @@ impl MeterPosterior {
             .iter()
             .enumerate()
             .max_by(|(_, first), (_, second)| first.total_cmp(second))
-            .map_or(0, |(index, _)| index as u8)
+            .map_or(0, |(index, _)| u8::try_from(index).unwrap_or_default())
     }
 
     fn beat_confidence(&self, meter: u8) -> f32 {
@@ -763,11 +777,11 @@ struct ParticleDecoder {
 impl ParticleDecoder {
     const PARTICLES: usize = 1_500;
     const METER_PARTICLES: usize = 250;
-    const FPS: f32 = 50.0;
+    const FPS: usize = 50;
     const MIN_TEMPO: f32 = 55.0;
     const MAX_TEMPO: f32 = 215.0;
     const CONTRADICTORY_ONSETS_TO_REACQUIRE: u8 = 3;
-    const CONTRADICTION_RETENTION_FRAMES: usize = Self::FPS as usize * 4;
+    const CONTRADICTION_RETENTION_FRAMES: usize = Self::FPS * 4;
     const MIN_CONTRADICTORY_ONSET_FRAMES: usize = 8;
     const MIN_GRID_BOUNDARY_FRAMES: usize = 6;
 
@@ -813,7 +827,7 @@ impl ParticleDecoder {
         ];
         for index in 0..Self::METER_PARTICLES {
             let meter_index = index % 3;
-            let meter = meter_index as u8 + 2;
+            let meter = u8::try_from(meter_index).unwrap_or_default() + 2;
             self.meter_particles.push(MeterParticle {
                 beat_in_bar: self.rng.random_range(0..meter),
                 meter,
@@ -835,34 +849,31 @@ impl ParticleDecoder {
     }
 
     fn seed_beat_hypotheses(&mut self, retained_tempo: Option<f32>, phase_anchor: Option<f32>) {
-        const RETAINED_TEMPO_FRACTION: f32 = 0.8;
+        const RETAINED_TEMPO_PARTICLES: usize = ParticleDecoder::PARTICLES * 4 / 5;
         const RETAINED_TEMPO_JITTER: f32 = 0.035;
         const PHASE_JITTER: f32 = 0.03;
 
         self.particles.clear();
-        let retained_particles = (Self::PARTICLES as f32 * RETAINED_TEMPO_FRACTION) as usize;
         for index in 0..Self::PARTICLES {
-            let tempo = if index < retained_particles {
-                retained_tempo
-                    .filter(|tempo| *tempo > 0.0 && tempo.is_finite())
-                    .map(|tempo| {
-                        (tempo
-                            * (1.0
-                                + self
-                                    .rng
-                                    .random_range(-RETAINED_TEMPO_JITTER..=RETAINED_TEMPO_JITTER)))
-                        .clamp(Self::MIN_TEMPO, Self::MAX_TEMPO)
-                    })
-                    .unwrap_or_else(|| random_log_tempo(&mut self.rng))
-            } else {
-                random_log_tempo(&mut self.rng)
+            let tempo = match retained_tempo {
+                Some(tempo)
+                    if index < RETAINED_TEMPO_PARTICLES && tempo > 0.0 && tempo.is_finite() =>
+                {
+                    (tempo
+                        * (1.0
+                            + self
+                                .rng
+                                .random_range(-RETAINED_TEMPO_JITTER..=RETAINED_TEMPO_JITTER)))
+                    .clamp(Self::MIN_TEMPO, Self::MAX_TEMPO)
+                }
+                _ => random_log_tempo(&mut self.rng),
             };
-            let phase = phase_anchor
-                .filter(|phase| phase.is_finite())
-                .map(|phase| {
+            let phase = match phase_anchor {
+                Some(phase) if phase.is_finite() => {
                     (phase + self.rng.random_range(-PHASE_JITTER..=PHASE_JITTER)).rem_euclid(1.0)
-                })
-                .unwrap_or_else(|| self.rng.random());
+                }
+                _ => self.rng.random(),
+            };
             self.particles.push(Particle {
                 tempo,
                 phase,
@@ -893,6 +904,10 @@ impl ParticleDecoder {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the ordered particle update and beat publication steps together"
+    )]
     fn update(&mut self, beat_activation: f32, downbeat_activation: f32) -> BeatEstimate {
         let beat_activation = finite_activation(beat_activation);
         let downbeat_activation = finite_activation(downbeat_activation);
@@ -1008,7 +1023,7 @@ impl ParticleDecoder {
             downbeat,
             confidence: event_probability.clamp(0.0, 1.0),
             beat_position: phase,
-            bar_position: (self.meter.beat_in_bar as f32 + phase) / self.meter.meter as f32,
+            bar_position: (f32::from(self.meter.beat_in_bar) + phase) / f32::from(self.meter.meter),
             meter: self.meter.meter,
             beat_index: self.meter.beat_in_bar + 1,
             estimated_beat: self.beat_count,
@@ -1022,7 +1037,7 @@ impl ParticleDecoder {
     fn propagate_beat_particles(&mut self) {
         let rng = &mut self.rng;
         for particle in &mut self.particles {
-            particle.phase += particle.tempo / 60.0 / Self::FPS;
+            particle.phase += particle.tempo / 60.0 / Self::FPS as f32;
             particle.wrapped = particle.phase >= 1.0;
             if particle.wrapped {
                 particle.phase -= 1.0;
@@ -1063,9 +1078,9 @@ impl ParticleDecoder {
             if particle.beat_in_bar == 0 && self.rng.random::<f32>() < METER_CHANGE_PROBABILITY {
                 let alternative = self.rng.random_range(0..2);
                 particle.meter = match (particle.meter, alternative) {
-                    (2, 0) | (3, 0) => 4,
+                    (2 | 3, 0) => 4,
                     (2, _) | (4, 0) => 3,
-                    (3, _) | (4, _) => 2,
+                    (3 | 4, _) => 2,
                     _ => 4,
                 };
                 particle.beat_in_bar = 0;
@@ -1195,6 +1210,11 @@ fn transition_tempo(particle: &mut Particle, rng: &mut StdRng) {
     .clamp(ParticleDecoder::MIN_TEMPO, ParticleDecoder::MAX_TEMPO);
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "The clamped normalized tempo selects a nonnegative integer bin"
+)]
 fn dominant_tempo_cluster(particles: &[Particle]) -> TempoCluster {
     const BINS: usize = 100;
     const CLUSTER_RADIUS: usize = 2;
@@ -1459,7 +1479,7 @@ mod tests {
             .position(|estimate| (estimate.tempo - 120.0).abs() <= 4.0)
             .expect("changed tempo should relock");
         assert!(
-            relocked_frame <= ParticleDecoder::FPS as usize * 8,
+            relocked_frame <= ParticleDecoder::FPS * 8,
             "tempo took more than eight seconds to relock"
         );
         approx::assert_abs_diff_eq!(
@@ -1470,11 +1490,7 @@ mod tests {
         assert!(
             changed
                 .iter()
-                .skip(
-                    changed
-                        .len()
-                        .saturating_sub(ParticleDecoder::FPS as usize * 2)
-                )
+                .skip(changed.len().saturating_sub(ParticleDecoder::FPS * 2))
                 .all(|estimate| (estimate.tempo - 100.0).abs() > 8.0),
             "tracker should commit to a tempo cluster instead of averaging tracks"
         );
@@ -1547,7 +1563,7 @@ mod tests {
         assert_eq!(decoder.meter.meter, 4);
         assert!(decoder.meter.locked);
 
-        let frames_per_beat = (ParticleDecoder::FPS * 0.5) as usize;
+        let frames_per_beat = ParticleDecoder::FPS / 2;
         let mut meters = Vec::new();
         for frame in 0..frames_per_beat * 32 {
             let beat = frame % frames_per_beat == 0;
@@ -1582,7 +1598,7 @@ mod tests {
             .count();
 
         assert!(
-            switched_frame <= ParticleDecoder::FPS as usize * 8,
+            switched_frame <= ParticleDecoder::FPS * 8,
             "meter took more than eight seconds to commit"
         );
         assert_eq!(changed.last().expect("changed meter").meter, 4);
@@ -1666,7 +1682,7 @@ mod tests {
         decoder.tempo.published = Some(128.0);
         decoder.beat_count = 48;
 
-        let estimates = (0..ParticleDecoder::FPS as usize * 5)
+        let estimates = (0..ParticleDecoder::FPS * 5)
             .map(|_| decoder.update(0.01, 0.01))
             .collect::<Vec<_>>();
 
@@ -1690,6 +1706,11 @@ mod tests {
         posterior
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The positive test tempo is rounded to an integer frame interval"
+    )]
     fn feed_synthetic_rhythm(
         decoder: &mut ParticleDecoder,
         tempo: f32,
@@ -1697,7 +1718,7 @@ mod tests {
         bars: usize,
         starting_beat: usize,
     ) -> Vec<BeatEstimate> {
-        let frames_per_beat = (ParticleDecoder::FPS * 60.0 / tempo).round() as usize;
+        let frames_per_beat = (ParticleDecoder::FPS as f32 * 60.0 / tempo).round() as usize;
         let frames = frames_per_beat * usize::from(meter) * bars;
         let mut estimates = Vec::new();
         for frame in 0..frames {

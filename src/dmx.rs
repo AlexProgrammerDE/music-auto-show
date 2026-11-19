@@ -93,6 +93,8 @@ pub struct DmxWorker {
 
 impl DmxWorker {
     /// Starts continuous output using the supplied hardware and timing config.
+    /// # Errors
+    /// Returns an error if the configuration is invalid or the output worker cannot start.
     pub fn start(config: DmxConfig) -> Result<Self> {
         validate_config(&config)?;
         let universe = Arc::new(Mutex::new(UniverseBuffer::new(
@@ -113,7 +115,7 @@ impl DmxWorker {
                     worker_status,
                     worker_deadlines_skipped,
                 )
-                .run(receiver);
+                .run(&receiver);
             })
             .context("failed to start DMX output worker")?;
         Ok(Self {
@@ -126,6 +128,8 @@ impl DmxWorker {
     }
 
     /// Replaces the universe that will be used for the next transmitted frame.
+    /// # Errors
+    /// Returns an error if the universe has the wrong size.
     pub fn set_universe(&self, universe: &[u8]) -> Result<()> {
         lock_unpoisoned(&self.universe).set(universe)
     }
@@ -139,6 +143,8 @@ impl DmxWorker {
     ///
     /// Configuration changes are rare control-plane operations, so this call
     /// waits for the worker acknowledgement and can safely report completion.
+    /// # Errors
+    /// Returns an error if the configuration is invalid or the output worker cannot reconfigure.
     pub fn reconfigure(&self, config: DmxConfig, blackout_frames: usize) -> Result<()> {
         validate_config(&config)?;
         let (reply, completed) = mpsc::sync_channel(0);
@@ -164,6 +170,8 @@ impl DmxWorker {
     }
 
     /// Sends the requested blackout frames, releases the port, and joins the worker.
+    /// # Errors
+    /// Returns an error if the output worker stops before shutdown or panics.
     pub fn shutdown(&mut self, blackout_frames: usize) -> Result<()> {
         let Some(thread) = self.thread.take() else {
             return Ok(());
@@ -176,9 +184,16 @@ impl DmxWorker {
         if sent.is_ok() {
             let _ = completed.recv();
         }
-        thread
-            .join()
-            .map_err(|_| anyhow::anyhow!("DMX output worker panicked"))?;
+        thread.join().map_err(|payload| {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied());
+            match message {
+                Some(message) => anyhow::anyhow!("DMX output worker panicked: {message}"),
+                None => anyhow::anyhow!("DMX output worker panicked: {payload:?}"),
+            }
+        })?;
         sent.context("DMX output worker stopped before shutdown")
     }
 }
@@ -232,7 +247,7 @@ impl WorkerState {
         }
     }
 
-    fn run(mut self, receiver: Receiver<WorkerCommand>) {
+    fn run(mut self, receiver: &Receiver<WorkerCommand>) {
         let mut schedule =
             PeriodicSchedule::immediate(frame_interval(self.config.fps), Instant::now());
         loop {
@@ -335,7 +350,7 @@ impl WorkerState {
 
     fn record_error(&self, message: String) {
         let mut status = lock_unpoisoned(&self.status);
-        status.configured_port = self.config.port.clone();
+        status.configured_port.clone_from(&self.config.port);
         status.running = true;
         status.is_open = false;
         status.simulated = self.config.simulate;
@@ -477,8 +492,7 @@ impl DmxOutput {
         let device_info = serialport::available_ports()
             .ok()
             .and_then(|ports| ports.into_iter().find(|port| port.port_name == port_name))
-            .map(|port| format_port(&port))
-            .unwrap_or_else(|| "Unknown serial device".into());
+            .map_or_else(|| "Unknown serial device".into(), |port| format_port(&port));
         let port_builder = serialport::new(&port_name, DMX_BAUD_RATE)
             .data_bits(DataBits::Eight)
             .stop_bits(StopBits::Two)
@@ -592,7 +606,7 @@ fn nominal_packet_duration(universe_size: usize) -> Duration {
     Duration::from_micros(
         OPEN_DMX_BREAK_MICROS
             + OPEN_DMX_STOP_MARK_MICROS
-            + OPEN_DMX_EXTRA_MAB.as_micros() as u64
+            + OPEN_DMX_EXTRA_MAB_MICROS
             + DMX_SLOT_MICROS * (universe_size as u64 + 1),
     )
 }
@@ -664,6 +678,8 @@ fn validate_universe_size(universe_size: usize) -> Result<()> {
 }
 
 /// Validates protocol limits before a worker or hardware connection is started.
+/// # Errors
+/// Returns an error if the universe size or frame rate is outside the supported range.
 pub fn validate_config(config: &DmxConfig) -> Result<()> {
     validate_universe_size(config.universe_size as usize)?;
     if !(DMX_MIN_FPS..=DMX_MAX_FPS).contains(&config.fps) {

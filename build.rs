@@ -1,5 +1,9 @@
 use std::{env, process::Command};
 
+#[expect(
+    clippy::expect_used,
+    reason = "Missing build tools or invalid protobuf definitions must fail the build"
+)]
 fn main() {
     println!("cargo:rerun-if-changed=proto/music_auto_show/v1/music_auto_show.proto");
     println!("cargo:rerun-if-changed=frontend/src");

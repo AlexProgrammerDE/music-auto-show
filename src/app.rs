@@ -51,6 +51,8 @@ pub enum AppError {
     Runtime(#[source] anyhow::Error),
     #[error("show runtime is unavailable")]
     Unavailable,
+    #[error("show runtime is unavailable")]
+    ResponseClosed(#[from] oneshot::error::RecvError),
     #[error("show runtime command queue is full")]
     ResourceExhausted,
 }
@@ -165,6 +167,13 @@ pub struct App {
 }
 
 impl App {
+    /// # Errors
+    /// Returns an error if the show configuration cannot be read or is invalid.
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn load(config_path: PathBuf, simulate: bool) -> Result<Self, AppError> {
         let show_config = Arc::new(config::load(&config_path, simulate)?);
         let snapshot = Arc::new(stopped_snapshot(&show_config, simulate));
@@ -189,6 +198,8 @@ impl App {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot start or its command receiver is unavailable.
     pub async fn start_runtime(self: &Arc<Self>) -> Result<(), AppError> {
         {
             let mut runtime_thread_slot = lock_unpoisoned(&self.runtime_thread);
@@ -203,7 +214,7 @@ impl App {
             let app = Arc::clone(self);
             let runtime_thread = thread::Builder::new()
                 .name("music-auto-show-runtime".into())
-                .spawn(move || RuntimeLoop::new(app, dmx).run(receiver))
+                .spawn(move || RuntimeLoop::new(app, dmx).run(&receiver))
                 .map_err(|error| {
                     AppError::Runtime(
                         anyhow::Error::new(error).context("failed to start show runtime"),
@@ -220,6 +231,7 @@ impl App {
                 crate::media::monitor(media_tx, shutdown).await;
             }));
         }
+        drop(media_task);
         Ok(())
     }
 
@@ -235,13 +247,19 @@ impl App {
                 Err(error) => error!(%error, "show runtime join task failed"),
             }
         }
-        if let Some(task) = self.media_task.lock().await.take()
+        let media_task = self.media_task.lock().await.take();
+        if let Some(task) = media_task
             && let Err(error) = task.await
         {
             error!(%error, "media monitor task did not stop cleanly");
         }
     }
 
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn snapshot(&self) -> ShowSnapshot {
         self.state_tx.borrow().snapshot.as_ref().clone()
     }
@@ -254,14 +272,26 @@ impl App {
         self.shutdown.cancelled().await;
     }
 
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn config(&self) -> ShowConfig {
         self.state_tx.borrow().config.as_proto().clone()
     }
 
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn grandma2_fixture_types(&self) -> Vec<GrandMa2FixtureType> {
         self.state_tx.borrow().config.grandma2().to_proto()
     }
 
+    /// # Errors
+    /// Returns an error if the fixture file is invalid or the runtime cannot save the updated configuration.
     pub async fn import_grandma2_fixture(
         &self,
         filename: &str,
@@ -286,61 +316,86 @@ impl App {
         Ok((config, fixture_types))
     }
 
+    /// # Errors
+    /// Returns an error if the show configuration cannot be serialized.
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn export_config(&self) -> Result<(String, String), AppError> {
         let config = Arc::clone(&self.state_tx.borrow().config);
         let json = config::to_json(&config)?;
         Ok((json, config_filename(&config.name)))
     }
 
+    /// # Errors
+    /// Returns an error if the JSON is invalid or the runtime cannot apply it.
     pub async fn import_config(&self, json: &str) -> Result<ShowConfig, AppError> {
         let imported = config::parse_json(json, self.cli_simulate)?;
         self.update_config(imported.into_proto()).await
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot apply the default configuration.
     pub async fn reset_config(&self) -> Result<ShowConfig, AppError> {
         self.update_config(config::default_show_config(self.cli_simulate))
             .await
     }
 
+    /// # Errors
+    /// Returns an error if validation or persistence fails, or the runtime cannot handle the request.
     pub async fn update_config(&self, config: ShowConfig) -> Result<ShowConfig, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::UpdateConfig {
             config: Box::new(config),
             reply,
         })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot handle the command or the show cannot change state.
     pub async fn control(&self, command: ShowCommand) -> Result<CommandResult, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::Control { command, reply })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot handle the request or cannot set blackout.
     pub async fn set_blackout(&self, enabled: bool) -> Result<CommandResult, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::SetBlackout { enabled, reply })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot handle the request or audio capture cannot start.
     pub async fn start_recording(&self) -> Result<RecordingStatus, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::StartRecording { reply })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot handle the request or the recording cannot be encoded.
     pub async fn stop_recording(&self) -> Result<Recording, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::StopRecording { reply })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the runtime cannot handle the request or audio capture is unavailable.
     pub async fn clear_recording(&self) -> Result<RecordingStatus, AppError> {
         let (reply, response) = oneshot::channel();
         self.send_command(RuntimeCommand::ClearRecording { reply })?;
-        response.await.map_err(|_| AppError::Unavailable)?
+        response.await?
     }
 
+    /// # Errors
+    /// Returns an error if the device enumeration task fails.
     pub async fn audio_devices(&self) -> Result<Vec<crate::proto::v1::AudioDevice>, AppError> {
         tokio::task::spawn_blocking(list_devices)
             .await
@@ -353,6 +408,8 @@ impl App {
         self.bluetooth.status().await
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot change the pairing state or read the new status.
     pub async fn set_bluetooth_receiver_pairing(
         &self,
         enabled: bool,
@@ -364,6 +421,8 @@ impl App {
             .map_err(AppError::from)
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot connect to the device or read the new status.
     pub async fn connect_bluetooth_receiver_device(
         &self,
         device_id: &str,
@@ -374,6 +433,8 @@ impl App {
             .map_err(AppError::from)
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot disconnect the device or read the new status.
     pub async fn disconnect_bluetooth_receiver_device(
         &self,
         device_id: &str,
@@ -384,6 +445,8 @@ impl App {
             .map_err(AppError::from)
     }
 
+    /// # Errors
+    /// Returns an error if the platform cannot forget the device or read the new status.
     pub async fn forget_bluetooth_receiver_device(
         &self,
         device_id: &str,
@@ -394,6 +457,11 @@ impl App {
             .map_err(AppError::from)
     }
 
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "Preserve the public async App API"
+    )]
     pub async fn media_artwork(&self, revision: &str) -> Option<Arc<[u8]>> {
         self.media_tx.borrow().artwork(revision)
     }
@@ -453,28 +521,23 @@ impl RuntimeLoop {
         }
     }
 
-    fn run(mut self, receiver: Receiver<RuntimeCommand>) {
+    fn run(mut self, receiver: &Receiver<RuntimeCommand>) {
         let mut schedule = PeriodicSchedule::immediate(self.frame_interval(), Instant::now());
         loop {
-            let received = receiver.recv_timeout(schedule.remaining(Instant::now()));
+            let command = receiver.recv_timeout(schedule.remaining(Instant::now()));
             if self.app.shutdown.is_cancelled() {
                 self.stop_show();
                 self.shutdown_dmx();
                 return;
             }
-            match received {
-                Ok(RuntimeCommand::Shutdown) => {
+            match command {
+                Ok(RuntimeCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
                     self.stop_show();
                     self.shutdown_dmx();
                     return;
                 }
                 Ok(command) => self.handle_command(command),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    self.stop_show();
-                    self.shutdown_dmx();
-                    return;
-                }
             }
 
             let frame_interval = self.frame_interval();
@@ -566,7 +629,7 @@ impl RuntimeLoop {
             Ok(())
         })();
         if let Err(error) = apply {
-            return Err(self.rollback_config(previous, was_running, changes, error));
+            return Err(self.rollback_config(&previous, was_running, changes, error));
         }
 
         self.snapshot.config_generation = self.snapshot.config_generation.saturating_add(1);
@@ -584,16 +647,16 @@ impl RuntimeLoop {
 
     fn rollback_config(
         &mut self,
-        previous: Arc<ValidatedShowConfig>,
+        previous: &Arc<ValidatedShowConfig>,
         was_running: bool,
         changes: ConfigChanges,
         original: AppError,
     ) -> AppError {
-        self.config = Arc::clone(&previous);
+        self.config = Arc::clone(previous);
         let rollback = (|| -> Result<(), AppError> {
             if changes.dmx {
                 self.runtime.dmx.reconfigure(
-                    effective_dmx_config(&previous, self.app.cli_simulate),
+                    effective_dmx_config(previous, self.app.cli_simulate),
                     SHUTDOWN_BLACKOUT_FRAMES,
                 )?;
             }
@@ -605,7 +668,7 @@ impl RuntimeLoop {
             }
             Ok(())
         })();
-        if let Err(error) = config::save(&self.app.config_path, &previous) {
+        if let Err(error) = config::save(&self.app.config_path, previous) {
             warn!(%error, "could not restore the previous persisted configuration");
         }
         self.publication_suspended = false;
@@ -873,7 +936,8 @@ impl RuntimeLoop {
         let universe = self.zero_universe();
         self.runtime.dmx.set_universe(&universe)?;
         if let Some(audio) = monitoring_audio {
-            return self.tick_recording_monitor(audio);
+            self.tick_recording_monitor(audio);
+            return Ok(());
         }
         self.snapshot.dmx_universe = universe;
         if self.runtime.last_idle_dmx_publish.elapsed() >= IDLE_DMX_STATUS_INTERVAL {
@@ -890,9 +954,9 @@ impl RuntimeLoop {
             return;
         }
         self.runtime.last_media_track_key = track_key;
-        let audio = match &self.runtime.mode {
-            RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => audio,
-            _ => return,
+        let (RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio)) = &self.runtime.mode
+        else {
+            return;
         };
         if audio.snapshot().runtime.simulated {
             return;
@@ -965,7 +1029,7 @@ impl RuntimeLoop {
         Ok(())
     }
 
-    fn tick_recording_monitor(&mut self, audio: AudioWorkerSnapshot) -> Result<(), AppError> {
+    fn tick_recording_monitor(&mut self, audio: AudioWorkerSnapshot) {
         self.snapshot.status_message = "Recording input check".into();
         self.snapshot.audio = Some(audio.analysis);
         self.snapshot.audio_runtime = Some(audio.runtime);
@@ -976,7 +1040,6 @@ impl RuntimeLoop {
         self.snapshot.dmx_universe = self.zero_universe();
         self.runtime.audio_deadlines_skipped = audio.analysis_deadlines_skipped;
         self.runtime.recoverable_audio_events = audio.recoverable_stream_events;
-        Ok(())
     }
 
     fn zero_universe(&self) -> Vec<u8> {
@@ -1139,10 +1202,10 @@ fn effective_dmx_config(config: &ValidatedShowConfig, simulate: bool) -> DmxConf
 }
 
 fn unix_millis() -> u64 {
-    SystemTime::now()
+    let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+        .unwrap_or_default();
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -1208,7 +1271,9 @@ mod tests {
         beatnet.processing = true;
         beatnet.last_error = "stale error".into();
         snapshot.media.as_mut().expect("media snapshot").track_name = "Old track".into();
-        snapshot.fixture_states.push(Default::default());
+        snapshot
+            .fixture_states
+            .push(crate::proto::v1::FixtureState::default());
         snapshot.dmx_universe[0] = 255;
         snapshot.effects_fps = 40.0;
         snapshot.dmx_runtime = Some(DmxRuntimeStatus {
@@ -1225,13 +1290,13 @@ mod tests {
         assert!(!beatnet.available);
         assert!(!beatnet.processing);
         assert_eq!(beatnet.status, "Idle");
-        assert!(beatnet.last_error.is_empty());
+        assert_eq!(beatnet.last_error, "");
         assert_eq!(beatnet.model_path, "models/beatnet-plus.pt");
         assert_eq!(
             snapshot.media.expect("media snapshot").track_name,
             "No track"
         );
-        assert!(snapshot.fixture_states.is_empty());
+        assert_eq!(snapshot.fixture_states, []);
         assert!(snapshot.dmx_universe.iter().all(|value| *value == 0));
         assert_eq!(snapshot.effects_fps, 0.0);
         let dmx = snapshot.dmx_runtime.expect("DMX runtime snapshot");

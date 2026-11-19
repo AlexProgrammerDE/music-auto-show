@@ -114,6 +114,10 @@ impl TrackRevision {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep media polling, artwork caching and cancellation in the same loop"
+)]
 pub async fn monitor(target: watch::Sender<Arc<MediaState>>, shutdown: CancellationToken) {
     let source = match tokio::select! {
         biased;
@@ -410,7 +414,7 @@ mod tests {
 
     #[test]
     fn empty_artwork_has_no_palette() {
-        assert!(process_artwork(&[], 5).colors.is_empty());
+        assert_eq!(process_artwork(&[], 5).colors, []);
     }
 
     #[test]

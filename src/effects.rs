@@ -263,7 +263,7 @@ impl EffectsEngine {
             movement_mode: config.movement_mode() as i32,
             rotation_mode: config.rotation_mode() as i32,
             strobe_effect_mode: config.strobe_effect_mode() as i32,
-            palette_index: self.color_index as u32,
+            palette_index: u32::try_from(self.color_index).unwrap_or(u32::MAX),
             rendered_color: Some(rendered_color),
             drop_active: self.is_drop,
             strobe_active: self.strobe_active,
@@ -271,7 +271,7 @@ impl EffectsEngine {
             beat_response: beat_response(config),
             energy_tier: energy_tier(audio.energy) as i32,
             active_drivers,
-            effect_cycle_position: (audio.estimated_beat % 32) as u32 + 1,
+            effect_cycle_position: u32::try_from(audio.estimated_beat % 32).unwrap_or_default() + 1,
             harmony_palette_active,
         }
     }
@@ -328,7 +328,7 @@ impl EffectsEngine {
     ) {
         match config.visualization_mode() {
             VisualizationMode::Energy | VisualizationMode::Unspecified => {
-                self.energy_mode(config, audio, beat, bar, now, delta_seconds)
+                self.energy_mode(config, audio, beat, bar, now, delta_seconds);
             }
             VisualizationMode::FrequencySplit => self.frequency_split_mode(config, audio, beat),
             VisualizationMode::BeatPulse => self.beat_pulse_mode(config, audio, beat),
@@ -429,9 +429,9 @@ impl EffectsEngine {
             if effects(config).harmony_palette_enabled && audio.harmonic_confidence >= 0.18 {
                 ((audio.key_pitch_class * 7) % 12) as f32 / 12.0
             } else if self.album_hues.is_empty() {
-                palette[audio.estimated_bar as usize % palette.len()]
+                palette[cycle_index(audio.estimated_bar, palette.len())]
             } else {
-                self.album_hues[audio.estimated_bar as usize % self.album_hues.len()]
+                self.album_hues[cycle_index(audio.estimated_bar, self.album_hues.len())]
             };
         let settings = effects(config);
         for fixture in &config.fixtures {
@@ -472,7 +472,7 @@ impl EffectsEngine {
             } else if self.album_hues.is_empty() {
                 ((audio.estimated_beat % 32) as f32 + audio.beat_position) / 32.0
             } else {
-                let current = audio.estimated_bar as usize % self.album_hues.len();
+                let current = cycle_index(audio.estimated_bar, self.album_hues.len());
                 let next = (current + 1) % self.album_hues.len();
                 let mut diff = self.album_hues[next] - self.album_hues[current];
                 if diff > 0.5 {
@@ -547,7 +547,7 @@ impl EffectsEngine {
                     state.green = dmx(brightness);
                     state.blue = dmx(brightness);
                     state.dimmer = dmx(brightness);
-                    state.strobe = (200.0 * response) as u32;
+                    state.strobe = truncate_dmx(200.0 * response);
                 } else {
                     let decay = (1.0 - audio.beat_position * 3.0).max(0.0) * response;
                     let brightness = dmx((0.06 + decay * 0.94) * scale);
@@ -556,7 +556,7 @@ impl EffectsEngine {
                     state.blue = brightness;
                     state.dimmer = brightness;
                     state.strobe = if audio.beat_position < 0.3 {
-                        (200.0 * response) as u32
+                        truncate_dmx(200.0 * response)
                     } else {
                         0
                     };
@@ -597,10 +597,10 @@ impl EffectsEngine {
                     state.dimmer = dmx(brightness);
                 } else {
                     let decay = (1.0 - audio.beat_position * 2.5).max(0.0);
-                    state.dimmer = (state.dimmer as f32 * decay) as u32;
-                    state.red = (state.red as f32 * decay) as u32;
-                    state.green = (state.green as f32 * decay) as u32;
-                    state.blue = (state.blue as f32 * decay) as u32;
+                    state.dimmer = truncate_dmx(state.dimmer as f32 * decay);
+                    state.red = truncate_dmx(state.red as f32 * decay);
+                    state.green = truncate_dmx(state.green as f32 * decay);
+                    state.blue = truncate_dmx(state.blue as f32 * decay);
                 }
             }
         }
@@ -696,9 +696,9 @@ impl EffectsEngine {
                     let target = (audio.estimated_beat % 8) as f32 / 8.0;
                     let mut diff = target - self.rotation_phase;
                     if diff > 0.5 {
-                        diff -= 1.0
+                        diff -= 1.0;
                     } else if diff < -0.5 {
-                        diff += 1.0
+                        diff += 1.0;
                     }
                     self.rotation_phase =
                         (self.rotation_phase + diff * 0.15 * scale).rem_euclid(1.0);
@@ -733,7 +733,7 @@ impl EffectsEngine {
         _config: &ValidatedShowConfig,
         _channel: Option<&MappedChannel>,
     ) -> u32 {
-        self.smoothed_rotation.clamp(0.0, 255.0) as u32
+        truncate_dmx(self.smoothed_rotation.clamp(0.0, 255.0))
     }
 
     fn preview_rotation(&self, config: &ValidatedShowConfig) -> f32 {
@@ -762,20 +762,20 @@ impl EffectsEngine {
         match mode {
             EffectFixtureMode::StrobeOnly if value == 0 => {
                 if beat && audio.bass > 0.5 {
-                    value = ((80.0 + audio.bass * 120.0) * response) as u32;
+                    value = truncate_dmx((80.0 + audio.bass * 120.0) * response);
                 } else if audio.energy > 0.2 {
-                    value = (6.0 + audio.energy * 100.0) as u32;
+                    value = truncate_dmx(6.0 + audio.energy * 100.0);
                 }
             }
             EffectFixtureMode::StrobeFocus if value == 0 => {
                 if beat && audio.bass > 0.6 {
-                    value = ((60.0 + audio.bass * 100.0) * response) as u32;
+                    value = truncate_dmx((60.0 + audio.bass * 100.0) * response);
                 } else if audio.energy > 0.5 {
-                    value = (6.0 + (audio.energy - 0.5) * 60.0) as u32;
+                    value = truncate_dmx(6.0 + (audio.energy - 0.5) * 60.0);
                 }
             }
             _ if value == 0 && beat && audio.bass > 0.8 => {
-                value = ((80.0 + audio.bass * 80.0) * response) as u32;
+                value = truncate_dmx((80.0 + audio.bass * 80.0) * response);
             }
             _ => {}
         }
@@ -803,7 +803,7 @@ impl EffectsEngine {
                     (13, 17)
                 };
                 let effect = start + audio.estimated_bar % (end - start + 1);
-                effect as u32
+                u32::try_from(effect).unwrap_or_default()
             }
             specific => specific as u32 - StrobeEffectMode::Effect1 as u32 + 1,
         }
@@ -904,7 +904,15 @@ impl EffectsEngine {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The parameters describe the effect inputs for a single frame"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        clippy::fn_params_excessive_bools,
+        reason = "Keep the movement modes and their independent beat and axis inputs together"
+    )]
     fn movement_target(
         &mut self,
         fixture: &FixtureConfig,
@@ -926,8 +934,8 @@ impl EffectsEngine {
         let tilt_max = fixture.movement_tilt_max * 255.0;
         let pan_range = pan_max - pan_min;
         let tilt_range = tilt_max - tilt_min;
-        let pan_center = (pan_max + pan_min) / 2.0;
-        let tilt_center = (tilt_max + tilt_min) / 2.0;
+        let pan_center = f32::midpoint(pan_max, pan_min);
+        let tilt_center = f32::midpoint(tilt_max, tilt_min);
         let energy = audio.energy;
         let bass = audio.bass;
         let phase_offset = fixture.position as f32;
@@ -938,7 +946,7 @@ impl EffectsEngine {
                 if bar {
                     if has_pan {
                         let positions = [0.0, 0.1, -0.05, 0.08, -0.1, 0.05, -0.08, 0.0];
-                        let factor = positions[audio.estimated_bar as usize % positions.len()];
+                        let factor = positions[cycle_index(audio.estimated_bar, positions.len())];
                         self.target_pan.insert(
                             key.clone(),
                             pan_center + factor * pan_range / 2.0 * speed * 0.3,
@@ -946,7 +954,7 @@ impl EffectsEngine {
                     }
                     if has_tilt {
                         let positions = [0.2, 0.3, 0.15, 0.35, 0.25, 0.1, 0.3, 0.2];
-                        let factor = positions[audio.estimated_bar as usize % positions.len()];
+                        let factor = positions[cycle_index(audio.estimated_bar, positions.len())];
                         self.target_tilt
                             .insert(key, tilt_center + factor * tilt_range / 2.0 * speed * 0.5);
                     }
@@ -955,7 +963,7 @@ impl EffectsEngine {
             MovementMode::Standard | MovementMode::Unspecified => {
                 if bar && has_pan {
                     let positions = [0.0, 0.5, 0.2, -0.4, 0.4, -0.5, -0.2, 0.0];
-                    let factor = positions[audio.estimated_bar as usize % positions.len()];
+                    let factor = positions[cycle_index(audio.estimated_bar, positions.len())];
                     self.target_pan.insert(
                         key.clone(),
                         pan_center + factor * pan_range / 2.0 * speed * (0.5 + energy * 0.5),
@@ -963,7 +971,7 @@ impl EffectsEngine {
                 }
                 if beat && (energy > 0.25 || self.beats_since_move >= 4) && has_tilt {
                     let positions = [0.4, -0.2, 0.2, -0.4, 0.3, -0.1, 0.25, -0.3];
-                    let factor = positions[audio.estimated_beat as usize % positions.len()];
+                    let factor = positions[cycle_index(audio.estimated_beat, positions.len())];
                     self.target_tilt.insert(
                         key,
                         tilt_center + factor * tilt_range / 2.0 * speed * (0.5 + bass * 0.5),
@@ -974,8 +982,9 @@ impl EffectsEngine {
             MovementMode::Dramatic => {
                 if (bar || (beat && energy > 0.5)) && has_pan {
                     let positions = [0.0, 0.9, -0.7, 0.5, -0.9, 0.7, -0.5, 0.8];
-                    let index =
-                        (audio.estimated_bar * 4 + audio.estimated_beat) as usize % positions.len();
+                    let index = (cycle_index(audio.estimated_bar, positions.len()) * 4
+                        + cycle_index(audio.estimated_beat, positions.len()))
+                        % positions.len();
                     self.target_pan.insert(
                         key.clone(),
                         pan_center + positions[index] * pan_range / 2.0 * speed,
@@ -983,7 +992,7 @@ impl EffectsEngine {
                 }
                 if beat && (energy > 0.3 || self.beats_since_move >= 2) && has_tilt {
                     let positions = [0.8, -0.6, 0.5, -0.8, 0.9, -0.4, 0.6, -0.7];
-                    let factor = positions[audio.estimated_beat as usize % positions.len()];
+                    let factor = positions[cycle_index(audio.estimated_beat, positions.len())];
                     self.target_tilt.insert(
                         key,
                         tilt_center + factor * tilt_range / 2.0 * speed * (0.7 + bass * 0.3),
@@ -1006,7 +1015,9 @@ impl EffectsEngine {
                     let current = *self.wall_corner_index.get(&key).unwrap_or(&0);
                     let next = (current + 1) % positions.len();
                     self.wall_corner_index.insert(key.clone(), next);
-                    let actual = (next + fixture.position as usize * 2) % positions.len();
+                    let actual = (next
+                        + cycle_index(u64::from(fixture.position), positions.len()) * 2)
+                        % positions.len();
                     let (pan, tilt) = positions[actual];
                     if has_pan {
                         self.target_pan
@@ -1032,10 +1043,10 @@ impl EffectsEngine {
                 phase += delta_seconds * rate * direction;
                 if phase >= 1.0 {
                     phase = 1.0;
-                    direction = -1.0
+                    direction = -1.0;
                 } else if phase <= 0.0 {
                     phase = 0.0;
-                    direction = 1.0
+                    direction = 1.0;
                 }
                 self.sweep_phase.insert(key.clone(), phase);
                 self.sweep_direction.insert(key.clone(), direction);
@@ -1049,7 +1060,7 @@ impl EffectsEngine {
                 if has_tilt {
                     let factor = sweep_tilt_factor(phase, phase_offset);
                     self.target_tilt
-                        .insert(key.clone(), tilt_center + factor * tilt_range / 2.0);
+                        .insert(key, tilt_center + factor * tilt_range / 2.0);
                 }
             }
             MovementMode::Random => {
@@ -1192,8 +1203,9 @@ impl EffectsEngine {
                     (0.6, 0.3),
                 ];
                 if movement_index == chase {
-                    let (pan, tilt) =
-                        positions[(chase + audio.estimated_bar as usize) % positions.len()];
+                    let (pan, tilt) = positions[(chase
+                        + cycle_index(audio.estimated_bar, positions.len()))
+                        % positions.len()];
                     if has_pan {
                         self.target_pan
                             .insert(key.clone(), pan_center + pan * pan_range / 2.0 * speed);
@@ -1228,9 +1240,9 @@ impl EffectsEngine {
                         (-0.9, -0.3),
                         (0.0, 0.9),
                     ];
-                    let index = (audio.estimated_beat
-                        + fixture.position as u64 * 3
-                        + audio.estimated_bar) as usize
+                    let index = (cycle_index(audio.estimated_beat, positions.len())
+                        + cycle_index(u64::from(fixture.position), positions.len()) * 3
+                        + cycle_index(audio.estimated_bar, positions.len()))
                         % positions.len();
                     let (mut pan, mut tilt) = positions[index];
                     if energy > 0.6 {
@@ -1293,13 +1305,14 @@ impl EffectsEngine {
                 if has_pan {
                     self.target_pan.insert(
                         key.clone(),
-                        (pan_min + (pan_factor + 1.0) / 2.0 * pan_range).clamp(pan_min, pan_max),
+                        (pan_min + f32::midpoint(pan_factor, 1.0) * pan_range)
+                            .clamp(pan_min, pan_max),
                     );
                 }
                 if has_tilt {
                     self.target_tilt.insert(
                         key,
-                        (tilt_min + (tilt_factor + 1.0) / 2.0 * tilt_range)
+                        (tilt_min + f32::midpoint(tilt_factor, 1.0) * tilt_range)
                             .clamp(tilt_min, tilt_max),
                     );
                 }
@@ -1324,11 +1337,10 @@ impl EffectsEngine {
             MovementMode::Dramatic => (0.18, 0.22),
             MovementMode::WallWash => (0.08, 0.10),
             MovementMode::Sweep => (0.05, 0.05),
-            MovementMode::Random => (0.10, 0.12),
+            MovementMode::Random | MovementMode::Fan => (0.10, 0.12),
             MovementMode::Circle => (0.15, 0.15),
             MovementMode::Figure8 => (0.12, 0.12),
             MovementMode::Ballyhoo => (0.25, 0.25),
-            MovementMode::Fan => (0.10, 0.12),
             MovementMode::Chase => (0.20, 0.22),
             MovementMode::StrobePosition => (0.45, 0.45),
             MovementMode::Crazy => (0.55, 0.55),
@@ -1387,9 +1399,10 @@ impl EffectsEngine {
                 MovementMode::Sweep | MovementMode::Subtle | MovementMode::Figure8 => 15.0,
                 _ => 0.0,
             };
-            state.pan_tilt_speed =
+            state.pan_tilt_speed = truncate_dmx(
                 (127.0 - (tempo - REFERENCE_TEMPO) + mode_offset + (0.5 - speed) * 100.0)
-                    .clamp(0.0, 255.0) as u32;
+                    .clamp(0.0, 255.0),
+            );
         }
     }
 
@@ -1433,8 +1446,9 @@ impl EffectsEngine {
             };
             macro_rules! smooth {
                 ($field:ident) => {
-                    smoothed.$field =
-                        (smoothed.$field as f32 * retained + current.$field as f32 * blend) as u32;
+                    smoothed.$field = truncate_dmx(
+                        smoothed.$field as f32 * retained + current.$field as f32 * blend,
+                    );
                 };
             }
             smooth!(red);
@@ -1484,12 +1498,12 @@ impl EffectsEngine {
                     continue;
                 }
                 universe[dmx_channel as usize - 1] =
-                    channel_value(state, channel, fixture_type).min(255) as u8;
+                    u8::try_from(channel_value(state, channel, fixture_type)).unwrap_or(u8::MAX);
                 if let Some(fine) = channel.fine {
                     let fine_channel = fixture.start_channel.saturating_add(fine).saturating_sub(1);
                     if fine_channel > 0 && fine_channel as usize <= universe_size {
                         universe[fine_channel as usize - 1] =
-                            channel_fine_value(state, channel).min(255) as u8;
+                            u8::try_from(channel_fine_value(state, channel)).unwrap_or(u8::MAX);
                     }
                 }
             }
@@ -1538,6 +1552,11 @@ fn energy_tier(energy: f32) -> EnergyTier {
     }
 }
 
+// Take the remainder before converting so long-running counters fit on 32-bit targets.
+fn cycle_index(counter: u64, len: usize) -> usize {
+    usize::try_from(counter % len as u64).unwrap_or_default()
+}
+
 fn average_rendered_color<'a>(states: impl Iterator<Item = &'a FixtureState>) -> RgbColor {
     let (red, green, blue, count) =
         states.fold((0_u64, 0_u64, 0_u64, 0_u64), |accumulator, state| {
@@ -1552,9 +1571,9 @@ fn average_rendered_color<'a>(states: impl Iterator<Item = &'a FixtureState>) ->
         return RgbColor::default();
     }
     RgbColor {
-        red: (red / count) as u32,
-        green: (green / count) as u32,
-        blue: (blue / count) as u32,
+        red: u32::try_from(red / count).unwrap_or(u32::MAX),
+        green: u32::try_from(green / count).unwrap_or(u32::MAX),
+        blue: u32::try_from(blue / count).unwrap_or(u32::MAX),
     }
 }
 
@@ -1618,7 +1637,7 @@ fn axis_default_position(
                 .iter()
                 .find(|channel| channel.has_semantic(semantic))
         })
-        .map_or((minimum + maximum) / 2.0, |channel| {
+        .map_or(f32::midpoint(minimum, maximum), |channel| {
             fine_axis_position(channel.default_value, 0).clamp(minimum, maximum)
         })
 }
@@ -1642,8 +1661,17 @@ fn controllable_movement_axes(
     })
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "DMX uses whole steps and this saturating conversion maps negative values to zero"
+)]
+fn truncate_dmx(value: f32) -> u32 {
+    value as u32
+}
+
 fn dmx(value: f32) -> u32 {
-    (clamp01(value) * 255.0) as u32
+    truncate_dmx(clamp01(value) * 255.0)
 }
 
 fn clamp01(value: f32) -> f32 {
@@ -1720,7 +1748,7 @@ fn fine_axis_position(coarse: u32, fine: u32) -> f32 {
 }
 
 fn fine_axis_channels(position: f32) -> (u32, u32) {
-    let raw = (position.clamp(0.0, 255.0) / 255.0 * 65_535.0).round() as u32;
+    let raw = truncate_dmx((position.clamp(0.0, 255.0) / 255.0 * 65_535.0).round());
     (raw / 256, raw % 256)
 }
 
@@ -1751,7 +1779,7 @@ fn time_adjusted_factor(reference_factor: f32, delta_seconds: f32) -> f32 {
     if reference_factor == 0.0 || delta_seconds <= 0.0 {
         return 0.0;
     }
-    if reference_factor == 1.0 {
+    if reference_factor >= 1.0 {
         return 1.0;
     }
     1.0 - (1.0 - reference_factor).powf(delta_seconds / REFERENCE_FRAME_SECONDS)
@@ -1764,6 +1792,10 @@ fn set_hsv(state: &mut FixtureState, hue: f32, saturation: f32, value: f32) {
     state.blue = dmx(blue);
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "The normalized hue selects one of six integer sectors"
+)]
 fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> (f32, f32, f32) {
     if saturation == 0.0 {
         return (value, value, value);
@@ -1783,6 +1815,10 @@ fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> (f32, f32, f32) {
     }
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "Select the original color component that produced the exact maximum"
+)]
 fn rgb_to_hsv(red: f32, green: f32, blue: f32) -> (f32, f32, f32) {
     let max = red.max(green).max(blue);
     let min = red.min(green).min(blue);
@@ -1813,9 +1849,9 @@ fn rgb_to_color_macro(red: u32, green: u32, blue: u32, energy: f32) -> u32 {
     let maximum = red.max(green).max(blue);
     let white_like = maximum - minimum < 60 && minimum > 150;
     if energy > 0.85 {
-        return (230.0 + (energy - 0.85) * 166.0).min(255.0) as u32;
+        return truncate_dmx((230.0 + (energy - 0.85) * 166.0).min(255.0));
     }
-    let count = red_on as u8 + green_on as u8 + blue_on as u8;
+    let count = u8::from(red_on) + u8::from(green_on) + u8::from(blue_on);
     match (red_on, green_on, blue_on, white_like, count) {
         (_, _, _, true, 3) => 208,
         (_, _, _, true, _) => 58,
@@ -1883,15 +1919,15 @@ fn scale_colors(state: &mut FixtureState, target: u32) {
         return;
     }
     let scale = target.min(255) as f32 / current as f32;
-    state.red = (state.red as f32 * scale).min(255.0) as u32;
-    state.green = (state.green as f32 * scale).min(255.0) as u32;
-    state.blue = (state.blue as f32 * scale).min(255.0) as u32;
-    state.white = (state.white as f32 * scale).min(255.0) as u32;
-    state.amber = (state.amber as f32 * scale).min(255.0) as u32;
-    state.uv = (state.uv as f32 * scale).min(255.0) as u32;
-    state.cyan = (state.cyan as f32 * scale).min(255.0) as u32;
-    state.magenta = (state.magenta as f32 * scale).min(255.0) as u32;
-    state.yellow = (state.yellow as f32 * scale).min(255.0) as u32;
+    state.red = truncate_dmx((state.red as f32 * scale).min(255.0));
+    state.green = truncate_dmx((state.green as f32 * scale).min(255.0));
+    state.blue = truncate_dmx((state.blue as f32 * scale).min(255.0));
+    state.white = truncate_dmx((state.white as f32 * scale).min(255.0));
+    state.amber = truncate_dmx((state.amber as f32 * scale).min(255.0));
+    state.uv = truncate_dmx((state.uv as f32 * scale).min(255.0));
+    state.cyan = truncate_dmx((state.cyan as f32 * scale).min(255.0));
+    state.magenta = truncate_dmx((state.magenta as f32 * scale).min(255.0));
+    state.yellow = truncate_dmx((state.yellow as f32 * scale).min(255.0));
 }
 
 fn channel_value(
@@ -2055,7 +2091,7 @@ fn color_macro_value(state: &FixtureState, channel: &MappedChannel) -> u32 {
                 .zip(candidate)
                 .map(|(actual, expected)| (actual - expected).powi(2))
                 .sum::<f32>();
-            Some((score, (set.from_dmx + set.to_dmx) / 2))
+            Some((score, u32::midpoint(set.from_dmx, set.to_dmx)))
         })
         .min_by(|(left, _), (right, _)| left.total_cmp(right))
         .map_or_else(|| safe_idle_value(channel), |(_, value)| value)
@@ -2080,10 +2116,10 @@ fn named_color(name: &str) -> Option<[f32; 4]> {
     let blue = has("blue", 'b');
     let white = has("white", 'w');
     (red || green || blue || white).then_some([
-        red as u8 as f32,
-        green as u8 as f32,
-        blue as u8 as f32,
-        white as u8 as f32,
+        f32::from(u8::from(red)),
+        f32::from(u8::from(green)),
+        f32::from(u8::from(blue)),
+        f32::from(u8::from(white)),
     ])
 }
 
@@ -2133,11 +2169,14 @@ fn effect_pattern_value(pattern: u32, speed: u32, channel: &MappedChannel) -> u3
             |function| function.normalized_value(pattern.min(255) as f32 / 255.0),
         );
     }
-    let index = pattern.saturating_sub(1) as usize % sets.len();
+    let index = cycle_index(u64::from(pattern.saturating_sub(1)), sets.len());
     sets[index].from_dmx
-        + (sets[index].to_dmx.saturating_sub(sets[index].from_dmx) as f32 * speed.min(255) as f32
-            / 255.0)
-            .round() as u32
+        + truncate_dmx(
+            (sets[index].to_dmx.saturating_sub(sets[index].from_dmx) as f32
+                * speed.min(255) as f32
+                / 255.0)
+                .round(),
+        )
 }
 
 fn zero_light(state: &mut FixtureState) {
@@ -2162,6 +2201,11 @@ fn zero_light(state: &mut FixtureState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cycle_index_wraps_large_counters_before_narrowing() {
+        assert_eq!(cycle_index(u64::MAX, 7), 1);
+    }
     use crate::{
         config::default_show_config,
         grandma2::{LIXADA_MINI_BUTTERFLY_ID, PURELIGHT_MUVY_WASHQ_ID, SHOWTEC_TECHNO_DERBY_ID},

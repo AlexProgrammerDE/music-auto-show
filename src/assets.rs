@@ -9,6 +9,10 @@ use rust_embed::RustEmbed;
 #[folder = "frontend/dist/"]
 struct FrontendAssets;
 
+#[expect(
+    clippy::unused_async,
+    reason = "Axum requires an async handler for the SPA fallback"
+)]
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let requested = if path.is_empty() { "index.html" } else { path };

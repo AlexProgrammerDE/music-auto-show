@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result as AnyResult, bail};
+use anyhow::{Context, Result as AnyResult, bail};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -40,13 +40,25 @@ pub enum ConfigError {
     Serialization(#[source] serde_json::Error),
     #[error("{0}")]
     Invalid(String),
+    #[error("{message}: {source}")]
+    InvalidEnum {
+        message: &'static str,
+        #[source]
+        source: prost::UnknownEnumValue,
+    },
+    #[error("show configuration is not valid UTF-8: {0}")]
+    InvalidUtf8(#[from] std::string::FromUtf8Error),
 }
 
 impl ConfigError {
     pub fn is_invalid_input(&self) -> bool {
         matches!(
             self,
-            Self::InvalidJson(_) | Self::InvalidSchema(_) | Self::Invalid(_)
+            Self::InvalidJson(_)
+                | Self::InvalidSchema(_)
+                | Self::Invalid(_)
+                | Self::InvalidEnum { .. }
+                | Self::InvalidUtf8(_)
         )
     }
 }
@@ -67,6 +79,8 @@ pub struct ValidatedShowConfig {
 }
 
 impl ValidatedShowConfig {
+    /// # Errors
+    /// Returns an error if the configuration or its fixture definitions are invalid.
     pub fn new(mut config: ShowConfig, simulate: bool) -> Result<Self, ConfigError> {
         let grandma2 = normalize_config(&mut config, simulate)
             .map_err(|error| ConfigError::Invalid(error.to_string()))?;
@@ -81,18 +95,41 @@ impl ValidatedShowConfig {
         let effects = config
             .effects
             .ok_or_else(|| ConfigError::Invalid("effects configuration is missing".into()))?;
-        let audio_mode = AudioInputMode::try_from(audio.mode)
-            .map_err(|_| ConfigError::Invalid("audio input mode is invalid".into()))?;
-        let visualization_mode = VisualizationMode::try_from(effects.mode)
-            .map_err(|_| ConfigError::Invalid("visualization mode is invalid".into()))?;
-        let movement_mode = MovementMode::try_from(effects.movement_mode)
-            .map_err(|_| ConfigError::Invalid("movement mode is invalid".into()))?;
+        let audio_mode =
+            AudioInputMode::try_from(audio.mode).map_err(|source| ConfigError::InvalidEnum {
+                message: "audio input mode is invalid",
+                source,
+            })?;
+        let visualization_mode = VisualizationMode::try_from(effects.mode).map_err(|source| {
+            ConfigError::InvalidEnum {
+                message: "visualization mode is invalid",
+                source,
+            }
+        })?;
+        let movement_mode = MovementMode::try_from(effects.movement_mode).map_err(|source| {
+            ConfigError::InvalidEnum {
+                message: "movement mode is invalid",
+                source,
+            }
+        })?;
         let effect_fixture_mode = EffectFixtureMode::try_from(effects.effect_fixture_mode)
-            .map_err(|_| ConfigError::Invalid("effect fixture mode is invalid".into()))?;
-        let rotation_mode = RotationMode::try_from(effects.rotation_mode)
-            .map_err(|_| ConfigError::Invalid("rotation mode is invalid".into()))?;
-        let strobe_effect_mode = StrobeEffectMode::try_from(effects.strobe_effect_mode)
-            .map_err(|_| ConfigError::Invalid("strobe effect mode is invalid".into()))?;
+            .map_err(|source| ConfigError::InvalidEnum {
+                message: "effect fixture mode is invalid",
+                source,
+            })?;
+        let rotation_mode = RotationMode::try_from(effects.rotation_mode).map_err(|source| {
+            ConfigError::InvalidEnum {
+                message: "rotation mode is invalid",
+                source,
+            }
+        })?;
+        let strobe_effect_mode =
+            StrobeEffectMode::try_from(effects.strobe_effect_mode).map_err(|source| {
+                ConfigError::InvalidEnum {
+                    message: "strobe effect mode is invalid",
+                    source,
+                }
+            })?;
         Ok(Self {
             proto: config,
             audio,
@@ -165,6 +202,8 @@ impl Deref for ValidatedShowConfig {
     }
 }
 
+/// # Errors
+/// Returns an error if the file cannot be read or its configuration is invalid.
 pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigError> {
     if !path.exists() {
         return ValidatedShowConfig::new(default_show_config(simulate), simulate);
@@ -189,8 +228,7 @@ pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigEr
             "show configuration exceeds the {MAX_CONFIG_BYTES}-byte limit"
         )));
     }
-    let contents = String::from_utf8(bytes)
-        .map_err(|_| ConfigError::Invalid("show configuration is not valid UTF-8".into()))?;
+    let contents = String::from_utf8(bytes)?;
     parse_json(&contents, simulate).map_err(|error| match error {
         ConfigError::Invalid(message) => ConfigError::Invalid(format!(
             "invalid show configuration in {}: {message}",
@@ -200,6 +238,8 @@ pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigEr
     })
 }
 
+/// # Errors
+/// Returns an error if the JSON or the resulting configuration is invalid.
 pub fn parse_json(contents: &str, simulate: bool) -> Result<ValidatedShowConfig, ConfigError> {
     if contents.len() > MAX_CONFIG_BYTES {
         return Err(ConfigError::Invalid(format!(
@@ -216,10 +256,14 @@ pub fn parse_json(contents: &str, simulate: bool) -> Result<ValidatedShowConfig,
     ValidatedShowConfig::new(config, simulate)
 }
 
+/// # Errors
+/// Returns an error if the configuration cannot be serialized.
 pub fn to_json(config: &ValidatedShowConfig) -> Result<String, ConfigError> {
     serde_json::to_string_pretty(config.as_proto()).map_err(ConfigError::Serialization)
 }
 
+/// # Errors
+/// Returns an error if serialization fails or the file cannot be written.
 pub fn save(path: &Path, config: &ValidatedShowConfig) -> Result<(), ConfigError> {
     let parent = configuration_directory(path);
     fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
@@ -308,7 +352,7 @@ fn normalize_config(config: &mut ShowConfig, cli_simulate: bool) -> AnyResult<Gr
     }
 
     if config.effects.is_none() {
-        config.effects = default_effects();
+        config.effects = Some(default_effects());
     }
     let effects = config
         .effects
@@ -576,7 +620,7 @@ fn normalized_enum<T>(
     }
     parse(value)
         .map(|_| value)
-        .map_err(|_| anyhow::anyhow!("{name} {value} is invalid"))
+        .with_context(|| format!("{name} {value} is invalid"))
 }
 
 fn validate_range(name: &str, value: f32, minimum: f32, maximum: f32) -> AnyResult<()> {
@@ -617,8 +661,8 @@ fn stable_fixture_id(name: &str, channel: u32, index: usize) -> String {
     )
 }
 
-fn default_effects() -> Option<EffectsConfig> {
-    Some(EffectsConfig {
+fn default_effects() -> EffectsConfig {
+    EffectsConfig {
         mode: VisualizationMode::Energy as i32,
         intensity: 1.0,
         force_max_brightness: false,
@@ -635,7 +679,7 @@ fn default_effects() -> Option<EffectsConfig> {
         strobe_effect_mode: StrobeEffectMode::Auto as i32,
         strobe_effect_speed: 0.5,
         harmony_palette_enabled: false,
-    })
+    }
 }
 
 pub fn default_show_config(simulate: bool) -> ShowConfig {
@@ -654,7 +698,7 @@ pub fn default_show_config(simulate: bool) -> ShowConfig {
             beatnet_model_path: "models/beatnet-plus.pt".into(),
             device_id: String::new(),
         }),
-        effects: default_effects(),
+        effects: Some(default_effects()),
         imported_fixture_files: Vec::new(),
         fixtures: vec![
             FixtureConfig {
@@ -719,7 +763,7 @@ mod tests {
             ValidatedShowConfig::new(default_show_config(true), true).expect("defaults validate");
         assert_eq!(config.grandma2().fixture_types().len(), 3);
         assert_eq!(config.fixtures.len(), 3);
-        assert!(config.imported_fixture_files.is_empty());
+        assert_eq!(config.imported_fixture_files, []);
         assert!(
             config
                 .fixtures
@@ -754,9 +798,9 @@ mod tests {
         assert_eq!(placements[2].x_m, 3.0);
         assert!(placements.iter().all(|placement| {
             placement.focus_target_enabled
-                && placement.y_m == 3.35
+                && placement.y_m.to_bits() == 3.35_f32.to_bits()
                 && placement.focus_target_y_m == 0.0
-                && placement.focus_target_z_m == 4.2
+                && placement.focus_target_z_m.to_bits() == 4.2_f32.to_bits()
         }));
     }
 

@@ -105,7 +105,7 @@ impl MusicAutoShowService for GrpcApi {
         request: Request<WatchSnapshotsRequest>,
     ) -> Result<Response<Self::WatchSnapshotsStream>, Status> {
         let interval =
-            Duration::from_millis(request.into_inner().interval_ms.clamp(25, 5_000) as u64);
+            Duration::from_millis(u64::from(request.into_inner().interval_ms.clamp(25, 5_000)));
         let mut receiver = self.app.subscribe();
         let app = Arc::clone(&self.app);
         let stream = async_stream::stream! {
@@ -142,7 +142,7 @@ impl MusicAutoShowService for GrpcApi {
         request: Request<WatchLiveFramesRequest>,
     ) -> Result<Response<Self::WatchLiveFramesStream>, Status> {
         let interval =
-            Duration::from_millis(request.into_inner().interval_ms.clamp(16, 1_000) as u64);
+            Duration::from_millis(u64::from(request.into_inner().interval_ms.clamp(16, 1_000)));
         let mut receiver = self.app.subscribe();
         let app = Arc::clone(&self.app);
         let stream = async_stream::stream! {
@@ -266,10 +266,10 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         request: Request<ConnectBluetoothReceiverDeviceRequest>,
     ) -> Result<Response<ConnectBluetoothReceiverDeviceResponse>, Status> {
-        let device_id = required_device_id(request.into_inner().device_id)?;
+        let device_id = required_device_id(&request.get_ref().device_id)?;
         let status = self
             .app
-            .connect_bluetooth_receiver_device(&device_id)
+            .connect_bluetooth_receiver_device(device_id)
             .await
             .map_err(app_status)?;
         Ok(Response::new(ConnectBluetoothReceiverDeviceResponse {
@@ -281,10 +281,10 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         request: Request<DisconnectBluetoothReceiverDeviceRequest>,
     ) -> Result<Response<DisconnectBluetoothReceiverDeviceResponse>, Status> {
-        let device_id = required_device_id(request.into_inner().device_id)?;
+        let device_id = required_device_id(&request.get_ref().device_id)?;
         let status = self
             .app
-            .disconnect_bluetooth_receiver_device(&device_id)
+            .disconnect_bluetooth_receiver_device(device_id)
             .await
             .map_err(app_status)?;
         Ok(Response::new(DisconnectBluetoothReceiverDeviceResponse {
@@ -296,10 +296,10 @@ impl MusicAutoShowService for GrpcApi {
         &self,
         request: Request<ForgetBluetoothReceiverDeviceRequest>,
     ) -> Result<Response<ForgetBluetoothReceiverDeviceResponse>, Status> {
-        let device_id = required_device_id(request.into_inner().device_id)?;
+        let device_id = required_device_id(&request.get_ref().device_id)?;
         let status = self
             .app
-            .forget_bluetooth_receiver_device(&device_id)
+            .forget_bluetooth_receiver_device(device_id)
             .await
             .map_err(app_status)?;
         Ok(Response::new(ForgetBluetoothReceiverDeviceResponse {
@@ -388,12 +388,12 @@ impl MusicAutoShowService for GrpcApi {
     }
 }
 
-fn required_device_id(device_id: String) -> Result<String, Status> {
+fn required_device_id(device_id: &str) -> Result<&str, Status> {
     let device_id = device_id.trim();
     if device_id.is_empty() {
         return Err(Status::invalid_argument("Bluetooth device ID is required"));
     }
-    Ok(device_id.into())
+    Ok(device_id)
 }
 
 fn app_status(error: AppError) -> Status {
@@ -402,7 +402,9 @@ fn app_status(error: AppError) -> Status {
         AppError::Config(error) if error.is_invalid_input() => Status::invalid_argument(message),
         AppError::FailedPrecondition(_) => Status::failed_precondition(message),
         AppError::ResourceExhausted => Status::resource_exhausted(message),
-        AppError::Unavailable | AppError::Runtime(_) => Status::unavailable(message),
+        AppError::Unavailable | AppError::ResponseClosed(_) | AppError::Runtime(_) => {
+            Status::unavailable(message)
+        }
         AppError::Config(_) => Status::internal(message),
     }
 }

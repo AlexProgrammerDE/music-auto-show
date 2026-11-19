@@ -65,7 +65,7 @@ impl AudioCapture {
             && !error.is_empty()
         {
             status.running = false;
-            status.last_error = error.clone();
+            status.last_error.clone_from(&error);
         }
         status.dropped_sample_blocks = self.dropped_sample_blocks.load(Ordering::Relaxed);
         status
@@ -98,6 +98,8 @@ pub struct AudioWorker {
 }
 
 impl AudioWorker {
+    /// # Errors
+    /// Returns an error if the audio worker cannot start.
     pub fn start(config: &AudioConfig, mode: AudioInputMode, cli_simulate: bool) -> Result<Self> {
         let config = config.clone();
         let latest = Arc::new(ArcSwap::from_pointee(stopped_worker_snapshot(
@@ -114,7 +116,7 @@ impl AudioWorker {
                     Ok(mut state) => {
                         state.publish(&worker_latest);
                         if ready_sender.send(Ok(())).is_ok() {
-                            state.run(receiver, &worker_latest);
+                            state.run(&receiver, &worker_latest);
                         }
                     }
                     Err(error) => {
@@ -144,6 +146,8 @@ impl AudioWorker {
         self.latest.load_full().as_ref().clone()
     }
 
+    /// # Errors
+    /// Returns an error if the worker is unavailable or cannot start recording.
     pub fn start_recording(&self) -> Result<RecordingStatus> {
         let (reply, response) = mpsc::sync_channel(0);
         self.commands
@@ -154,6 +158,8 @@ impl AudioWorker {
             .context("audio analysis worker stopped while starting a recording")?
     }
 
+    /// # Errors
+    /// Returns an error if the worker is unavailable or cannot encode the recording.
     pub fn stop_recording(&self) -> Result<Recording> {
         let (reply, response) = mpsc::sync_channel(0);
         self.commands
@@ -164,6 +170,8 @@ impl AudioWorker {
             .context("audio analysis worker stopped while finishing a recording")?
     }
 
+    /// # Errors
+    /// Returns an error if the audio worker is unavailable.
     pub fn clear_recording(&self) -> Result<RecordingStatus> {
         let (reply, response) = mpsc::sync_channel(0);
         self.commands
@@ -174,6 +182,8 @@ impl AudioWorker {
             .context("audio analysis worker stopped while clearing a recording")?
     }
 
+    /// # Errors
+    /// Returns an error if the audio worker is unavailable.
     pub fn reset_rhythm_tracking(&self) -> Result<()> {
         let (reply, response) = mpsc::sync_channel(0);
         self.commands
@@ -283,7 +293,7 @@ impl AudioWorkerState {
 
     fn run(
         &mut self,
-        receiver: Receiver<AudioWorkerCommand>,
+        receiver: &Receiver<AudioWorkerCommand>,
         latest: &ArcSwap<AudioWorkerSnapshot>,
     ) {
         let mut schedule = PeriodicSchedule::immediate(AUDIO_ANALYSIS_INTERVAL, Instant::now());
@@ -574,19 +584,19 @@ pub fn list_devices() -> Vec<AudioDevice> {
             let configuration = capture_stream_config(&device).ok();
             let channels = configuration
                 .as_ref()
-                .map_or(0, |config| config.channels() as u32);
+                .map_or(0, |config| u32::from(config.channels()));
             let sample_rate = configuration
                 .as_ref()
-                .map_or(0, |config| config.sample_rate());
+                .map_or(0, cpal::SupportedStreamConfig::sample_rate);
             let output_channels = device
                 .default_output_config()
                 .ok()
-                .map_or(0, |config| config.channels() as u32);
+                .map_or(0, |config| u32::from(config.channels()));
             let is_default_loopback = default_loopback_id.as_deref() == Some(id.as_str());
             let name = display_device_name(&id, description.name());
             devices.push(AudioDevice {
                 id: id.clone(),
-                name: name.clone(),
+                name,
                 device_type: capture_device_type(&id, &description).into(),
                 channels,
                 output_channels,
@@ -620,7 +630,7 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     for _ in 0..CAPTURE_QUEUE_DEPTH {
         available_buffers
             .send(Vec::with_capacity(CAPTURE_BUFFER_CAPACITY))
-            .map_err(|_| anyhow::anyhow!("failed to initialize audio capture buffers"))?;
+            .context("failed to initialize audio capture buffers")?;
     }
     let dropped_sample_blocks = Arc::new(AtomicU64::new(0));
     let dropped_sample_blocks_thread = Arc::clone(&dropped_sample_blocks);
@@ -690,6 +700,10 @@ struct CapturePipeline {
     recoverable_stream_events: Arc<AtomicU64>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the sample-format callbacks beside their shared stream setup"
+)]
 fn build_cpal_stream(
     config: &AudioConfig,
     mode: AudioInputMode,
@@ -710,7 +724,8 @@ fn build_cpal_stream(
     let name = display_device_name(&id, description.name());
     let supported = capture_stream_config(&selected)
         .with_context(|| format!("audio device {name} cannot be captured"))?;
-    let channels = supported.channels() as usize;
+    let channel_count = supported.channels();
+    let channels = usize::from(channel_count);
     let sample_rate = supported.sample_rate();
     let stream_config: cpal::StreamConfig = supported.into();
     let stream = match supported.sample_format() {
@@ -725,7 +740,7 @@ fn build_cpal_stream(
                     &buffer_recycler,
                     &dropped_sample_blocks,
                     |sample| sample,
-                )
+                );
             },
             capture_error_callback(
                 Arc::clone(&stream_error),
@@ -743,8 +758,8 @@ fn build_cpal_stream(
                     &reusable_buffers,
                     &buffer_recycler,
                     &dropped_sample_blocks,
-                    |sample| sample as f32 / 32_768.0,
-                )
+                    |sample| f32::from(sample) / 32_768.0,
+                );
             },
             capture_error_callback(
                 Arc::clone(&stream_error),
@@ -762,8 +777,8 @@ fn build_cpal_stream(
                     &reusable_buffers,
                     &buffer_recycler,
                     &dropped_sample_blocks,
-                    |sample| sample as f32 / 32_768.0 - 1.0,
-                )
+                    |sample| f32::from(sample) / 32_768.0 - 1.0,
+                );
             },
             capture_error_callback(
                 Arc::clone(&stream_error),
@@ -787,7 +802,7 @@ fn build_cpal_stream(
             }
             .into(),
             host_api: selected.id()?.host().to_string(),
-            channels: channels as u32,
+            channels: u32::from(channel_count),
             sample_rate,
             selection_reason: selection.reason,
             running: true,
@@ -822,7 +837,7 @@ fn select_capture_device(config: &AudioConfig, mode: AudioInputMode) -> Result<D
                 Some((device, "configured_device"))
             }
             _ => {
-                missing_device_id = config.device_id.clone();
+                missing_device_id.clone_from(&config.device_id);
                 None
             }
         })
@@ -1100,6 +1115,7 @@ impl AudioAnalyzer {
                 },
             ),
         };
+        let now = Instant::now();
         Self {
             sample_rate,
             gain,
@@ -1114,12 +1130,16 @@ impl AudioAnalyzer {
             structure_history: VecDeque::with_capacity(50),
             smoothed_chroma: [0.0; 12],
             structure: StructureTracker::default(),
-            last_structure_update: Instant::now() - Duration::from_secs(1),
+            last_structure_update: now.checked_sub(Duration::from_secs(1)).unwrap_or(now),
             recording: Recorder::new(sample_rate),
             last_analysis: silent_analysis_for(sample_rate),
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the ordered DSP steps and published analysis fields together"
+    )]
     pub fn process(&mut self, samples: &[f32]) -> AudioAnalysis {
         if samples.is_empty() {
             return self.last_analysis.clone();
@@ -1236,7 +1256,7 @@ impl AudioAnalyzer {
             harmonic_confidence,
             section: self.structure.section as i32,
             section_confidence: self.structure.confidence,
-            section_history: self.structure.markers.iter().cloned().collect(),
+            section_history: self.structure.markers.iter().copied().collect(),
         };
         self.last_analysis.clone()
     }
@@ -1295,11 +1315,13 @@ impl AudioAnalyzer {
     pub fn start_recording(&mut self) -> bool {
         self.recording.start()
     }
+    /// # Errors
+    /// Returns an error if the recording cannot be encoded.
     pub fn stop_recording(&mut self) -> Result<Recording> {
         self.recording.stop()
     }
     pub fn clear_recording(&mut self) {
-        self.recording.clear()
+        self.recording.clear();
     }
     pub fn recording_status(&self) -> RecordingStatus {
         self.recording.status()
@@ -1311,8 +1333,8 @@ fn fallback_beat(previous: &AudioAnalysis) -> BeatEstimate {
         tempo: previous.tempo,
         beat_position: previous.beat_position,
         bar_position: previous.bar_position,
-        meter: previous.meter as u8,
-        beat_index: previous.beat_index as u8,
+        meter: u8::try_from(previous.meter).unwrap_or_default(),
+        beat_index: u8::try_from(previous.beat_index).unwrap_or_default(),
         estimated_beat: previous.estimated_beat,
         estimated_bar: previous.estimated_bar,
         tracking_confidence: previous.tracking_confidence,
@@ -1386,6 +1408,11 @@ fn fft_power(samples: &[f32], size: usize) -> Vec<f32> {
     AnalysisFft::new(size).process(samples).to_vec()
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Frequency bins are nonnegative and are bounded by the FFT length before indexing"
+)]
 fn band_power(fft: &[f32], sample_rate: u32, size: usize, low: f32, high: f32) -> f32 {
     let low = (low * size as f32 / sample_rate as f32) as usize;
     let high = (high * size as f32 / sample_rate as f32) as usize;
@@ -1455,6 +1482,11 @@ fn spectrogram_frame(fft: &[f32], sample_rate: u32, size: usize, gain: f32) -> V
         .collect()
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Frequency bins are nonnegative and are bounded by the FFT length before indexing"
+)]
 fn band_peak_power(fft: &[f32], sample_rate: u32, size: usize, low: f32, high: f32) -> f32 {
     let low = (low * size as f32 / sample_rate as f32).floor() as usize;
     let high = (high * size as f32 / sample_rate as f32).ceil() as usize;
@@ -1476,14 +1508,9 @@ fn visualization_level(power: f32, gain: f32, floor_db: f32, ceiling_db: f32) ->
     ((power_db + gain_db - floor_db) / (ceiling_db - floor_db)).clamp(0.0, 1.0)
 }
 
-fn logarithmic_bands(count: usize, minimum: f32, maximum: f32) -> impl Iterator<Item = (f32, f32)> {
+fn logarithmic_bands(count: i32, minimum: f32, maximum: f32) -> impl Iterator<Item = (f32, f32)> {
     let ratio = (maximum / minimum).powf(1.0 / count as f32);
-    (0..count).map(move |index| {
-        (
-            minimum * ratio.powi(index as i32),
-            minimum * ratio.powi(index as i32 + 1),
-        )
-    })
+    (0..count).map(move |index| (minimum * ratio.powi(index), minimum * ratio.powi(index + 1)))
 }
 
 fn follow_envelope(current: f32, target: f32, attack: f32, release: f32) -> f32 {
@@ -1499,6 +1526,10 @@ fn amplitude_dbfs(amplitude: f32) -> f32 {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Round the MIDI note within the analyzed frequency range before looking up its pitch class"
+)]
 fn chroma(fft: &[f32], sample_rate: u32, size: usize) -> [f32; 12] {
     let mut chroma = [0.0_f32; 12];
     for (bin, power) in fft.iter().copied().enumerate().skip(1) {
@@ -1508,7 +1539,7 @@ fn chroma(fft: &[f32], sample_rate: u32, size: usize) -> [f32; 12] {
         }
         let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
         let pitch_class = midi.round() as i32;
-        let pitch_class = pitch_class.rem_euclid(12) as usize;
+        let pitch_class = usize::try_from(pitch_class.rem_euclid(12)).unwrap_or_default();
         chroma[pitch_class] += power.max(0.0).sqrt();
     }
     normalize_chroma(&mut chroma);
@@ -1557,7 +1588,7 @@ fn estimate_key(chroma: &[f32; 12]) -> (u32, Tonality, f32) {
                 },
             );
             let score = numerator / (chroma_power.sqrt() * profile_power.sqrt()).max(f32::EPSILON);
-            candidates.push((score, tonic as u32, tonality));
+            candidates.push((score, u32::try_from(tonic).unwrap_or_default(), tonality));
         }
     }
     candidates.sort_by(|first, second| second.0.total_cmp(&first.0));
@@ -1610,11 +1641,11 @@ impl StructureTracker {
             self.confidence += (confidence - self.confidence) * 0.25;
             return;
         }
-        if candidate != self.candidate {
+        if candidate == self.candidate {
+            self.candidate_frames = self.candidate_frames.saturating_add(1);
+        } else {
             self.candidate = candidate;
             self.candidate_frames = 1;
-        } else {
-            self.candidate_frames = self.candidate_frames.saturating_add(1);
         }
         let required_frames = if candidate == MusicSection::Drop {
             2
@@ -1705,7 +1736,7 @@ struct LinearResampler {
 impl LinearResampler {
     fn new(input_rate: u32, output_rate: u32) -> Self {
         Self {
-            ratio: input_rate as f64 / output_rate as f64,
+            ratio: f64::from(input_rate) / f64::from(output_rate),
             position: 0.0,
             previous: 0.0,
             initialized: false,
@@ -1718,6 +1749,11 @@ impl LinearResampler {
         self.initialized = false;
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The resampler splits a bounded sample position into an index and an f32 interpolation weight"
+    )]
     fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if input.is_empty() {
             return Vec::new();
@@ -1789,6 +1825,11 @@ impl Recorder {
         self.peak = 0.0;
         self.clipped = 0;
     }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The positive recording duration and sample rate produce a whole-sample capacity"
+    )]
     fn capture(&mut self, samples: &[f32]) {
         if self.phase != RecordingPhase::Capturing {
             return;
@@ -1797,7 +1838,7 @@ impl Recorder {
         let remaining = maximum.saturating_sub(self.samples.len());
         for sample in samples.iter().take(remaining).copied() {
             self.samples.push(sample);
-            self.sum_squares += (sample * sample) as f64;
+            self.sum_squares += f64::from(sample * sample);
             self.peak = self.peak.max(sample.abs());
             self.clipped += u64::from(sample.abs() >= 0.99);
         }
@@ -1805,6 +1846,10 @@ impl Recorder {
             self.phase = RecordingPhase::LimitReached;
         }
     }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "The RMS of normalized samples fits the f32 recording status field"
+    )]
     fn status(&self) -> RecordingStatus {
         RecordingStatus {
             recording: self.phase != RecordingPhase::Idle,
@@ -1825,6 +1870,10 @@ impl Recorder {
             limit_reached: self.phase == RecordingPhase::LimitReached,
         }
     }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "WAV output uses signed 16-bit samples and clamps the source before conversion"
+    )]
     fn stop(&mut self) -> Result<Recording> {
         if self.phase == RecordingPhase::Idle {
             bail!("audio recording is not active");
@@ -1845,7 +1894,7 @@ impl Recorder {
             .context("failed to create diagnostic WAV")?;
             for sample in &self.samples {
                 writer
-                    .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                    .write_sample((sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
                     .context("failed to encode diagnostic WAV sample")?;
             }
             writer
@@ -1859,6 +1908,10 @@ impl Recorder {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "The simulated signal uses f32 DSP while its sample clock uses f64"
+)]
 fn simulated_audio(
     start_seconds: f64,
     sample_count: usize,
@@ -1869,6 +1922,7 @@ fn simulated_audio(
     let interval = 60.0 / tempo;
     let phase = (elapsed % interval) / interval;
     let beat = phase < 0.06;
+    let beat_index = u8::try_from(beat_count % 4).unwrap_or_default();
     let energy = 0.5 + 0.3 * (elapsed * 0.2).sin();
     let samples = (0..sample_count)
         .map(|index| {
@@ -1889,9 +1943,9 @@ fn simulated_audio(
             downbeat: beat && beat_count.is_multiple_of(4),
             confidence: 0.9,
             beat_position: phase,
-            bar_position: ((beat_count % 4) as f32 + phase) / 4.0,
+            bar_position: (f32::from(beat_index) + phase) / 4.0,
             meter: 4,
-            beat_index: (beat_count % 4) as u8 + 1,
+            beat_index: beat_index + 1,
             estimated_beat: beat_count,
             estimated_bar: beat_count / 4,
             beat_activation: if beat { 0.9 } else { 0.1 },
@@ -1943,7 +1997,7 @@ mod tests {
         assert_eq!(reset.estimated_bar, 0);
         assert_eq!(reset.tracking_confidence, 0.0);
         assert_eq!(reset.section, MusicSection::Unspecified as i32);
-        assert!(reset.section_history.is_empty());
+        assert_eq!(reset.section_history, []);
         assert!(analyzer.structure_history.is_empty());
     }
 
@@ -2089,7 +2143,7 @@ mod tests {
             "a full recording must not be overwritten"
         );
         let recording = recorder.stop().expect("full recording should encode");
-        assert!(!recording.wav.is_empty());
+        assert_ne!(recording.wav, [] as [u8; 0]);
         assert!(!recording.status.expect("recording status").recording);
     }
 

@@ -181,7 +181,7 @@ mod platform {
         if output.status.code() == Some(10) {
             return Ok(false);
         }
-        Err(nmcli_error(output, "look up the hotspot profile"))
+        Err(nmcli_error(&output, "look up the hotspot profile"))
     }
 
     async fn profile_is_active() -> Result<bool> {
@@ -336,12 +336,12 @@ mod platform {
             .await
             .context("failed to run nmcli; install and start NetworkManager first")?;
         if !output.status.success() {
-            return Err(nmcli_error(output, operation));
+            return Err(nmcli_error(&output, operation));
         }
         String::from_utf8(output.stdout).context("nmcli returned non-UTF-8 output")
     }
 
-    fn nmcli_error(output: Output, operation: &str) -> anyhow::Error {
+    fn nmcli_error(output: &Output, operation: &str) -> anyhow::Error {
         let details = String::from_utf8_lossy(&output.stderr);
         let details = details.trim();
         if details.is_empty() {
@@ -374,6 +374,13 @@ mod platform {
     }
 }
 
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        clippy::unused_async,
+        reason = "Keep the same async entry point on every platform"
+    )
+)]
 pub async fn execute(command: &HotspotCommand) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
