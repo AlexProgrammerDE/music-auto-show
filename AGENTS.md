@@ -20,8 +20,9 @@ The repository must remain Rust and TypeScript only. Do not reintroduce Python, 
 
 ## Git
 
-- Use Conventional Commit messages in the form `<type>(<scope>): <subject>`.
-- Prefer `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`, and `perf`.
+- Use `type: subject` or `type(scope): subject` on the first line. Put `!` before the colon for a breaking change.
+- The `commit-msg` hook accepts `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`, `perf`, `style`, and `revert`.
+- Git subjects that start with `Merge `, `Revert "`, `fixup! `, `squash! `, or `amend! ` also pass.
 - Keep the subject imperative and concise.
 - Do not create a branch unless the user explicitly asks.
 - Never bypass commit hooks or Lefthook. Do not use `-n`.

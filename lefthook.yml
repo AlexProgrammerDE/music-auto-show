@@ -18,15 +18,28 @@ pre-commit:
       glob: "*.rs"
       run: cargo fmt --all -- --check
 
-pre-push:
+commit-msg:
   commands:
-    frontend:
-      root: "frontend/"
-      glob: "*.{ts,tsx,json}"
-      run: bun run check
-    clippy:
-      glob: "{*.rs,Cargo.toml,Cargo.lock}"
-      run: cargo clippy --all-targets --locked -- -D warnings
-    protobuf:
-      glob: "{*.proto,buf.yaml,buf.gen.yaml}"
-      run: bun run proto:lint
+    conventional-commit:
+      run: |
+        if head -n 1 "{1}" | LC_ALL=C grep -Eq '^(Merge |Revert "|fixup! |squash! |amend! |(feat|fix|docs|refactor|test|chore|ci|build|perf|style|revert)([(][^()[:space:]]+[)])?!?: [^[:space:]])'; then
+          exit 0
+        fi
+        printf '%s\n' 'Use a Conventional Commit subject, for example: fix(audio): handle silent input' >&2
+        exit 1
+
+pre-push:
+  piped: true
+  jobs:
+    - name: protobuf-format
+      glob: "*.proto"
+      run: bunx --bun @bufbuild/buf format --diff --exit-code
+    - name: protobuf
+      glob: "{*.proto,buf.yaml,buf.gen.yaml,buf.lock,package.json,bun.lock,.bun-version}"
+      run: bun run proto:lint && bun run proto:generate
+    - name: frontend
+      glob: "{frontend/**,*.proto,buf.yaml,buf.gen.yaml,buf.lock,package.json,bun.lock,.bun-version}"
+      run: bun run frontend:check
+    - name: rust
+      glob: "{*.rs,Cargo.toml,Cargo.lock,clippy.toml,fixtures/**,frontend/**,*.proto,buf.yaml,buf.gen.yaml,buf.lock,package.json,bun.lock,.bun-version}"
+      run: cargo clippy --all-targets --locked -- -D warnings && cargo test --all-targets --locked

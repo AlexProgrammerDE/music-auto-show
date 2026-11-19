@@ -68,4 +68,9 @@ Remove credentials and private data from examples, logs, and screenshots.
 
 `bun install` installs Lefthook for this checkout and preserves the existing preparation steps.
 Run `bun run pre-commit` to run the commit checks manually.
-The hooks use the existing project tools. Before pushing, they run the relevant project checks for changed files.
+Before each commit, Lefthook runs Oxlint, Oxfmt, and rustfmt for the staged files that match each check.
+The commit message hook checks the first line against the Conventional Commit rules in [AGENTS.md](AGENTS.md).
+
+Before a push, Lefthook runs the checks that match the changed files.
+It checks protobuf formatting, lints protobuf definitions, and generates frontend types when the relevant files change.
+It also runs the frontend checks, Clippy, and Rust tests when their inputs change.
