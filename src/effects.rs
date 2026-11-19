@@ -679,7 +679,7 @@ impl EffectsEngine {
             EffectFixtureMode::StrobeFocus => 0.5,
             EffectFixtureMode::MovementFocus => 1.3,
             EffectFixtureMode::MovementOnly => 1.5,
-            _ => 1.0,
+            EffectFixtureMode::Unspecified | EffectFixtureMode::Balanced => 1.0,
         };
         let scale = tempo_scale * movement_scale;
         match mode {
@@ -777,7 +777,12 @@ impl EffectsEngine {
             _ if value == 0 && beat && audio.bass > 0.8 => {
                 value = truncate_dmx((80.0 + audio.bass * 80.0) * response);
             }
-            _ => {}
+            EffectFixtureMode::Unspecified
+            | EffectFixtureMode::Balanced
+            | EffectFixtureMode::StrobeFocus
+            | EffectFixtureMode::MovementFocus
+            | EffectFixtureMode::StrobeOnly
+            | EffectFixtureMode::MovementOnly => {}
         }
         value
     }
@@ -805,7 +810,23 @@ impl EffectsEngine {
                 let effect = start + audio.estimated_bar % (end - start + 1);
                 u32::try_from(effect).unwrap_or_default()
             }
-            specific => specific as u32 - StrobeEffectMode::Effect1 as u32 + 1,
+            specific @ (StrobeEffectMode::Effect1
+            | StrobeEffectMode::Effect2
+            | StrobeEffectMode::Effect3
+            | StrobeEffectMode::Effect4
+            | StrobeEffectMode::Effect5
+            | StrobeEffectMode::Effect6
+            | StrobeEffectMode::Effect7
+            | StrobeEffectMode::Effect8
+            | StrobeEffectMode::Effect9
+            | StrobeEffectMode::Effect10
+            | StrobeEffectMode::Effect11
+            | StrobeEffectMode::Effect12
+            | StrobeEffectMode::Effect13
+            | StrobeEffectMode::Effect14
+            | StrobeEffectMode::Effect15
+            | StrobeEffectMode::Effect16
+            | StrobeEffectMode::Effect17) => specific as u32 - StrobeEffectMode::Effect1 as u32 + 1,
         }
     }
 
@@ -1397,7 +1418,12 @@ impl EffectsEngine {
                 }
                 MovementMode::Ballyhoo | MovementMode::Chase => -10.0,
                 MovementMode::Sweep | MovementMode::Subtle | MovementMode::Figure8 => 15.0,
-                _ => 0.0,
+                MovementMode::Unspecified
+                | MovementMode::Standard
+                | MovementMode::WallWash
+                | MovementMode::Random
+                | MovementMode::Circle
+                | MovementMode::Fan => 0.0,
             };
             state.pan_tilt_speed = truncate_dmx(
                 (127.0 - (tempo - REFERENCE_TEMPO) + mode_offset + (0.5 - speed) * 100.0)
@@ -1628,7 +1654,34 @@ fn axis_default_position(
             fixture.movement_tilt_min * 255.0,
             fixture.movement_tilt_max * 255.0,
         ),
-        _ => return 127.5,
+        DmxSemantic::NoFeature
+        | DmxSemantic::Dimmer
+        | DmxSemantic::Red
+        | DmxSemantic::Green
+        | DmxSemantic::Blue
+        | DmxSemantic::White
+        | DmxSemantic::Amber
+        | DmxSemantic::Uv
+        | DmxSemantic::Cyan
+        | DmxSemantic::Magenta
+        | DmxSemantic::Yellow
+        | DmxSemantic::CustomColor
+        | DmxSemantic::PositionSpeed
+        | DmxSemantic::Strobe
+        | DmxSemantic::Shutter
+        | DmxSemantic::ColorMacro
+        | DmxSemantic::ColorMacroSpeed
+        | DmxSemantic::Rotation
+        | DmxSemantic::EffectSpeed
+        | DmxSemantic::EffectPattern
+        | DmxSemantic::Gobo
+        | DmxSemantic::Prism
+        | DmxSemantic::Zoom
+        | DmxSemantic::Focus
+        | DmxSemantic::Iris
+        | DmxSemantic::Reset
+        | DmxSemantic::Sound
+        | DmxSemantic::Other => return 127.5,
     };
     fixture_type
         .and_then(|fixture_type| {
@@ -1637,9 +1690,10 @@ fn axis_default_position(
                 .iter()
                 .find(|channel| channel.has_semantic(semantic))
         })
-        .map_or(f32::midpoint(minimum, maximum), |channel| {
-            fine_axis_position(channel.default_value, 0).clamp(minimum, maximum)
-        })
+        .map_or_else(
+            || f32::midpoint(minimum, maximum),
+            |channel| fine_axis_position(channel.default_value, 0).clamp(minimum, maximum),
+        )
 }
 
 fn find_fixture_type<'a>(
@@ -1722,7 +1776,34 @@ fn physical_axis_range(
     let range = match semantic {
         DmxSemantic::Pan => (visual.pan_max_degrees - visual.pan_min_degrees).abs(),
         DmxSemantic::Tilt => (visual.tilt_max_degrees - visual.tilt_min_degrees).abs(),
-        _ => return None,
+        DmxSemantic::NoFeature
+        | DmxSemantic::Dimmer
+        | DmxSemantic::Red
+        | DmxSemantic::Green
+        | DmxSemantic::Blue
+        | DmxSemantic::White
+        | DmxSemantic::Amber
+        | DmxSemantic::Uv
+        | DmxSemantic::Cyan
+        | DmxSemantic::Magenta
+        | DmxSemantic::Yellow
+        | DmxSemantic::CustomColor
+        | DmxSemantic::PositionSpeed
+        | DmxSemantic::Strobe
+        | DmxSemantic::Shutter
+        | DmxSemantic::ColorMacro
+        | DmxSemantic::ColorMacroSpeed
+        | DmxSemantic::Rotation
+        | DmxSemantic::EffectSpeed
+        | DmxSemantic::EffectPattern
+        | DmxSemantic::Gobo
+        | DmxSemantic::Prism
+        | DmxSemantic::Zoom
+        | DmxSemantic::Focus
+        | DmxSemantic::Iris
+        | DmxSemantic::Reset
+        | DmxSemantic::Sound
+        | DmxSemantic::Other => return None,
     };
     (range > f32::EPSILON && range.is_finite()).then_some(range)
 }

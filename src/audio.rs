@@ -51,11 +51,7 @@ impl AudioCapture {
         pending.clear();
         while let Ok(mut samples) = self.receiver.try_recv() {
             pending.append(&mut samples);
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "A full or closed buffer pool can discard the recycled buffer"
-            )]
-            let _ = self.available_buffers.try_send(samples);
+            drop(self.available_buffers.try_send(samples));
         }
     }
 
@@ -124,8 +120,7 @@ impl AudioWorker {
                         }
                     }
                     Err(error) => {
-                        #[expect(clippy::let_underscore_must_use, reason = "Startup errors have no recipient once the caller drops its receiver")]
-                        let _ = ready_sender.send(Err(format!("{error:#}")));
+                        drop(ready_sender.send(Err(format!("{error:#}"))));
                     }
                 },
             )
@@ -324,30 +319,18 @@ impl AudioWorkerState {
                     } else {
                         Err(anyhow::anyhow!("audio recording could not start"))
                     };
-                    #[expect(
-                        clippy::let_underscore_must_use,
-                        reason = "The command still takes effect if its caller drops the reply receiver"
-                    )]
-                    let _ = reply.send(result);
+                    drop(reply.send(result));
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::StopRecording { reply }) => {
                     let result = self.analyzer.stop_recording();
-                    #[expect(
-                        clippy::let_underscore_must_use,
-                        reason = "The command still takes effect if its caller drops the reply receiver"
-                    )]
-                    let _ = reply.send(result);
+                    drop(reply.send(result));
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::ClearRecording { reply }) => {
                     self.analyzer.clear_recording();
                     let status = self.analyzer.recording_status();
-                    #[expect(
-                        clippy::let_underscore_must_use,
-                        reason = "The command still takes effect if its caller drops the reply receiver"
-                    )]
-                    let _ = reply.send(Ok(status));
+                    drop(reply.send(Ok(status)));
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::ResetRhythmTracking { reply }) => {
@@ -699,13 +682,15 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
                     if ready_sender.send(Ok(status)).is_err() {
                         return;
                     }
-                    #[expect(clippy::let_underscore_must_use, reason = "An explicit stop and a disconnected owner both end capture")]
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "An explicit stop and a disconnected owner both end capture"
+                    )]
                     let _ = stop_receiver.recv();
                     drop(stream);
                 }
                 Err(error) => {
-                    #[expect(clippy::let_underscore_must_use, reason = "Startup errors have no recipient once the caller drops its receiver")]
-                    let _ = ready_sender.send(Err(format!("{error:#}")));
+                    drop(ready_sender.send(Err(format!("{error:#}"))));
                 }
             }
         })?;
@@ -739,7 +724,7 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
 }
 
 struct CapturePipeline {
-    sender: mpsc::SyncSender<Vec<f32>>,
+    sender: SyncSender<Vec<f32>>,
     reusable_buffers: Receiver<Vec<f32>>,
     buffer_recycler: SyncSender<Vec<f32>>,
     stream_error: Arc<Mutex<String>>,
@@ -775,6 +760,10 @@ fn build_cpal_stream(
     let channels = usize::from(channel_count);
     let sample_rate = supported.sample_rate();
     let stream_config: cpal::StreamConfig = supported.into();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "CPAL sample formats are non-exhaustive and unsupported formats share the same error"
+    )]
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => selected.build_input_stream(
             stream_config,
@@ -1074,7 +1063,7 @@ fn capture_error_callback(
 fn send_mono<T: Copy>(
     data: &[T],
     channels: usize,
-    sender: &mpsc::SyncSender<Vec<f32>>,
+    sender: &SyncSender<Vec<f32>>,
     reusable_buffers: &Receiver<Vec<f32>>,
     buffer_recycler: &SyncSender<Vec<f32>>,
     dropped_sample_blocks: &AtomicU64,
@@ -1087,11 +1076,7 @@ fn send_mono<T: Copy>(
     let channels = channels.max(1);
     let frames = data.len().div_ceil(channels);
     if frames > mono.capacity() {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "The capture callback can discard buffers when the pool is full or closed"
-        )]
-        let _ = buffer_recycler.try_send(mono);
+        drop(buffer_recycler.try_send(mono));
         dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -1110,11 +1095,7 @@ fn send_mono<T: Copy>(
     match sender.try_send(mono) {
         Ok(()) => {}
         Err(TrySendError::Full(mono) | TrySendError::Disconnected(mono)) => {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "The capture callback can discard buffers when the pool is full or closed"
-            )]
-            let _ = buffer_recycler.try_send(mono);
+            drop(buffer_recycler.try_send(mono));
             dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1821,6 +1802,10 @@ impl LinearResampler {
         extended.push(self.previous);
         extended.extend_from_slice(input);
         let mut output = Vec::new();
+        #[expect(
+            clippy::while_float,
+            reason = "Fractional sample positions preserve interpolation phase across input blocks"
+        )]
         while self.position + 1.0 < extended.len() as f64 {
             let index = self.position.floor() as usize;
             let fraction = (self.position - index as f64) as f32;

@@ -234,7 +234,12 @@ pub fn load(path: &Path, simulate: bool) -> Result<ValidatedShowConfig, ConfigEr
             "invalid show configuration in {}: {message}",
             path.display()
         )),
-        other => other,
+        other @ (ConfigError::Io { .. }
+        | ConfigError::InvalidJson(_)
+        | ConfigError::InvalidSchema(_)
+        | ConfigError::Serialization(_)
+        | ConfigError::InvalidEnum { .. }
+        | ConfigError::InvalidUtf8(_)) => other,
     })
 }
 

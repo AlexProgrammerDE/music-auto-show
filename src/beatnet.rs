@@ -126,7 +126,7 @@ struct FeatureExtractor {
     previous_log_bands: [f32; FEATURE_BANDS],
     window: Vec<f32>,
     filters: Vec<Filter>,
-    fft: std::sync::Arc<dyn RealToComplex<f32>>,
+    fft: Arc<dyn RealToComplex<f32>>,
     fft_input: Vec<f32>,
     fft_output: Vec<Complex<f32>>,
     magnitudes: Vec<f32>,

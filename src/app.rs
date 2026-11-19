@@ -239,11 +239,7 @@ impl App {
         self.shutdown.cancel();
         let runtime_thread = lock_unpoisoned(&self.runtime_thread).take();
         if let Some(runtime_thread) = runtime_thread {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "The cancellation token already signals shutdown if the command cannot be queued"
-            )]
-            let _ = self.command_tx.try_send(RuntimeCommand::Shutdown);
+            drop(self.command_tx.try_send(RuntimeCommand::Shutdown));
             let joined = tokio::task::spawn_blocking(move || runtime_thread.join()).await;
             match joined {
                 Ok(Ok(())) => {}
@@ -564,46 +560,22 @@ impl RuntimeLoop {
     fn handle_command(&mut self, command: RuntimeCommand) {
         match command {
             RuntimeCommand::UpdateConfig { config, reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(self.update_config(*config));
+                drop(reply.send(self.update_config(*config)));
             }
             RuntimeCommand::Control { command, reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(self.control(command));
+                drop(reply.send(self.control(command)));
             }
             RuntimeCommand::SetBlackout { enabled, reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(Ok(self.set_blackout(enabled)));
+                drop(reply.send(Ok(self.set_blackout(enabled))));
             }
             RuntimeCommand::StartRecording { reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(self.start_recording());
+                drop(reply.send(self.start_recording()));
             }
             RuntimeCommand::StopRecording { reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(self.stop_recording());
+                drop(reply.send(self.stop_recording()));
             }
             RuntimeCommand::ClearRecording { reply } => {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "The command still takes effect if its caller drops the reply receiver"
-                )]
-                let _ = reply.send(self.clear_recording());
+                drop(reply.send(self.clear_recording()));
             }
             RuntimeCommand::Shutdown => {}
         }
@@ -885,7 +857,10 @@ impl RuntimeLoop {
             RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => {
                 audio.stop_recording()?
             }
-            _ => return Err(anyhow!("audio input is not running").into()),
+            RuntimeMode::Stopped
+            | RuntimeMode::Starting
+            | RuntimeMode::Stopping
+            | RuntimeMode::Error => return Err(anyhow!("audio input is not running").into()),
         };
         if stopped_monitor {
             let monitor = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Stopped);
@@ -912,7 +887,10 @@ impl RuntimeLoop {
             RuntimeMode::Running(audio) | RuntimeMode::Monitoring(audio) => {
                 audio.clear_recording()?
             }
-            _ => return Err(anyhow!("audio input is not running").into()),
+            RuntimeMode::Stopped
+            | RuntimeMode::Starting
+            | RuntimeMode::Stopping
+            | RuntimeMode::Error => return Err(anyhow!("audio input is not running").into()),
         };
         if stopped_monitor {
             let monitor = std::mem::replace(&mut self.runtime.mode, RuntimeMode::Stopped);
@@ -951,7 +929,11 @@ impl RuntimeLoop {
         self.reconcile_media_track();
         let running_audio = match &self.runtime.mode {
             RuntimeMode::Running(audio) => Some(audio.snapshot()),
-            _ => None,
+            RuntimeMode::Stopped
+            | RuntimeMode::Starting
+            | RuntimeMode::Monitoring(_)
+            | RuntimeMode::Stopping
+            | RuntimeMode::Error => None,
         };
         if let Some(audio) = running_audio {
             return self.tick_show(audio);
@@ -959,7 +941,11 @@ impl RuntimeLoop {
 
         let monitoring_audio = match &self.runtime.mode {
             RuntimeMode::Monitoring(audio) => Some(audio.snapshot()),
-            _ => None,
+            RuntimeMode::Stopped
+            | RuntimeMode::Starting
+            | RuntimeMode::Running(_)
+            | RuntimeMode::Stopping
+            | RuntimeMode::Error => None,
         };
         let universe = self.zero_universe();
         self.runtime.dmx.set_universe(&universe)?;

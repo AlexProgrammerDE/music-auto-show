@@ -615,7 +615,11 @@ fn parse_xml(xml: &str) -> Result<Vec<RawFixtureType>> {
             }
             Event::DocType(_) => bail!("DTD declarations are not supported"),
             Event::Eof => break,
-            _ => {}
+            Event::CData(_)
+            | Event::Comment(_)
+            | Event::Decl(_)
+            | Event::PI(_)
+            | Event::GeneralRef(_) => {}
         }
     }
 
