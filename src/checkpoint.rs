@@ -190,7 +190,13 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("test request should connect");
             let mut request = [0_u8; 1_024];
-            let _ = stream.read(&mut request);
+            let bytes_read = stream
+                .read(&mut request)
+                .expect("test request should be readable");
+            assert!(
+                bytes_read > 0,
+                "test client closed before sending a request"
+            );
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

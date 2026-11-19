@@ -12,7 +12,10 @@ pub(crate) struct PeriodicSchedule {
 
 impl PeriodicSchedule {
     pub(crate) fn immediate(period: Duration, now: Instant) -> Self {
-        debug_assert!(!period.is_zero());
+        debug_assert!(
+            !period.is_zero(),
+            "schedule period must be positive, got {period:?}"
+        );
         Self {
             period,
             deadline: now,
@@ -47,7 +50,10 @@ impl PeriodicSchedule {
     }
 
     pub(crate) fn reset(&mut self, period: Duration, now: Instant) {
-        debug_assert!(!period.is_zero());
+        debug_assert!(
+            !period.is_zero(),
+            "schedule period must be positive, got {period:?}"
+        );
         self.period = period;
         self.deadline = now;
     }

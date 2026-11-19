@@ -182,6 +182,10 @@ impl DmxWorker {
             reply,
         });
         if sent.is_ok() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Joining the worker below detects a panic even if the shutdown acknowledgement is lost"
+            )]
             let _ = completed.recv();
         }
         thread.join().map_err(|payload| {
@@ -200,7 +204,9 @@ impl DmxWorker {
 
 impl Drop for DmxWorker {
     fn drop(&mut self) {
-        let _ = self.shutdown(DEFAULT_SHUTDOWN_BLACKOUT_FRAMES);
+        if let Err(error) = self.shutdown(DEFAULT_SHUTDOWN_BLACKOUT_FRAMES) {
+            warn!(%error, "DMX output worker shutdown failed");
+        }
     }
 }
 
@@ -261,6 +267,10 @@ impl WorkerState {
                     reply,
                 }) => {
                     self.reconfigure(config, blackout_frames);
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(());
                     schedule.reset(frame_interval(self.config.fps), Instant::now());
                 }
@@ -269,6 +279,10 @@ impl WorkerState {
                     reply,
                 }) => {
                     self.shutdown(blackout_frames);
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(());
                     return;
                 }

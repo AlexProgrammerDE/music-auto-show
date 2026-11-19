@@ -51,6 +51,10 @@ impl AudioCapture {
         pending.clear();
         while let Ok(mut samples) = self.receiver.try_recv() {
             pending.append(&mut samples);
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "A full or closed buffer pool can discard the recycled buffer"
+            )]
             let _ = self.available_buffers.try_send(samples);
         }
     }
@@ -120,6 +124,7 @@ impl AudioWorker {
                         }
                     }
                     Err(error) => {
+                        #[expect(clippy::let_underscore_must_use, reason = "Startup errors have no recipient once the caller drops its receiver")]
                         let _ = ready_sender.send(Err(format!("{error:#}")));
                     }
                 },
@@ -132,11 +137,15 @@ impl AudioWorker {
                 thread: Some(thread),
             }),
             Ok(Err(error)) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::error!("audio analysis thread panicked");
+                }
                 bail!(error);
             }
             Err(error) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::error!("audio analysis thread panicked");
+                }
                 bail!("audio analysis worker stopped during startup: {error}");
             }
         }
@@ -204,9 +213,15 @@ impl AudioWorker {
             .send(AudioWorkerCommand::Shutdown { reply })
             .is_ok()
         {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Joining the worker below detects a panic even if the shutdown acknowledgement is lost"
+            )]
             let _ = completed.recv();
         }
-        let _ = thread.join();
+        if thread.join().is_err() {
+            tracing::error!("audio analysis thread panicked");
+        }
     }
 }
 
@@ -309,26 +324,46 @@ impl AudioWorkerState {
                     } else {
                         Err(anyhow::anyhow!("audio recording could not start"))
                     };
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(result);
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::StopRecording { reply }) => {
                     let result = self.analyzer.stop_recording();
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(result);
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::ClearRecording { reply }) => {
                     self.analyzer.clear_recording();
                     let status = self.analyzer.recording_status();
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(Ok(status));
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::ResetRhythmTracking { reply }) => {
                     self.analysis = self.analyzer.reset_rhythm_tracking();
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(());
                     self.publish(latest);
                 }
                 Ok(AudioWorkerCommand::Shutdown { reply }) => {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command still takes effect if its caller drops the reply receiver"
+                    )]
                     let _ = reply.send(());
                     return;
                 }
@@ -554,10 +589,16 @@ struct CaptureGuard {
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The worker has already stopped if the stop channel is closed"
+            )]
             let _ = stop.send(());
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::error!("audio capture thread panicked");
         }
     }
 }
@@ -658,10 +699,12 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
                     if ready_sender.send(Ok(status)).is_err() {
                         return;
                     }
+                    #[expect(clippy::let_underscore_must_use, reason = "An explicit stop and a disconnected owner both end capture")]
                     let _ = stop_receiver.recv();
                     drop(stream);
                 }
                 Err(error) => {
+                    #[expect(clippy::let_underscore_must_use, reason = "Startup errors have no recipient once the caller drops its receiver")]
                     let _ = ready_sender.send(Err(format!("{error:#}")));
                 }
             }
@@ -669,11 +712,15 @@ fn start_cpal_capture(config: &AudioConfig, mode: AudioInputMode) -> Result<Audi
     let status = match ready_receiver.recv() {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::error!("audio capture thread panicked");
+            }
             bail!(error);
         }
         Err(error) => {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::error!("audio capture thread panicked");
+            }
             bail!("audio capture thread stopped during startup: {error}");
         }
     };
@@ -1040,6 +1087,10 @@ fn send_mono<T: Copy>(
     let channels = channels.max(1);
     let frames = data.len().div_ceil(channels);
     if frames > mono.capacity() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The capture callback can discard buffers when the pool is full or closed"
+        )]
         let _ = buffer_recycler.try_send(mono);
         dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
         return;
@@ -1059,6 +1110,10 @@ fn send_mono<T: Copy>(
     match sender.try_send(mono) {
         Ok(()) => {}
         Err(TrySendError::Full(mono) | TrySendError::Disconnected(mono)) => {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The capture callback can discard buffers when the pool is full or closed"
+            )]
             let _ = buffer_recycler.try_send(mono);
             dropped_sample_blocks.fetch_add(1, Ordering::Relaxed);
         }
@@ -2074,7 +2129,7 @@ mod tests {
             |sample| sample,
         );
 
-        assert!(receiver.try_recv().is_err());
+        assert_eq!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty));
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 
@@ -2097,8 +2152,10 @@ mod tests {
             |sample| sample,
         );
 
-        assert!(receiver.try_recv().is_err());
-        assert!(reusable.try_recv().is_ok());
+        assert_eq!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty));
+        reusable
+            .try_recv()
+            .expect("oversized buffer should be recycled");
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 
@@ -2137,7 +2194,11 @@ mod tests {
         let status = recorder.status();
         assert!(status.recording);
         assert!(status.limit_reached);
-        assert_eq!(status.duration_seconds, MAX_RECORDING_SECONDS);
+        assert!(
+            (status.duration_seconds - MAX_RECORDING_SECONDS).abs() < f32::EPSILON,
+            "expected {MAX_RECORDING_SECONDS}s, got {}s",
+            status.duration_seconds
+        );
         assert!(
             !recorder.start(),
             "a full recording must not be overwritten"

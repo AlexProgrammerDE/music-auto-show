@@ -239,6 +239,10 @@ impl App {
         self.shutdown.cancel();
         let runtime_thread = lock_unpoisoned(&self.runtime_thread).take();
         if let Some(runtime_thread) = runtime_thread {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The cancellation token already signals shutdown if the command cannot be queued"
+            )]
             let _ = self.command_tx.try_send(RuntimeCommand::Shutdown);
             let joined = tokio::task::spawn_blocking(move || runtime_thread.join()).await;
             match joined {
@@ -560,21 +564,45 @@ impl RuntimeLoop {
     fn handle_command(&mut self, command: RuntimeCommand) {
         match command {
             RuntimeCommand::UpdateConfig { config, reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(self.update_config(*config));
             }
             RuntimeCommand::Control { command, reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(self.control(command));
             }
             RuntimeCommand::SetBlackout { enabled, reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(Ok(self.set_blackout(enabled)));
             }
             RuntimeCommand::StartRecording { reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(self.start_recording());
             }
             RuntimeCommand::StopRecording { reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(self.stop_recording());
             }
             RuntimeCommand::ClearRecording { reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command still takes effect if its caller drops the reply receiver"
+                )]
                 let _ = reply.send(self.clear_recording());
             }
             RuntimeCommand::Shutdown => {}

@@ -140,11 +140,13 @@ mod platform {
                     });
                 }
                 if let Err(error) = enable_pairing(&state.adapter, timeout_seconds).await {
-                    if let Some(pairing_session) = &state.pairing_session {
-                        let _ = pairing_session
+                    if let Some(pairing_session) = &state.pairing_session
+                        && let Err(restore_error) = pairing_session
                             .previous_adapter_state
                             .restore(&state.adapter)
-                            .await;
+                            .await
+                    {
+                        tracing::warn!(%restore_error, "failed to restore Bluetooth adapter after enabling pairing failed");
                     }
                     state.pairing_session = None;
                     return Err(error);

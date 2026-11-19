@@ -302,8 +302,11 @@ pub fn import_fixture_file(filename: &str, bytes: &[u8]) -> Result<ParsedFixture
     let original = std::str::from_utf8(bytes).context("grandMA2 fixture file is not UTF-8")?;
     let (xml, repaired) = sanitize_xml(original)?;
     let digest = crate::checkpoint::sha256_hex(xml.as_bytes());
+    let digest_prefix = digest
+        .get(..20)
+        .context("fixture SHA-256 digest has an invalid prefix")?;
     let file = GrandMa2FixtureFile {
-        id: format!("ma2:{}", &digest[..20]),
+        id: format!("ma2:{digest_prefix}"),
         filename,
         xml,
     };
