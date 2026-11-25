@@ -6,18 +6,14 @@ import { reconnectSnapshotStream } from "@/lib/snapshot-stream"
 describe("reconnectSnapshotStream", () => {
   it("opens another stream after a graceful server restart", async () => {
     let connections = 0
-    const fiber = Effect.runFork(
-      reconnectSnapshotStream(
-        Effect.sync(() => {
-          connections += 1
-        }),
-      ),
-    )
+    const fiber = Effect.sync(() => {
+      connections += 1
+    }).pipe(reconnectSnapshotStream, Effect.runFork)
 
     await new Promise((resolve) => {
       setTimeout(resolve, 620)
     })
-    await Effect.runPromise(Fiber.interrupt(fiber))
+    await fiber.pipe(Fiber.interrupt, Effect.runPromise)
 
     expect(connections).toBeGreaterThanOrEqual(3)
   })
