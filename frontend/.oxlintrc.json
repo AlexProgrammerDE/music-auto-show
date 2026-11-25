@@ -467,6 +467,13 @@
   },
   "overrides": [
     {
+      // The snapshot stream runs on Effect Atom, which Effect marks as unstable.
+      "files": ["src/hooks/use-snapshot-stream.ts", "src/hooks/use-snapshot-stream.test.ts"],
+      "rules": {
+        "effecttsgo/unstable-api-usage": "off"
+      }
+    },
+    {
       // Vite needs a native path for its filesystem alias.
       "files": ["vite.config.ts"],
       "rules": {

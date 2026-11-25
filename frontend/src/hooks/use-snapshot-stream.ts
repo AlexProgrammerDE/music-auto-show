@@ -1,38 +1,55 @@
-import { useQueryClient } from "@tanstack/react-query"
-import { Effect } from "effect"
-import { useEffect } from "react"
+import { useAtomMount } from "@effect/atom-react"
+import { type QueryClient, useQueryClient } from "@tanstack/react-query"
+import { Cause, Effect } from "effect"
+import { Atom } from "effect/reactivity"
 
 import type { ShowSnapshot } from "@/gen/music_auto_show/v1/music_auto_show_pb"
 import { publishLiveFrame, resetLiveFrameStore } from "@/lib/live-frame-store"
 import { showQueryKeys } from "@/lib/queries"
-import { ShowApi, runShowApi } from "@/lib/show-api"
+import { ShowApi, showApiLayer } from "@/lib/show-api"
 import { reconnectSnapshotStream } from "@/lib/snapshot-stream"
 
-export function useSnapshotStream() {
-  const queryClient = useQueryClient()
+const snapshotStreamAtoms = new WeakMap<QueryClient, Atom.Atom<unknown>>()
 
-  useEffect(() => {
-    const controller = new AbortController()
-    resetLiveFrameStore()
-    const snapshotProgram = Effect.flatMap(ShowApi, (api) =>
+/** Streams snapshots into the query cache and live frames into the frame store while mounted. */
+export function snapshotStreamAtom(queryClient: QueryClient) {
+  let atom = snapshotStreamAtoms.get(queryClient)
+  if (!atom) {
+    const snapshots = Effect.flatMap(ShowApi, (api) =>
       reconnectSnapshotStream(
         api.watchSnapshots((snapshot) => {
           queryClient.setQueryData<ShowSnapshot>(showQueryKeys.snapshot, snapshot)
         }),
       ),
+    ).pipe(
+      Effect.onError((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.sync(() => {
+              void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
+            }),
+      ),
     )
-    const liveFrameProgram = Effect.flatMap(ShowApi, (api) =>
+    const liveFrames = Effect.flatMap(ShowApi, (api) =>
       reconnectSnapshotStream(api.watchLiveFrames(publishLiveFrame)),
     )
-    void runShowApi(snapshotProgram, { signal: controller.signal }).catch(() => {
-      if (!controller.signal.aborted) {
-        void queryClient.invalidateQueries({ queryKey: showQueryKeys.snapshot })
-      }
-    })
-    void runShowApi(liveFrameProgram, { signal: controller.signal }).catch(() => {})
+    atom = Atom.make(
+      Effect.sync(resetLiveFrameStore).pipe(
+        Effect.andThen(
+          // Each stream ends on its own failure without stopping the other.
+          Effect.all([Effect.ignoreCause(snapshots), Effect.ignoreCause(liveFrames)], {
+            concurrency: "unbounded",
+            discard: true,
+          }),
+        ),
+        Effect.provide(showApiLayer),
+      ),
+    ).pipe(Atom.withLabel("snapshot-stream"))
+    snapshotStreamAtoms.set(queryClient, atom)
+  }
+  return atom
+}
 
-    return () => {
-      controller.abort()
-    }
-  }, [queryClient])
+export function useSnapshotStream() {
+  useAtomMount(snapshotStreamAtom(useQueryClient()))
 }

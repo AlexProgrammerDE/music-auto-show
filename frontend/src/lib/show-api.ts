@@ -245,7 +245,9 @@ const liveApi: ShowApiShape = {
     }),
 }
 
-const showApiRuntime = ManagedRuntime.make(Layer.succeed(ShowApi)(liveApi))
+export const showApiLayer = Layer.succeed(ShowApi)(liveApi)
+
+const showApiRuntime = ManagedRuntime.make(showApiLayer)
 
 export function runShowApi<A, E>(
   effect: Effect.Effect<A, E, ShowApi>,

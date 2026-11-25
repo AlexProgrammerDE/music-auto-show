@@ -9,6 +9,7 @@
         "@bufbuild/protobuf": "^2.12.1",
         "@connectrpc/connect": "^2.1.2",
         "@connectrpc/connect-web": "^2.1.2",
+        "@effect/atom-react": "4.0.2",
         "@fontsource-variable/public-sans": "^5.2.7",
         "@fontsource-variable/roboto-slab": "^5.2.8",
         "@phosphor-icons/react": "^2.1.10",
@@ -150,6 +151,8 @@
     "@dotenvx/primitives": ["@dotenvx/primitives@0.8.0", "", {}, "sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg=="],
 
     "@dual-bundle/import-meta-resolve": ["@dual-bundle/import-meta-resolve@4.2.1", "", {}, "sha512-id+7YRUgoUX6CgV0DtuhirQWodeeA7Lf4i2x71JS/vtA5pRb/hIGWlw+G6MeXvsM+MXrz0VAydTGElX1rAfgPg=="],
+
+    "@effect/atom-react": ["@effect/atom-react@4.0.2", "", { "peerDependencies": { "effect": "^4.0.2", "react": ">=19.0.0 <20.0.0", "scheduler": ">=0.25.0 <0.28.0" } }, "sha512-rg9xnPHzjURhKhOm+bKnYitPPQC02m6R7ZmJLNdxtrNCgDQ9fSOPqZHN5W/GzUw+OsvplKSvaBe/JSQejeYKYA=="],
 
     "@effect/tsgo": ["@effect/tsgo@0.73.4", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.73.4", "@effect/tsgo-darwin-x64": "0.73.4", "@effect/tsgo-linux-arm": "0.73.4", "@effect/tsgo-linux-arm64": "0.73.4", "@effect/tsgo-linux-x64": "0.73.4", "@effect/tsgo-win32-arm64": "0.73.4", "@effect/tsgo-win32-x64": "0.73.4" }, "bin": { "effect-tsgo": "dist/effect-tsgo.cjs" } }, "sha512-geduC9fV5lEU14M7xo1av2wZx7zNbSslyAAxob3UMGUh3wUGJLme5emsjXULSILBbByt3HpMPaI0HaRFVPJBhg=="],
 
